@@ -2,7 +2,9 @@
 
 use base64::Engine;
 use nostr::nips::nip44::{self, Version};
-use nostr::{Event, EventBuilder, Keys, Kind, PublicKey, SecretKey, Tag, Timestamp};
+use nostr::{
+    Event, EventBuilder, JsonUtil, Keys, Kind, PublicKey, SecretKey, Tag, Timestamp, UnsignedEvent,
+};
 use nostr_double_ratchet::wire as codec;
 use nostr_double_ratchet::{
     AuthorizedDevice, Delivery, DevicePubkey, DeviceRecordSnapshot, DeviceRoster, Invite,
@@ -11,7 +13,7 @@ use nostr_double_ratchet::{
     Session, SessionManager, SessionManagerSnapshot, SessionState, UnixSeconds, UserRecordSnapshot,
 };
 use rand::{rngs::StdRng, CryptoRng, RngCore, SeedableRng};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 pub const ROOT_URL: &str = "https://chat.iris.to";
 
@@ -487,12 +489,16 @@ pub fn corrupt_invite_response_layer(
         InviteResponseCorruption::InnerBase64 => {
             let mut inner = decrypt_outer_response(invite, response)?;
             inner.content = "***not-base64***".to_string();
-            reencrypt_outer_response(response, serde_json::to_string(&inner)?)
+            inner.id = None;
+            inner.ensure_id();
+            reencrypt_outer_response(response, inner.try_as_json()?)
         }
         InviteResponseCorruption::PayloadJson => {
             let mut inner = decrypt_outer_response(invite, response)?;
             inner.content = build_invite_payload_ciphertext(invite, invitee, "{")?;
-            reencrypt_outer_response(response, serde_json::to_string(&inner)?)
+            inner.id = None;
+            inner.ensure_id();
+            reencrypt_outer_response(response, inner.try_as_json()?)
         }
         InviteResponseCorruption::InvalidSessionKey => {
             let mut inner = decrypt_outer_response(invite, response)?;
@@ -501,22 +507,17 @@ pub fn corrupt_invite_response_layer(
                 invitee,
                 r#"{"sessionKey":"deadbeef","deviceId":"broken-device"}"#,
             )?;
-            reencrypt_outer_response(response, serde_json::to_string(&inner)?)
+            inner.id = None;
+            inner.ensure_id();
+            reencrypt_outer_response(response, inner.try_as_json()?)
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct TestInviteResponseInnerEvent {
-    pubkey: DevicePubkey,
-    content: String,
-    created_at: UnixSeconds,
 }
 
 fn decrypt_outer_response(
     invite: &Invite,
     response: &InviteResponseEnvelope,
-) -> Result<TestInviteResponseInnerEvent> {
+) -> Result<UnsignedEvent> {
     let inviter_ephemeral_private_key = invite
         .inviter_ephemeral_private_key
         .expect("owned invite must have ephemeral private key");
@@ -525,9 +526,7 @@ fn decrypt_outer_response(
         &nostr_pubkey(response.sender),
         &response.content,
     )?;
-    Ok(serde_json::from_str::<TestInviteResponseInnerEvent>(
-        &decrypted,
-    )?)
+    Ok(UnsignedEvent::from_json(&decrypted)?)
 }
 
 fn reencrypt_outer_response(

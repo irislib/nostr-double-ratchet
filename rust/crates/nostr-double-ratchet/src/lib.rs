@@ -233,7 +233,6 @@ mod architecture_tests {
             "crossbeam",
             "tokio",
             "EventBuilder",
-            "UnsignedEvent",
             "Filter",
             "crate::wire",
             "wire::",
