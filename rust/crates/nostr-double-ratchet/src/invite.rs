@@ -4,7 +4,7 @@ use crate::{
 };
 use base64::Engine;
 use nostr::nips::nip44::{self, Version};
-use nostr::PublicKey;
+use nostr::{JsonUtil, Kind, PublicKey, Tag, Timestamp, UnsignedEvent};
 use rand::rngs::OsRng;
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -255,18 +255,21 @@ impl Invite {
         let conversation_key = nip44::v2::ConversationKey::new(self.shared_secret);
         let encrypted_bytes =
             nip44::v2::encrypt_to_bytes(&conversation_key, dh_encrypted.as_bytes())?;
-        let inner_event = InviteResponseInnerEvent {
-            pubkey: invitee_public_key,
-            content: base64::engine::general_purpose::STANDARD.encode(encrypted_bytes),
-            created_at: ctx.now,
-        };
+        let mut inner_event = UnsignedEvent::new(
+            invitee_public_key.to_nostr()?,
+            Timestamp::from(ctx.now.get()),
+            Kind::from(INVITE_RESPONSE_INNER_RUMOR_KIND as u16),
+            Vec::<Tag>::new(),
+            base64::engine::general_purpose::STANDARD.encode(encrypted_bytes),
+        );
+        inner_event.ensure_id();
 
         let random_sender_secret = random_secret_key_bytes(ctx.rng)?;
         let random_sender_pubkey = crate::device_pubkey_from_secret_bytes(&random_sender_secret)?;
         let envelope_content = nip44::encrypt(
             &secret_key_from_bytes(&random_sender_secret)?,
             &self.inviter_ephemeral_public_key.to_nostr()?,
-            serde_json::to_string(&inner_event)?,
+            inner_event.try_as_json()?,
             Version::V2,
         )?;
 
@@ -308,7 +311,8 @@ impl Invite {
             &envelope.sender.to_nostr()?,
             &envelope.content,
         )?;
-        let inner_event: InviteResponseInnerEvent = serde_json::from_str(&decrypted)?;
+        let inner_event = UnsignedEvent::from_json(&decrypted)?;
+        validate_invite_response_inner_rumor(&inner_event)?;
 
         let ciphertext_bytes = base64::engine::general_purpose::STANDARD
             .decode(inner_event.content.as_bytes())
@@ -321,31 +325,29 @@ impl Invite {
         .map_err(|e| crate::Error::Decryption(e.to_string()))?;
 
         let inviter_sk = secret_key_from_bytes(&inviter_private_key)?;
-        let dh_decrypted = nip44::decrypt(
-            &inviter_sk,
-            &inner_event.pubkey.to_nostr()?,
-            &dh_encrypted_ciphertext,
-        )?;
+        let dh_decrypted =
+            nip44::decrypt(&inviter_sk, &inner_event.pubkey, &dh_encrypted_ciphertext)?;
 
         let payload: InviteResponsePayload = serde_json::from_str(&dh_decrypted)?;
         if self.used_response_contents.contains(&envelope.content) {
             return Err(DomainError::InviteAlreadyUsed.into());
         }
-        self.ensure_accept_allowed(inner_event.pubkey)?;
+        let invitee_device_pubkey = DevicePubkey::from_bytes(inner_event.pubkey.to_bytes());
+        self.ensure_accept_allowed(invitee_device_pubkey)?;
         let session = Session::new_responder(
             ctx,
             payload.session_key,
             inviter_ephemeral_private_key,
             self.shared_secret,
         )?;
-        self.record_use(inner_event.pubkey);
+        self.record_use(invitee_device_pubkey);
         self.record_response_content(envelope.content.clone());
 
         Ok(InviteResponse {
             session,
-            invitee_device_pubkey: inner_event.pubkey,
+            invitee_device_pubkey,
             invitee_owner_pubkey: payload.owner_pubkey,
-            invitee_identity: inner_event.pubkey.to_nostr()?,
+            invitee_identity: inner_event.pubkey,
             device_id: payload.device_id,
             owner_public_key: payload.owner_pubkey.map(|owner| {
                 PublicKey::from_slice(&owner.to_bytes()).expect("owner pubkey bytes must be valid")
@@ -383,11 +385,26 @@ impl Invite {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct InviteResponseInnerEvent {
-    pubkey: DevicePubkey,
-    content: String,
-    created_at: UnixSeconds,
+const INVITE_RESPONSE_INNER_RUMOR_KIND: u32 = 1060;
+
+fn validate_invite_response_inner_rumor(rumor: &UnsignedEvent) -> Result<()> {
+    if rumor.id.is_none() {
+        return Err(crate::Error::Parse(
+            "invite response rumor missing id".to_string(),
+        ));
+    }
+    rumor.verify_id()?;
+    if rumor.kind.as_u16() as u32 != INVITE_RESPONSE_INNER_RUMOR_KIND {
+        return Err(crate::Error::Parse(
+            "invalid invite response rumor kind".to_string(),
+        ));
+    }
+    if !rumor.tags.is_empty() {
+        return Err(crate::Error::Parse(
+            "invite response rumor tags must be empty".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
