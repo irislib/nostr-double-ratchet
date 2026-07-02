@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { generateSecretKey, getPublicKey, nip44 } from 'nostr-tools'
+import { generateSecretKey, getEventHash, getPublicKey, nip44 } from 'nostr-tools'
 import { getConversationKey } from 'nostr-tools/nip44'
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils'
 import {
@@ -11,6 +11,7 @@ import {
   createSessionFromAccept,
 } from '../src/inviteUtils'
 import { buildTextRumor } from '../src/messageBuilders'
+import { MESSAGE_EVENT_KIND } from '../src/types'
 
 describe('inviteUtils', () => {
   describe('generateEphemeralKeypair', () => {
@@ -81,6 +82,73 @@ describe('inviteUtils', () => {
   })
 
   describe('encryptInviteResponse / decryptInviteResponse', () => {
+    async function createInviteResponseFixture() {
+      const inviterPrivateKey = generateSecretKey()
+      const inviterPublicKey = getPublicKey(inviterPrivateKey)
+      const inviterEphemeralKeypair = generateEphemeralKeypair()
+      const sharedSecret = generateSharedSecret()
+
+      const inviteePrivateKey = generateSecretKey()
+      const inviteePublicKey = getPublicKey(inviteePrivateKey)
+      const inviteeSessionKeypair = generateEphemeralKeypair()
+      const ownerPublicKey = getPublicKey(generateSecretKey())
+
+      const encrypted = await encryptInviteResponse({
+        inviteeSessionPublicKey: inviteeSessionKeypair.publicKey,
+        inviteePublicKey,
+        inviteePrivateKey,
+        inviterPublicKey,
+        inviterEphemeralPublicKey: inviterEphemeralKeypair.publicKey,
+        sharedSecret,
+        ownerPublicKey,
+      })
+
+      return {
+        encrypted,
+        inviterPrivateKey,
+        inviterEphemeralKeypair,
+        sharedSecret,
+        inviteePublicKey,
+        inviteeSessionKeypair,
+        ownerPublicKey,
+      }
+    }
+
+    function decryptInnerRumor(
+      fixture: Awaited<ReturnType<typeof createInviteResponseFixture>>
+    ) {
+      const innerJson = nip44.decrypt(
+        fixture.encrypted.envelope.content,
+        getConversationKey(fixture.inviterEphemeralKeypair.privateKey, fixture.encrypted.randomSenderPublicKey)
+      )
+      return JSON.parse(innerJson)
+    }
+
+    function reencryptInnerRumor(
+      fixture: Awaited<ReturnType<typeof createInviteResponseFixture>>,
+      inner: unknown
+    ) {
+      return nip44.encrypt(
+        JSON.stringify(inner),
+        getConversationKey(fixture.encrypted.randomSenderPrivateKey, fixture.inviterEphemeralKeypair.publicKey)
+      )
+    }
+
+    function expectCorruptedInnerToReject(
+      fixture: Awaited<ReturnType<typeof createInviteResponseFixture>>,
+      envelopeContent: string
+    ) {
+      return expect(
+        decryptInviteResponse({
+          envelopeContent,
+          envelopeSenderPubkey: fixture.encrypted.randomSenderPublicKey,
+          inviterEphemeralPrivateKey: fixture.inviterEphemeralKeypair.privateKey,
+          inviterPrivateKey: fixture.inviterPrivateKey,
+          sharedSecret: fixture.sharedSecret,
+        })
+      ).rejects.toThrow()
+    }
+
     it('should encrypt and decrypt invite response correctly', async () => {
       // Setup: inviter (Alice) and invitee (Bob)
       const inviterPrivateKey = generateSecretKey()
@@ -106,6 +174,9 @@ describe('inviteUtils', () => {
 
       expect(encrypted.innerEvent).toBeDefined()
       expect(encrypted.innerEvent.pubkey).toBe(inviteePublicKey)
+      expect(encrypted.innerEvent.kind).toBe(MESSAGE_EVENT_KIND)
+      expect(encrypted.innerEvent.tags).toEqual([])
+      expect(encrypted.innerEvent.id).toBe(getEventHash(encrypted.innerEvent))
       expect(encrypted.innerEvent.content).toBeDefined()
       expect(encrypted.envelope).toBeDefined()
       expect(encrypted.envelope.kind).toBe(1059) // INVITE_RESPONSE_KIND
@@ -125,6 +196,28 @@ describe('inviteUtils', () => {
       expect(decrypted.inviteeIdentity).toBe(inviteePublicKey)
       expect(decrypted.inviteeSessionPublicKey).toBe(inviteeSessionKeypair.publicKey)
       expect(decrypted.ownerPublicKey).toBe(ownerPublicKey)
+    })
+
+    it('should reject malformed invite response inner rumors', async () => {
+      const corruptions = [
+        (inner: any) => { inner.id = '0'.repeat(64) },
+        (inner: any) => { delete inner.id },
+        (inner: any) => {
+          inner.kind = 9999
+          inner.id = getEventHash(inner)
+        },
+        (inner: any) => {
+          inner.tags = [['p', '0'.repeat(64)]]
+          inner.id = getEventHash(inner)
+        },
+      ]
+
+      for (const corrupt of corruptions) {
+        const fixture = await createInviteResponseFixture()
+        const inner = decryptInnerRumor(fixture)
+        corrupt(inner)
+        await expectCorruptedInnerToReject(fixture, reencryptInnerRumor(fixture, inner))
+      }
     })
 
     it('should work with ownerPublicKey for chat routing', async () => {
