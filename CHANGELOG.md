@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.163 - 2026-07-02
+
+- Encode invite-response inner payloads as unsigned kind `1060` rumors with valid event ids, matching the NIP-118-style wrapper while keeping the deeper session payload unchanged.
+- Add Rust/TypeScript invite-response interop vectors for the hard-cut inner rumor format.
+
 ## 0.0.162 - 2026-07-01
 
 - Encode compact linked-device requests as strict three-part codes carrying QR-safe metadata for requested device/client labels.
