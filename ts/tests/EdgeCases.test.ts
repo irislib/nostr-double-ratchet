@@ -265,19 +265,21 @@ describe("Edge Cases", () => {
         }
       })
 
-      await alice.sendMessage(bobPubkey, "init")
-      await new Promise<void>((r) => {
+      const initReceived = new Promise<void>((r) => {
         const unsub = bob.onEvent((e) => {
           if (e.content === "init") { unsub(); r() }
         })
       })
+      await alice.sendMessage(bobPubkey, "init")
+      await initReceived
 
-      await alice.sendMessage(bobPubkey, messageContent)
-      await new Promise<void>((r) => {
+      const messageReceived = new Promise<void>((r) => {
         const unsub = bob.onEvent((e) => {
           if (e.content === messageContent) { unsub(); r() }
         })
       })
+      await alice.sendMessage(bobPubkey, messageContent)
+      await messageReceived
 
       const firstCount = receiveCount
 

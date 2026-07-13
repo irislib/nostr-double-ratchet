@@ -1,9 +1,12 @@
-use crate::{Error, Result};
+use crate::{
+    AuthorizedDevice, DevicePubkey, DeviceRoster, Error, OwnerPubkey, OwnerRosterProof, Result,
+    UnixSeconds,
+};
 use base64::Engine;
 use nostr::nips::nip44;
 use nostr::{
-    Alphabet, Event, EventBuilder, Filter, Keys, Kind, PublicKey, SingleLetterTag, Tag, Timestamp,
-    UnsignedEvent,
+    Alphabet, Event, EventBuilder, Filter, JsonUtil, Keys, Kind, PublicKey, SingleLetterTag, Tag,
+    Timestamp, UnsignedEvent,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
@@ -486,6 +489,51 @@ pub fn resolve_app_keys_owner_for_device(
 ) -> Result<Option<PublicKey>> {
     let app_keys = AppKeys::from_event(event)?;
     Ok(app_keys.get_device(&device_pubkey).map(|_| event.pubkey))
+}
+
+/// Verify a kind-37368 AppKeys fact snapshot and convert it into the only
+/// owner/device authorization value accepted by the managed session APIs.
+pub fn owner_roster_proof_from_app_keys_event(event: &Event) -> Result<OwnerRosterProof> {
+    let _ = AppKeys::from_event(event)?;
+    let mut devices = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for tag in event.tags.iter() {
+        let values = tag.clone().to_vec();
+        if values.first().map(String::as_str) != Some("device") {
+            continue;
+        }
+        if values.len() != 3 {
+            return Err(Error::InvalidEvent(
+                "AppKeys device fact must contain pubkey and created_at".to_string(),
+            ));
+        }
+        let device = crate::utils::pubkey_from_hex(&values[1])?;
+        let created_at = values[2].parse::<u64>().map_err(|_| {
+            Error::InvalidEvent("AppKeys device created_at must be an integer".to_string())
+        })?;
+        if !seen.insert(device) {
+            return Err(Error::InvalidEvent(
+                "AppKeys roster contains a duplicate device fact".to_string(),
+            ));
+        }
+        devices.push(AuthorizedDevice::new(
+            DevicePubkey::from_bytes(device.to_bytes()),
+            UnixSeconds(created_at),
+        ));
+    }
+
+    Ok(OwnerRosterProof::verified(
+        OwnerPubkey::from_bytes(event.pubkey.to_bytes()),
+        DeviceRoster::new(UnixSeconds(event.created_at.as_secs()), devices),
+        event.id.to_hex(),
+        event.as_json(),
+    ))
+}
+
+pub fn parse_owner_roster_proof(raw_event: &str) -> Result<OwnerRosterProof> {
+    let event = Event::from_json(raw_event)?;
+    owner_roster_proof_from_app_keys_event(&event)
 }
 
 fn tag_values(event: &Event, name: &str) -> Vec<String> {

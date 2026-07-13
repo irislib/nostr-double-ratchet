@@ -1,7 +1,7 @@
 mod support;
 
 use nostr_double_ratchet::wire as codec;
-use nostr_double_ratchet::{AuthorizedDevice, DeviceRoster, Invite, Result, UnixSeconds, MAX_SKIP};
+use nostr_double_ratchet::{Invite, Result, MAX_SKIP};
 use support::{
     actor, assert_payload_eq, bootstrap_via_invite_event, bootstrap_via_invite_url, context,
     direct_session_pair, payload_text, receive_event, restore_session, send_bytes, send_text,
@@ -180,51 +180,6 @@ fn owned_invite_serde_roundtrip_preserves_bootstrap_capability() -> Result<()> {
     let mut recv_ctx = context(1004, 1_700_100_804);
     let received = receive_event(&mut alice_session, &mut recv_ctx, &sent.event)?;
     assert_payload_eq(&received, &sent.payload);
-    Ok(())
-}
-
-#[test]
-fn invite_owner_claim_with_roster_verifies() -> Result<()> {
-    let alice = actor(15);
-    let bob = actor(16);
-    let claimed_owner = actor(17);
-
-    let mut invite_ctx = context(1100, 1_700_100_900);
-    let mut owned_invite =
-        Invite::create_new_with_context(&mut invite_ctx, alice.device_pubkey, None, None)?;
-    let public_invite = codec::parse_invite_url(&codec::invite_url(&owned_invite, ROOT_URL)?)?;
-
-    let mut bob_accept_ctx = context(1101, 1_700_100_901);
-    let (_bob_session, response_envelope) = public_invite.accept_with_owner_context(
-        &mut bob_accept_ctx,
-        bob.device_pubkey,
-        bob.secret_key,
-        Some(claimed_owner.owner_pubkey),
-    )?;
-    let response_event = codec::invite_response_event(&response_envelope)?;
-    let incoming_response = codec::parse_invite_response_event(&response_event)?;
-
-    let mut alice_process_ctx = context(1102, 1_700_100_902);
-    let response = owned_invite.process_response(
-        &mut alice_process_ctx,
-        &incoming_response,
-        alice.secret_key,
-    )?;
-
-    assert_eq!(
-        response.claimed_owner_pubkey(),
-        Some(claimed_owner.owner_pubkey)
-    );
-    assert!(!response.has_verified_owner_claim(None));
-
-    let roster = DeviceRoster::new(
-        UnixSeconds(1),
-        vec![AuthorizedDevice::new(
-            response.invitee_device_pubkey,
-            UnixSeconds(1),
-        )],
-    );
-    assert!(response.has_verified_owner_claim(Some(&roster)));
     Ok(())
 }
 

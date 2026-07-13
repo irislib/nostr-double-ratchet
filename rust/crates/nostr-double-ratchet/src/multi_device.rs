@@ -1,5 +1,5 @@
 use crate::{is_app_keys_event, AppKeys, DeviceEntry};
-use nostr::{Event, PublicKey};
+use nostr::Event;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppKeysSnapshotDecision {
@@ -260,78 +260,6 @@ pub fn resolve_conversation_candidate_pubkeys(
     candidates
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InviteOwnerRoutingResolution {
-    pub owner_pubkey: PublicKey,
-    pub claimed_owner_pubkey: PublicKey,
-    pub verified_with_app_keys: bool,
-    pub used_link_bootstrap_exception: bool,
-    pub fell_back_to_device_identity: bool,
-}
-
-pub fn resolve_invite_owner_routing(
-    device_pubkey: PublicKey,
-    claimed_owner_pubkey: PublicKey,
-    invite_purpose: Option<&str>,
-    current_owner_pubkey: PublicKey,
-    app_keys: Option<&AppKeys>,
-) -> InviteOwnerRoutingResolution {
-    if claimed_owner_pubkey == device_pubkey {
-        return InviteOwnerRoutingResolution {
-            owner_pubkey: device_pubkey,
-            claimed_owner_pubkey,
-            verified_with_app_keys: true,
-            used_link_bootstrap_exception: false,
-            fell_back_to_device_identity: false,
-        };
-    }
-
-    let verified_with_app_keys = app_keys
-        .and_then(|keys| keys.get_device(&device_pubkey))
-        .is_some();
-    if verified_with_app_keys {
-        return InviteOwnerRoutingResolution {
-            owner_pubkey: claimed_owner_pubkey,
-            claimed_owner_pubkey,
-            verified_with_app_keys: true,
-            used_link_bootstrap_exception: false,
-            fell_back_to_device_identity: false,
-        };
-    }
-
-    let used_link_bootstrap_exception =
-        invite_purpose == Some("link") && claimed_owner_pubkey == current_owner_pubkey;
-    if used_link_bootstrap_exception {
-        return InviteOwnerRoutingResolution {
-            owner_pubkey: claimed_owner_pubkey,
-            claimed_owner_pubkey,
-            verified_with_app_keys: false,
-            used_link_bootstrap_exception: true,
-            fell_back_to_device_identity: false,
-        };
-    }
-
-    // A private invite is a bearer-capability link. Its owner claim is carried
-    // out-of-band in the link rather than discovered from relay AppKeys first.
-    if invite_purpose == Some("private") {
-        return InviteOwnerRoutingResolution {
-            owner_pubkey: claimed_owner_pubkey,
-            claimed_owner_pubkey,
-            verified_with_app_keys: false,
-            used_link_bootstrap_exception: false,
-            fell_back_to_device_identity: false,
-        };
-    }
-
-    InviteOwnerRoutingResolution {
-        owner_pubkey: device_pubkey,
-        claimed_owner_pubkey,
-        verified_with_app_keys: false,
-        used_link_bootstrap_exception: false,
-        fell_back_to_device_identity: true,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,44 +374,6 @@ mod tests {
         assert_eq!(selected.created_at, 101);
         assert!(selected.app_keys.get_device(&device1).is_some());
         assert!(selected.app_keys.get_device(&device2).is_some());
-    }
-
-    #[test]
-    fn falls_back_to_device_identity_for_unverified_chat_invites() {
-        let device = Keys::generate().public_key();
-        let owner = Keys::generate().public_key();
-        let current_owner = Keys::generate().public_key();
-
-        let resolved =
-            resolve_invite_owner_routing(device, owner, Some("chat"), current_owner, None);
-
-        assert_eq!(resolved.owner_pubkey, device);
-        assert!(resolved.fell_back_to_device_identity);
-    }
-
-    #[test]
-    fn keeps_owner_side_link_bootstrap_before_appkeys_registration() {
-        let device = Keys::generate().public_key();
-        let owner = Keys::generate().public_key();
-
-        let resolved = resolve_invite_owner_routing(device, owner, Some("link"), owner, None);
-
-        assert_eq!(resolved.owner_pubkey, owner);
-        assert!(resolved.used_link_bootstrap_exception);
-    }
-
-    #[test]
-    fn trusts_private_invite_owner_claim_without_appkeys() {
-        let device = Keys::generate().public_key();
-        let owner = Keys::generate().public_key();
-        let current_owner = Keys::generate().public_key();
-
-        let resolved =
-            resolve_invite_owner_routing(device, owner, Some("private"), current_owner, None);
-
-        assert_eq!(resolved.owner_pubkey, owner);
-        assert!(!resolved.verified_with_app_keys);
-        assert!(!resolved.fell_back_to_device_identity);
     }
 
     #[test]

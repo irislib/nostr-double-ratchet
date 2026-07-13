@@ -6,7 +6,6 @@ use std::collections::BTreeMap;
 pub enum RosterSnapshotDecision {
     Advanced,
     Stale,
-    MergedEqualTimestamp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -46,26 +45,6 @@ impl DeviceRoster {
 
     pub fn devices(&self) -> &[AuthorizedDevice] {
         &self.devices
-    }
-
-    pub fn merge(&self, other: &DeviceRoster) -> DeviceRoster {
-        let mut merged = BTreeMap::new();
-
-        for device in self.devices.iter().chain(other.devices.iter()) {
-            merged
-                .entry(device.device_pubkey)
-                .and_modify(|existing: &mut AuthorizedDevice| {
-                    if device.created_at < existing.created_at {
-                        *existing = *device;
-                    }
-                })
-                .or_insert(*device);
-        }
-
-        DeviceRoster {
-            created_at: self.created_at,
-            devices: merged.into_values().collect(),
-        }
     }
 }
 

@@ -1,4 +1,4 @@
-import type { MessageQueue } from "../MessageQueue"
+import type { OutboundIntentQueue } from "../RuntimeState"
 import type { UserRecordActor } from "./UserRecordActor"
 
 export type QueuedMessageStage = "discovery" | "device"
@@ -13,8 +13,8 @@ export interface QueuedMessageDiagnostic {
 
 export async function queuedMessageDiagnostics(input: {
   userRecords: Map<string, UserRecordActor>
-  discoveryQueue: MessageQueue
-  messageQueue: MessageQueue
+  discoveryQueue: OutboundIntentQueue
+  messageQueue: OutboundIntentQueue
   innerEventId?: string
 }): Promise<QueuedMessageDiagnostic[]> {
   const deviceToOwner = new Map<string, string>()

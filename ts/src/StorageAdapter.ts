@@ -55,45 +55,28 @@ export class LocalStorageAdapter implements StorageAdapter {
   }
 
   async get<T = unknown>(key: string): Promise<T | undefined> {
-    try {
-      const item = localStorage.getItem(this.getFullKey(key))
-      return item ? JSON.parse(item) : undefined
-    } catch {
-      return undefined
-    }
+    const item = localStorage.getItem(this.getFullKey(key))
+    return item === null ? undefined : JSON.parse(item)
   }
 
   async put<T = unknown>(key: string, value: T): Promise<void> {
-    try {
-      localStorage.setItem(this.getFullKey(key), JSON.stringify(value))
-    } catch (e) {
-      const err = e instanceof Error ? e : new Error(String(e))
-      throw err
-    }
+    localStorage.setItem(this.getFullKey(key), JSON.stringify(value))
   }
 
   async del(key: string): Promise<void> {
-    try {
-      localStorage.removeItem(this.getFullKey(key))
-    } catch {
-      // Ignore deletion failures
-    }
+    localStorage.removeItem(this.getFullKey(key))
   }
 
   async list(prefix = ""): Promise<string[]> {
     const keys: string[] = []
     const searchPrefix = this.getFullKey(prefix)
 
-    try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i)
-        if (key && key.startsWith(searchPrefix)) {
-          // Remove our prefix to return the original key
-          keys.push(key.substring(this.keyPrefix.length))
-        }
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (key && key.startsWith(searchPrefix)) {
+        // Remove our prefix to return the original key
+        keys.push(key.substring(this.keyPrefix.length))
       }
-    } catch {
-      // Ignore list failures
     }
 
     return keys

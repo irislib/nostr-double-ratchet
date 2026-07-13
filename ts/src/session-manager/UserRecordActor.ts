@@ -46,14 +46,21 @@ export class UserRecordActor implements UserRecordShape {
       ourDeviceId: this.deps.ourDeviceId,
       ourOwnerPubkey: this.deps.ourOwnerPubkey,
       identityKey: this.deps.identityKey,
+      commitOutbound: (mutate, checkpoint) =>
+        this.deps.manager.commitOutbound(mutate, checkpoint),
       createdAt,
     })
     this.devices.set(deviceId, device)
     return device
   }
 
-  setAppKeys(appKeys: AppKeys | undefined): void {
+  setAppKeys(appKeys: AppKeys | undefined, createdAt = 0): void {
     this.appKeys = appKeys
+    this.latestAppKeysCreatedAt = createdAt
+  }
+
+  appKeysCreatedAt(): number {
+    return this.latestAppKeysCreatedAt
   }
 
   async queueOutboundMessage(rumor: Rumor): Promise<void> {
@@ -111,6 +118,7 @@ export class UserRecordActor implements UserRecordShape {
 
   async onAppKeys(appKeys: AppKeys, createdAt = 0): Promise<void> {
     this.appKeys = appKeys
+    this.latestAppKeysCreatedAt = createdAt
     this.setState("appkeys-known")
     this.deps.manager.updateDelegateMapping(this.publicKey, appKeys)
 
@@ -160,6 +168,18 @@ export class UserRecordActor implements UserRecordShape {
     this.onDeviceDirty()
   }
 
+  async applyAppKeysSnapshot(appKeys: AppKeys, createdAt = 0): Promise<boolean> {
+    const next = applyAppKeysSnapshot({
+      currentAppKeys: this.appKeys,
+      currentCreatedAt: this.latestAppKeysCreatedAt,
+      incomingAppKeys: appKeys,
+      incomingCreatedAt: createdAt,
+    })
+    if (next.decision === "stale") return false
+    await this.onAppKeys(next.appKeys, next.createdAt)
+    return true
+  }
+
   private async migrateQueuedMessagesFromDevice(
     staleDeviceId: string,
     targetDeviceIds: string[],
@@ -201,18 +221,7 @@ export class UserRecordActor implements UserRecordShape {
     if (event.pubkey !== this.publicKey) return false
     try {
       const appKeys = AppKeys.fromEvent(event)
-      const next = applyAppKeysSnapshot({
-        currentAppKeys: this.appKeys,
-        currentCreatedAt: this.latestAppKeysCreatedAt,
-        incomingAppKeys: appKeys,
-        incomingCreatedAt: event.created_at,
-      })
-      if (next.decision === "stale") {
-        return false
-      }
-      this.latestAppKeysCreatedAt = next.createdAt
-      await this.onAppKeys(next.appKeys, next.createdAt)
-      return true
+      return this.applyAppKeysSnapshot(appKeys, event.created_at)
     } catch {
       return false
     }

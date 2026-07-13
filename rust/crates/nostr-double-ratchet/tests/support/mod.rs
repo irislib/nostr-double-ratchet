@@ -7,13 +7,16 @@ use nostr::{
 };
 use nostr_double_ratchet::wire as codec;
 use nostr_double_ratchet::{
-    AuthorizedDevice, Delivery, DevicePubkey, DeviceRecordSnapshot, DeviceRoster, Invite,
+    owner_roster_proof_from_app_keys_event, parse_owner_roster_proof, AppKeys, AuthorizedDevice,
+    Delivery, DeviceEntry, DevicePubkey, DeviceRecordSnapshot, DeviceRoster, Invite,
     InviteResponse, InviteResponseEnvelope, MessageEnvelope, OwnerPubkey, PreparedSend,
     ProcessedInviteResponse, ProtocolContext, ReceivedMessage, Result, RosterSnapshotDecision,
     Session, SessionManager, SessionManagerSnapshot, SessionState, UnixSeconds, UserRecordSnapshot,
 };
 use rand::{rngs::StdRng, CryptoRng, RngCore, SeedableRng};
 use serde::Serialize;
+use std::collections::BTreeMap;
+use std::sync::{Mutex, OnceLock};
 
 pub const ROOT_URL: &str = "https://chat.iris.to";
 
@@ -110,6 +113,10 @@ pub fn manager_device(owner_fill: u8, device_fill: u8) -> ManagerDevice {
     let secret_key = [device_fill; 32];
     let keys = Keys::new(SecretKey::from_slice(&secret_key).unwrap());
     let device_pubkey = DevicePubkey::from_bytes(keys.public_key().to_bytes());
+    owner_secret_keys()
+        .lock()
+        .unwrap()
+        .insert(owner_pubkey, owner_secret_key);
     ManagerDevice {
         owner_secret_key,
         owner_keys,
@@ -121,7 +128,14 @@ pub fn manager_device(owner_fill: u8, device_fill: u8) -> ManagerDevice {
 }
 
 pub fn session_manager(device: &ManagerDevice) -> SessionManager {
-    SessionManager::new(device.owner_pubkey, device.secret_key)
+    let mut manager = SessionManager::new(device.owner_pubkey, device.secret_key);
+    manager
+        .set_local_owner_roster_proof(proof_for_roster(
+            device.owner_pubkey,
+            &roster_for(&[device], 0),
+        ))
+        .unwrap();
+    manager
 }
 
 pub fn roster_for(devices: &[&ManagerDevice], created_at: u64) -> DeviceRoster {
@@ -197,16 +211,24 @@ where
 {
     let event = codec::invite_response_event(envelope)?;
     let incoming = codec::parse_invite_response_event(&event)?;
-    manager.observe_invite_response(ctx, &incoming)
+    manager.observe_invite_response_with_roster_proof_verifier(
+        ctx,
+        &incoming,
+        |raw, required_device| {
+            let proof = parse_owner_roster_proof(raw)?;
+            proof.ensure_authorizes_device(required_device)?;
+            Ok(proof)
+        },
+    )
 }
 
 pub fn observe_device_invites(
     manager: &mut SessionManager,
-    owner_pubkey: OwnerPubkey,
+    _owner_pubkey: OwnerPubkey,
     invites: &[Invite],
 ) -> Result<()> {
     for invite in invites {
-        manager.observe_device_invite(owner_pubkey, invite.clone())?;
+        manager.observe_device_invite(invite.clone())?;
     }
     Ok(())
 }
@@ -577,17 +599,14 @@ pub fn provisional_owner_pubkey(device_pubkey: DevicePubkey) -> OwnerPubkey {
 }
 
 pub trait SessionManagerCompatExt {
-    fn apply_local_app_keys(
-        &mut self,
-        roster: DeviceRoster,
-        observed_at: UnixSeconds,
-    ) -> RosterSnapshotDecision;
+    fn apply_local_roster(&mut self, roster: DeviceRoster) -> RosterSnapshotDecision;
 
-    fn observe_peer_app_keys(
+    fn replace_local_roster(&mut self, roster: DeviceRoster) -> RosterSnapshotDecision;
+
+    fn observe_peer_roster(
         &mut self,
         owner_pubkey: OwnerPubkey,
         roster: DeviceRoster,
-        observed_at: UnixSeconds,
     ) -> RosterSnapshotDecision;
 
     fn prepare_send_text<R>(
@@ -612,21 +631,25 @@ pub trait SessionManagerCompatExt {
 }
 
 impl SessionManagerCompatExt for SessionManager {
-    fn apply_local_app_keys(
-        &mut self,
-        roster: DeviceRoster,
-        _observed_at: UnixSeconds,
-    ) -> RosterSnapshotDecision {
+    fn apply_local_roster(&mut self, roster: DeviceRoster) -> RosterSnapshotDecision {
+        self.set_local_owner_roster_proof(proof_for_roster(
+            self.snapshot().local_owner_pubkey,
+            &roster,
+        ))
+        .unwrap()
+    }
+
+    fn replace_local_roster(&mut self, roster: DeviceRoster) -> RosterSnapshotDecision {
         self.apply_local_roster(roster)
     }
 
-    fn observe_peer_app_keys(
+    fn observe_peer_roster(
         &mut self,
         owner_pubkey: OwnerPubkey,
         roster: DeviceRoster,
-        _observed_at: UnixSeconds,
     ) -> RosterSnapshotDecision {
-        self.observe_peer_roster(owner_pubkey, roster)
+        self.observe_owner_roster_proof(proof_for_roster(owner_pubkey, &roster))
+            .unwrap()
     }
 
     fn prepare_send_text<R>(
@@ -656,4 +679,39 @@ impl SessionManagerCompatExt for SessionManager {
     fn prune_stale_records(&mut self, now: UnixSeconds) -> nostr_double_ratchet::PruneReport {
         self.prune_stale(now)
     }
+}
+
+fn owner_secret_keys() -> &'static Mutex<BTreeMap<OwnerPubkey, [u8; 32]>> {
+    static OWNER_SECRET_KEYS: OnceLock<Mutex<BTreeMap<OwnerPubkey, [u8; 32]>>> = OnceLock::new();
+    OWNER_SECRET_KEYS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn proof_for_roster(
+    owner_pubkey: OwnerPubkey,
+    roster: &DeviceRoster,
+) -> nostr_double_ratchet::OwnerRosterProof {
+    let secret_key = owner_secret_keys()
+        .lock()
+        .unwrap()
+        .get(&owner_pubkey)
+        .copied()
+        .expect("test owner secret must be registered");
+    let owner_keys = Keys::new(SecretKey::from_slice(&secret_key).unwrap());
+    let app_keys = AppKeys::new(
+        roster
+            .devices()
+            .iter()
+            .map(|device| {
+                DeviceEntry::new(
+                    device.device_pubkey.to_nostr().unwrap(),
+                    device.created_at.get(),
+                )
+            })
+            .collect(),
+    );
+    let event = app_keys
+        .get_event_at(owner_keys.public_key(), roster.created_at.get())
+        .sign_with_keys(&owner_keys)
+        .unwrap();
+    owner_roster_proof_from_app_keys_event(&event).unwrap()
 }

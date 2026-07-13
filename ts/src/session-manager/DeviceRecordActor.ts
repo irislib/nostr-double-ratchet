@@ -3,6 +3,7 @@ import { Session } from "../Session"
 import type { VerifiedEvent } from "nostr-tools"
 import { buildTypingRumor } from "../messageBuilders"
 import { INVITE_EVENT_KIND, type Rumor } from "../types"
+import { deepCopyState } from "../utils"
 import {
   compareSessionPriority,
   sessionCanReceive,
@@ -163,6 +164,8 @@ export class DeviceRecordActor implements DeviceRecordShape {
   }
 
   private async doAcceptInvite(invite: Invite): Promise<Session> {
+    const setupState = this.state
+    let responseCommitted = false
     this.state = "accepting-invite"
 
     try {
@@ -174,30 +177,45 @@ export class DeviceRecordActor implements DeviceRecordShape {
         encryptor,
         this.deps.ourOwnerPubkey
       )
-      this.installSession(session, false, { preferActive: true })
-      await this.deps.nostr.publish(event)
+      await this.deps.commitOutbound(
+        () => {
+          this.installSession(session, false, {
+            persist: false,
+            preferActive: true,
+          })
+          return { result: undefined, publishes: [{ event }] }
+        },
+        () => this.captureRollback(),
+      )
+      responseCommitted = true
       await this.publishInviteBootstrap(session)
       this.state = "session-ready"
       await this.flushMessageQueue()
       return session
     } catch (error) {
-      this.state = "waiting-for-invite"
+      if (!responseCommitted && this.state === "accepting-invite") {
+        this.state = setupState
+      }
       throw error
     }
   }
 
   private async publishInviteBootstrap(session: Session): Promise<void> {
     try {
-      const { event } = session.sendEvent(
-        buildTypingRumor({
-          expiration: { expiresAt: Math.floor(Date.now() / 1000) },
-        }),
-        [["p", this.deviceId]],
+      await this.deps.commitOutbound(
+        () => {
+          const { event } = session.sendEvent(
+            buildTypingRumor({
+              expiration: { expiresAt: Math.floor(Date.now() / 1000) },
+            }),
+            [["p", this.deviceId]],
+          )
+          return { result: undefined, publishes: [{ event }] }
+        },
+        () => this.captureRollback(),
       )
-      await this.deps.nostr.publish(event)
     } catch {
-      // Invite acceptance itself already established the session. If the bootstrap
-      // cannot be published, queued messages will still flush on the next inbound event.
+      // The invite response remains committed even if bootstrap persistence fails.
     }
   }
 
@@ -259,6 +277,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
       this.activeSession,
       this.inactiveSessions,
     )) {
+      const state = deepCopyState(candidate.session.state)
       try {
         const { event } = candidate.session.sendEvent(rumor, [["p", this.deviceId]])
         if (!candidate.active) {
@@ -266,6 +285,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
         }
         return event
       } catch {
+        candidate.session.state = state
         // Try the next send-capable session.
       }
     }
@@ -385,19 +405,55 @@ export class DeviceRecordActor implements DeviceRecordShape {
     }
 
     for (const entry of entries) {
-      const event = this.prepareOutboundEvent(entry.event)
-      if (!event) {
-        continue
-      }
       try {
-        await this.deps.nostr.publish(event)
-        await this.deps.messageQueue.removeByTargetAndEventId(this.deviceId, entry.event.id)
+        await this.deps.commitOutbound(
+          ({ hasIntent }) => {
+            if (!hasIntent(entry.id)) {
+              return { result: false, publishes: [] }
+            }
+            const event = this.prepareOutboundEvent(entry.event)
+            return {
+              result: event !== undefined,
+              publishes: event
+                ? [{ event, innerEventId: entry.event.id, intentId: entry.id }]
+                : [],
+            }
+          },
+          () => this.captureRollback(),
+        )
       } catch {
-        // Keep entry for future retry.
+        // Keep the durable intent for a later retry.
       }
     }
+  }
 
-    this.deps.user.onDeviceDirty()
+  private captureRollback(): () => void {
+    const checkpoint = this.checkpoint()
+    return () => this.restore(checkpoint)
+  }
+
+  private checkpoint() {
+    const sessions = new Set([
+      ...(this.activeSession ? [this.activeSession] : []),
+      ...this.inactiveSessions,
+    ])
+    return {
+      activeSession: this.activeSession,
+      inactiveSessions: [...this.inactiveSessions],
+      state: this.state,
+      sessionStates: new Map(
+        Array.from(sessions, (session) => [session, deepCopyState(session.state)])
+      ),
+    }
+  }
+
+  private restore(checkpoint: ReturnType<DeviceRecordActor["checkpoint"]>): void {
+    this.activeSession = checkpoint.activeSession
+    this.inactiveSessions = checkpoint.inactiveSessions
+    this.state = checkpoint.state
+    for (const [session, state] of checkpoint.sessionStates) {
+      session.state = state
+    }
   }
 
   deactivateCurrentSession(): void {

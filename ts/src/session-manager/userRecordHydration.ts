@@ -29,7 +29,7 @@ export function hydrateUserRecord(input: HydrateUserRecordInput): void {
   userRecord.devices.clear()
 
   const appKeys = deserializeAppKeys(data.appKeys)
-  userRecord.setAppKeys(appKeys)
+  userRecord.setAppKeys(appKeys, data.appKeysCreatedAt ?? 0)
   rebuildDelegateMapping(publicKey, appKeys, rememberDelegate)
 
   for (const deviceData of data.devices) {

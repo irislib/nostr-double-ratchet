@@ -1,6 +1,10 @@
 import type { AppKeys } from "../AppKeys"
-import type { Filter, UnsignedEvent, VerifiedEvent } from "nostr-tools"
-import type { MessageQueue } from "../MessageQueue"
+import type { Filter, VerifiedEvent } from "nostr-tools"
+import type {
+  OutboundIntentQueue,
+  PreparedPublishInput,
+  PreparedTransitionContext,
+} from "../RuntimeState"
 import type { Session } from "../Session"
 import type {
   IdentityKey,
@@ -66,6 +70,7 @@ export interface StoredUserRecord {
   publicKey: string
   devices: StoredDeviceRecord[]
   appKeys?: string
+  appKeysCreatedAt?: number
 }
 
 export type UserSetupState =
@@ -94,11 +99,6 @@ export type SessionManagerEvent =
       subid: string
     }
   | {
-      type: "publish"
-      event: UnsignedEvent | VerifiedEvent
-      innerEventId?: string
-    }
-  | {
       type: "decryptedMessage"
       event: Rumor
       sender: string
@@ -106,7 +106,9 @@ export type SessionManagerEvent =
       meta: OnEventMeta
     }
 
-export type SessionManagerEventsAvailableCallback = () => void | Promise<void>
+export type SessionManagerEventCallback = (
+  event: SessionManagerEvent,
+) => void | Promise<void>
 
 export interface NostrFacade {
   subscribe(
@@ -114,7 +116,11 @@ export interface NostrFacade {
     filter: Filter,
     onEvent?: (event: VerifiedEvent) => void,
   ): Unsubscribe
-  publish(event: UnsignedEvent | VerifiedEvent, innerEventId?: string): Promise<void>
+}
+
+export interface OutboundMutation<T> {
+  result: T
+  publishes: PreparedPublishInput[]
 }
 
 export interface DeviceRecordUserHooks {
@@ -127,10 +133,14 @@ export interface DeviceRecordDeps {
   ownerPubkey: string
   user: DeviceRecordUserHooks
   nostr: NostrFacade
-  messageQueue: MessageQueue
+  messageQueue: OutboundIntentQueue
   ourDeviceId: string
   ourOwnerPubkey: string
   identityKey: IdentityKey
+  commitOutbound<T>(
+    mutate: (context: PreparedTransitionContext) => OutboundMutation<T>,
+    checkpoint: () => () => void,
+  ): Promise<T>
   createdAt?: number
 }
 
@@ -144,13 +154,17 @@ export interface UserRecordManagerHooks {
     outerEvent?: VerifiedEvent,
   ): void
   persistUserRecord(ownerPubkey: string): void
+  commitOutbound<T>(
+    mutate: (context: PreparedTransitionContext) => OutboundMutation<T>,
+    checkpoint: () => () => void,
+  ): Promise<T>
 }
 
 export interface UserRecordDeps {
   manager: UserRecordManagerHooks
   nostr: NostrFacade
-  messageQueue: MessageQueue
-  discoveryQueue: MessageQueue
+  messageQueue: OutboundIntentQueue
+  discoveryQueue: OutboundIntentQueue
   ourDeviceId: string
   ourOwnerPubkey: string
   identityKey: IdentityKey

@@ -252,14 +252,14 @@ describe("NdrRuntime", () => {
       sessionManager: {
         feedEvent: (event: VerifiedEvent) => boolean
         getAllMessagePushAuthorPubkeys: () => string[]
-        drainEvents: () => []
-        hasPendingEvents: () => boolean
+        pendingPublishes: () => []
+        drainPendingPublishes: () => Promise<void>
       }
     }).sessionManager = {
       feedEvent,
       getAllMessagePushAuthorPubkeys: () => [],
-      drainEvents: () => [],
-      hasPendingEvents: () => false,
+      pendingPublishes: () => [],
+      drainPendingPublishes: async () => {},
     }
 
     runtime.startAppKeysSubscription(ownerPubkey)
@@ -337,8 +337,8 @@ describe("NdrRuntime", () => {
         feedEvent: (event: VerifiedEvent) => boolean
         setupUser: (pubkey: string) => Promise<void>
         getAllMessagePushAuthorPubkeys: () => string[]
-        drainEvents: () => []
-        hasPendingEvents: () => boolean
+        pendingPublishes: () => []
+        drainPendingPublishes: () => Promise<void>
       }
     }).state.ownerPubkey = ownerPubkey
     ;(runtime as unknown as {
@@ -346,15 +346,14 @@ describe("NdrRuntime", () => {
         feedEvent: (event: VerifiedEvent) => boolean
         setupUser: (pubkey: string) => Promise<void>
         getAllMessagePushAuthorPubkeys: () => string[]
-        drainEvents: () => []
-        hasPendingEvents: () => boolean
+        pendingPublishes: () => []
       }
     }).sessionManager = {
       feedEvent,
       setupUser,
       getAllMessagePushAuthorPubkeys: () => [],
-      drainEvents: () => [],
-      hasPendingEvents: () => false,
+      pendingPublishes: () => [],
+      drainPendingPublishes: async () => {},
     }
     await runtime.publishPreparedRegistration({
       appKeys: new AppKeys([
@@ -451,6 +450,65 @@ describe("NdrRuntime", () => {
     expect(restartedRuntime.getState().currentDevicePubkey).toBe(firstDevicePubkey)
     expect(restartedRuntime.getState().registeredDevices).toHaveLength(1)
     expect(restartedRuntime.getState().hasLocalAppKeys).toBe(true)
+  })
+
+  it("replays the identical prepared event after publish failure and restart", async () => {
+    const relay = new MockRelay()
+    const aliceKey = generateSecretKey()
+    const aliceOwner = getPublicKey(aliceKey)
+    const aliceStorage = new InMemoryStorageAdapter()
+    let failMessages = false
+    const failed: VerifiedEvent[] = []
+    const alice = createRuntime({
+      relay,
+      ownerPrivateKey: aliceKey,
+      storage: aliceStorage,
+      onPublish: (event, innerEventId) => {
+        if (!failMessages || event.kind !== 1060 || !innerEventId) return
+        failed.push(event as VerifiedEvent)
+        throw new Error("relay offline")
+      },
+    })
+    await alice.initForOwner(aliceOwner)
+    await alice.registerCurrentDevice({ ownerPubkey: aliceOwner })
+    await alice.republishInvite()
+
+    const bobKey = generateSecretKey()
+    const bobOwner = getPublicKey(bobKey)
+    const bob = createRuntime({ relay, ownerPrivateKey: bobKey })
+    await bob.initForOwner(bobOwner)
+    await bob.registerCurrentDevice({ ownerPubkey: bobOwner })
+    await bob.republishInvite()
+
+    await alice.sendMessage(bobOwner, "establish")
+    await bob.sendMessage(aliceOwner, "answer")
+    failMessages = true
+    await alice.sendMessage(bobOwner, "survive restart")
+    await tick(20)
+
+    expect(failed.length).toBeGreaterThan(0)
+    const exactById = new Map(
+      failed.map((event) => [event.id, JSON.stringify(event)])
+    )
+    alice.close()
+
+    const replayed: VerifiedEvent[] = []
+    const restarted = createRuntime({
+      relay,
+      ownerPrivateKey: aliceKey,
+      storage: aliceStorage,
+      onPublish: (event, innerEventId) => {
+        if (event.kind === 1060 && innerEventId) replayed.push(event as VerifiedEvent)
+      },
+    })
+    await restarted.initForOwner(aliceOwner)
+
+    const replayedById = new Map(
+      replayed.map((event) => [event.id, JSON.stringify(event)])
+    )
+    for (const [id, exact] of exactById) {
+      expect(replayedById.get(id)).toBe(exact)
+    }
   })
 
   it("routes direct messages through runtime-owned subscriptions", async () => {
@@ -1015,14 +1073,14 @@ describe("NdrRuntime", () => {
         sessionManager: {
           getAllMessagePushAuthorPubkeys: () => string[]
           feedEvent: () => boolean
-          drainEvents: () => []
-          hasPendingEvents: () => boolean
+          pendingPublishes: () => []
+          drainPendingPublishes: () => Promise<void>
         }
       }).sessionManager = {
         getAllMessagePushAuthorPubkeys: () => authors,
         feedEvent: () => true,
-        drainEvents: () => [],
-        hasPendingEvents: () => false,
+        pendingPublishes: () => [],
+        drainPendingPublishes: async () => {},
       }
       const event = {
         id: "event",

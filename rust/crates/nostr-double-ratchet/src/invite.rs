@@ -1,6 +1,6 @@
 use crate::{
-    owner_pubkey_from_device_pubkey, random_secret_key_bytes, secret_key_from_bytes, DevicePubkey,
-    DeviceRoster, DomainError, OwnerPubkey, ProtocolContext, Result, Session, UnixSeconds,
+    random_secret_key_bytes, secret_key_from_bytes, DevicePubkey, DomainError, OwnerPubkey,
+    OwnerRosterProof, ProtocolContext, Result, Session, UnixSeconds,
 };
 use base64::Engine;
 use nostr::nips::nip44::{self, Version};
@@ -44,6 +44,7 @@ pub struct InviteResponse {
     pub invitee_identity: PublicKey,
     pub device_id: Option<String>,
     pub owner_public_key: Option<PublicKey>,
+    pub owner_roster_proof: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,40 +54,6 @@ pub struct InviteResponseEnvelope {
     pub recipient: DevicePubkey,
     pub created_at: UnixSeconds,
     pub content: String,
-}
-
-impl InviteResponse {
-    pub fn resolved_owner_pubkey(&self) -> PublicKey {
-        self.owner_public_key.unwrap_or(self.invitee_identity)
-    }
-
-    pub fn claimed_owner_pubkey(&self) -> Option<OwnerPubkey> {
-        self.invitee_owner_pubkey
-    }
-
-    pub fn has_verified_owner_claim(&self, verifier: Option<&dyn OwnerClaimVerifier>) -> bool {
-        let owner_pubkey = self
-            .invitee_owner_pubkey
-            .unwrap_or_else(|| owner_pubkey_from_device_pubkey(self.invitee_device_pubkey));
-
-        if owner_pubkey == owner_pubkey_from_device_pubkey(self.invitee_device_pubkey) {
-            return true;
-        }
-
-        verifier.is_some_and(|verifier| {
-            verifier.has_device(self.invitee_device_pubkey, self.invitee_identity)
-        })
-    }
-}
-
-pub trait OwnerClaimVerifier {
-    fn has_device(&self, device_pubkey: DevicePubkey, device_identity: PublicKey) -> bool;
-}
-
-impl OwnerClaimVerifier for DeviceRoster {
-    fn has_device(&self, device_pubkey: DevicePubkey, _device_identity: PublicKey) -> bool {
-        self.get_device(&device_pubkey).is_some()
-    }
 }
 
 impl Invite {
@@ -180,6 +147,7 @@ impl Invite {
             invitee_private_key,
             owner_public_key.map(|owner| OwnerPubkey::from_bytes(owner.to_bytes())),
             device_id,
+            None,
         )
     }
 
@@ -211,6 +179,28 @@ impl Invite {
             invitee_private_key,
             invitee_owner_pubkey,
             None,
+            None,
+        )
+    }
+
+    pub fn accept_with_owner_roster_proof_context<R>(
+        &self,
+        ctx: &mut ProtocolContext<'_, R>,
+        invitee_public_key: DevicePubkey,
+        invitee_private_key: [u8; 32],
+        proof: &OwnerRosterProof,
+    ) -> Result<(Session, InviteResponseEnvelope)>
+    where
+        R: RngCore + CryptoRng,
+    {
+        proof.ensure_authorizes_device(invitee_public_key)?;
+        self.accept_with_owner_context_and_device(
+            ctx,
+            invitee_public_key,
+            invitee_private_key,
+            Some(proof.owner_pubkey()),
+            None,
+            Some(proof.raw_event().to_string()),
         )
     }
 
@@ -221,6 +211,7 @@ impl Invite {
         invitee_private_key: [u8; 32],
         invitee_owner_pubkey: Option<OwnerPubkey>,
         device_id: Option<String>,
+        owner_roster_proof: Option<String>,
     ) -> Result<(Session, InviteResponseEnvelope)>
     where
         R: RngCore + CryptoRng,
@@ -242,6 +233,7 @@ impl Invite {
             session_key: invitee_session_public_key,
             owner_pubkey: invitee_owner_pubkey,
             device_id,
+            owner_roster_proof,
         };
 
         let invitee_sk = secret_key_from_bytes(&invitee_private_key)?;
@@ -352,6 +344,7 @@ impl Invite {
             owner_public_key: payload.owner_pubkey.map(|owner| {
                 PublicKey::from_slice(&owner.to_bytes()).expect("owner pubkey bytes must be valid")
             }),
+            owner_roster_proof: payload.owner_roster_proof,
         })
     }
 
@@ -415,6 +408,8 @@ struct InviteResponsePayload {
     device_id: Option<String>,
     #[serde(rename = "ownerPublicKey", skip_serializing_if = "Option::is_none")]
     owner_pubkey: Option<OwnerPubkey>,
+    #[serde(rename = "ownerRosterProof", skip_serializing_if = "Option::is_none")]
+    owner_roster_proof: Option<String>,
 }
 
 fn now_seconds() -> UnixSeconds {

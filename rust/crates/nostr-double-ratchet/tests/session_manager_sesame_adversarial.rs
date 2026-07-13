@@ -1,10 +1,11 @@
 mod support;
+use support::SessionManagerCompatExt;
 
-use nostr_double_ratchet::{DomainError, Error, RelayGap, Result, UnixSeconds};
+use nostr_double_ratchet::{DomainError, Error, RelayGap, Result, Session, UnixSeconds};
 use support::{
     context, manager_device, manager_device_snapshot, manager_observe_invite_response,
     manager_public_device_invite, manager_receive_delivery, manager_user_snapshot, mutate_text,
-    provisional_owner_pubkey, restore_manager, roster_for, session_manager, snapshot,
+    restore_manager, roster_for, session_manager, snapshot,
 };
 
 #[test]
@@ -70,14 +71,14 @@ fn malformed_device_invite_observation_does_not_corrupt_state() -> Result<()> {
 
     let mut wrong_owner_invite = support::custom_public_device_invite(&bob, 3, 1_810_000_020)?;
     wrong_owner_invite.inviter_owner_pubkey = Some(alice.owner_pubkey);
-    let result = manager.observe_device_invite(bob.owner_pubkey, wrong_owner_invite);
+    let result = manager.observe_device_invite(wrong_owner_invite);
     assert!(result.is_err());
     assert_eq!(snapshot(&manager.snapshot()), before);
     Ok(())
 }
 
 #[test]
-fn invite_response_without_owner_claim_is_rejected_for_session_manager() -> Result<()> {
+fn invite_response_without_owner_roster_proof_is_rejected() -> Result<()> {
     let alice = manager_device(29, 191);
     let bob = manager_device(30, 192);
     let mut alice_manager = session_manager(&alice);
@@ -92,7 +93,7 @@ fn invite_response_without_owner_claim_is_rejected_for_session_manager() -> Resu
     assert!(matches!(
         result,
         Err(Error::Domain(DomainError::InvalidState(message)))
-            if message.contains("missing owner claim")
+            if message.contains("missing owner roster proof")
     ));
     Ok(())
 }
@@ -106,10 +107,12 @@ fn invite_response_replay_is_rejected_and_state_unchanged() -> Result<()> {
     let mut bob_manager = session_manager(&bob);
 
     alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 20));
-    alice_manager.observe_device_invite(
-        bob.owner_pubkey,
-        manager_public_device_invite(&mut bob_manager, &bob, 20, 1_810_000_100)?,
-    )?;
+    alice_manager.observe_device_invite(manager_public_device_invite(
+        &mut bob_manager,
+        &bob,
+        20,
+        1_810_000_100,
+    )?)?;
 
     let mut send_ctx = context(4, 1_810_000_101);
     let prepared =
@@ -147,14 +150,18 @@ fn message_replay_on_active_session_is_rejected_without_corruption() -> Result<(
 
     alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 30));
     bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 30));
-    alice_manager.observe_device_invite(
-        bob.owner_pubkey,
-        manager_public_device_invite(&mut bob_manager, &bob, 30, 1_810_000_200)?,
-    )?;
-    bob_manager.observe_device_invite(
-        alice.owner_pubkey,
-        manager_public_device_invite(&mut alice_manager, &alice, 31, 1_810_000_201)?,
-    )?;
+    alice_manager.observe_device_invite(manager_public_device_invite(
+        &mut bob_manager,
+        &bob,
+        30,
+        1_810_000_200,
+    )?)?;
+    bob_manager.observe_device_invite(manager_public_device_invite(
+        &mut alice_manager,
+        &alice,
+        31,
+        1_810_000_201,
+    )?)?;
 
     let mut send_ctx = context(7, 1_810_000_202);
     let prepared =
@@ -187,17 +194,24 @@ fn message_replay_on_active_session_is_rejected_without_corruption() -> Result<(
 }
 
 #[test]
-fn partial_restore_with_cached_invite_but_no_roster_still_surfaces_missing_roster_gap() -> Result<()>
-{
+fn invite_without_verified_roster_is_not_cached_and_send_surfaces_roster_gap() -> Result<()> {
     let alice = manager_device(33, 231);
     let bob = manager_device(34, 241);
     let mut manager = session_manager(&alice);
     let mut bob_manager = session_manager(&bob);
 
-    manager.observe_device_invite(
-        bob.owner_pubkey,
-        manager_public_device_invite(&mut bob_manager, &bob, 40, 1_810_000_300)?,
-    )?;
+    let before = manager.snapshot();
+    let observed = manager.observe_device_invite(manager_public_device_invite(
+        &mut bob_manager,
+        &bob,
+        40,
+        1_810_000_300,
+    )?);
+    assert!(matches!(
+        observed,
+        Err(Error::Domain(DomainError::CannotSendYet))
+    ));
+    assert_eq!(manager.snapshot(), before);
 
     let snapshot = manager.snapshot();
     let mut restored = restore_manager(&snapshot, alice.secret_key)?;
@@ -245,11 +259,14 @@ fn pruned_stale_device_is_not_sendable_after_late_old_invite_observation() -> Re
 
     manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 60));
     let old_invite = manager_public_device_invite(&mut bob_manager, &bob, 60, 1_810_000_400)?;
-    manager.observe_device_invite(bob.owner_pubkey, old_invite.clone())?;
+    manager.observe_device_invite(old_invite.clone())?;
     manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[], 61));
     manager.prune_stale(UnixSeconds(61 + 8 * 24 * 60 * 60));
 
-    manager.observe_device_invite(bob.owner_pubkey, old_invite)?;
+    assert!(matches!(
+        manager.observe_device_invite(old_invite),
+        Err(Error::Domain(DomainError::CannotSendYet))
+    ));
     let mut send_ctx = context(12, 1_810_000_401);
     let prepared = manager.prepare_send(&mut send_ctx, bob.owner_pubkey, b"fresh".to_vec())?;
     assert!(prepared.deliveries.is_empty());
@@ -267,14 +284,18 @@ fn late_message_after_pruned_stale_record_is_ignored() -> Result<()> {
 
     alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 70));
     bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 70));
-    alice_manager.observe_device_invite(
-        bob.owner_pubkey,
-        manager_public_device_invite(&mut bob_manager, &bob, 70, 1_810_000_500)?,
-    )?;
-    bob_manager.observe_device_invite(
-        alice.owner_pubkey,
-        manager_public_device_invite(&mut alice_manager, &alice, 71, 1_810_000_501)?,
-    )?;
+    alice_manager.observe_device_invite(manager_public_device_invite(
+        &mut bob_manager,
+        &bob,
+        70,
+        1_810_000_500,
+    )?)?;
+    bob_manager.observe_device_invite(manager_public_device_invite(
+        &mut alice_manager,
+        &alice,
+        71,
+        1_810_000_501,
+    )?)?;
 
     let mut alice_send_ctx = context(13, 1_810_000_502);
     let first =
@@ -312,7 +333,7 @@ fn late_message_after_pruned_stale_record_is_ignored() -> Result<()> {
 }
 
 #[test]
-fn unverified_owner_claim_is_parked_under_device_owner_until_roster_arrives() -> Result<()> {
+fn verified_response_is_installed_directly_under_proof_owner() -> Result<()> {
     let alice = manager_device(41, 141);
     let bob = manager_device(42, 142);
 
@@ -320,10 +341,12 @@ fn unverified_owner_claim_is_parked_under_device_owner_until_roster_arrives() ->
     let mut bob_manager = session_manager(&bob);
 
     bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 90));
-    bob_manager.observe_device_invite(
-        alice.owner_pubkey,
-        manager_public_device_invite(&mut alice_manager, &alice, 90, 1_810_000_900)?,
-    )?;
+    bob_manager.observe_device_invite(manager_public_device_invite(
+        &mut alice_manager,
+        &alice,
+        90,
+        1_810_000_900,
+    )?)?;
 
     let mut send_ctx = context(18, 1_810_000_901);
     let prepared =
@@ -337,16 +360,12 @@ fn unverified_owner_claim_is_parked_under_device_owner_until_roster_arrives() ->
     )?
     .expect("invite response should be processed");
 
-    assert_eq!(
-        observed.owner_pubkey,
-        provisional_owner_pubkey(bob.device_pubkey)
-    );
+    assert_eq!(observed.owner_pubkey, bob.owner_pubkey);
 
     let snapshot = alice_manager.snapshot();
-    let parked_user = manager_user_snapshot(&snapshot, provisional_owner_pubkey(bob.device_pubkey));
-    let parked_device = manager_device_snapshot(parked_user, bob.device_pubkey);
-    assert_eq!(parked_device.claimed_owner_pubkey, Some(bob.owner_pubkey));
-    assert!(parked_device.active_session.is_some());
+    let verified_user = manager_user_snapshot(&snapshot, bob.owner_pubkey);
+    let verified_device = manager_device_snapshot(verified_user, bob.device_pubkey);
+    assert!(verified_device.active_session.is_some());
     Ok(())
 }
 
@@ -360,10 +379,12 @@ fn tampered_delivery_does_not_corrupt_receiver_state() -> Result<()> {
 
     alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 80));
     bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 80));
-    alice_manager.observe_device_invite(
-        bob.owner_pubkey,
-        manager_public_device_invite(&mut bob_manager, &bob, 80, 1_810_000_600)?,
-    )?;
+    alice_manager.observe_device_invite(manager_public_device_invite(
+        &mut bob_manager,
+        &bob,
+        80,
+        1_810_000_600,
+    )?)?;
 
     let mut send_ctx = context(18, 1_810_000_601);
     let prepared =
@@ -388,5 +409,114 @@ fn tampered_delivery_does_not_corrupt_receiver_state() -> Result<()> {
     );
     assert!(result.is_err());
     assert_eq!(snapshot(&bob_manager.snapshot()), before);
+    Ok(())
+}
+
+#[test]
+fn aggregate_remote_send_failure_does_not_advance_an_earlier_target() -> Result<()> {
+    let alice = manager_device(51, 151);
+    let bob1 = manager_device(52, 152);
+    let bob2 = manager_device(52, 153);
+    let mut manager = session_manager(&alice);
+    manager.observe_peer_roster(bob1.owner_pubkey, roster_for(&[&bob1, &bob2], 100));
+
+    for (index, bob) in [&bob1, &bob2].into_iter().enumerate() {
+        let mut session_ctx = context(30 + index as u64, 1_810_001_000);
+        let session = Session::new_initiator(
+            &mut session_ctx,
+            bob.device_pubkey,
+            [201 + index as u8; 32],
+            [77 + index as u8; 32],
+        )?;
+        manager.import_session_state(
+            bob.owner_pubkey,
+            bob.device_pubkey,
+            session.state,
+            UnixSeconds(1_810_001_000),
+        )?;
+    }
+
+    let mut corrupted = manager.snapshot();
+    let bob_user = corrupted
+        .users
+        .iter_mut()
+        .find(|user| user.owner_pubkey == bob1.owner_pubkey)
+        .expect("bob owner must exist");
+    let later_device = bob_user
+        .devices
+        .iter_mut()
+        .max_by_key(|device| device.device_pubkey)
+        .expect("bob device must exist");
+    later_device
+        .active_session
+        .as_mut()
+        .expect("active session must exist")
+        .our_current_nostr_key
+        .as_mut()
+        .expect("initiator send key must exist")
+        .private_key = [0; 32];
+
+    let mut manager = restore_manager(&corrupted, alice.secret_key)?;
+    let before = manager.snapshot();
+    let mut send_ctx = context(32, 1_810_001_001);
+    assert!(manager
+        .prepare_remote_send(&mut send_ctx, bob1.owner_pubkey, b"atomic".to_vec())
+        .is_err());
+    assert_eq!(manager.snapshot(), before);
+    Ok(())
+}
+
+#[test]
+fn aggregate_all_session_send_failure_does_not_advance_an_earlier_sibling() -> Result<()> {
+    let alice1 = manager_device(53, 154);
+    let alice2 = manager_device(53, 155);
+    let alice3 = manager_device(53, 156);
+    let mut manager = session_manager(&alice1);
+    manager.apply_local_roster(roster_for(&[&alice1, &alice2, &alice3], 101));
+
+    for (index, sibling) in [&alice2, &alice3].into_iter().enumerate() {
+        let mut session_ctx = context(33 + index as u64, 1_810_001_010);
+        let session = Session::new_initiator(
+            &mut session_ctx,
+            sibling.device_pubkey,
+            [203 + index as u8; 32],
+            [79 + index as u8; 32],
+        )?;
+        manager.import_session_state(
+            alice1.owner_pubkey,
+            sibling.device_pubkey,
+            session.state,
+            UnixSeconds(1_810_001_010),
+        )?;
+    }
+
+    let mut corrupted = manager.snapshot();
+    let local_user = corrupted
+        .users
+        .iter_mut()
+        .find(|user| user.owner_pubkey == alice1.owner_pubkey)
+        .expect("local owner must exist");
+    let later_sibling = local_user
+        .devices
+        .iter_mut()
+        .filter(|device| device.device_pubkey != alice1.device_pubkey)
+        .max_by_key(|device| device.device_pubkey)
+        .expect("local sibling must exist");
+    later_sibling
+        .active_session
+        .as_mut()
+        .expect("active session must exist")
+        .our_current_nostr_key
+        .as_mut()
+        .expect("initiator send key must exist")
+        .private_key = [0; 32];
+
+    let mut manager = restore_manager(&corrupted, alice1.secret_key)?;
+    let before = manager.snapshot();
+    let mut send_ctx = context(35, 1_810_001_011);
+    assert!(manager
+        .prepare_local_sibling_send_reusing_all_sessions(&mut send_ctx, b"atomic-sibling".to_vec(),)
+        .is_err());
+    assert_eq!(manager.snapshot(), before);
     Ok(())
 }

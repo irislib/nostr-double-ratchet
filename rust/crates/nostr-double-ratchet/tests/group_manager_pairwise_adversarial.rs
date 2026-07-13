@@ -1,4 +1,5 @@
 mod support;
+use support::SessionManagerCompatExt;
 
 use nostr_double_ratchet::{
     group_wire::JsonGroupPayloadCodecV1, GroupEventManager as GroupManager,
@@ -348,10 +349,12 @@ fn removed_member_cannot_send_after_processing_removal() -> Result<()> {
 
     bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 49));
     alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 50));
-    alice_manager.observe_device_invite(
-        bob.owner_pubkey,
-        support::manager_public_device_invite(&mut bob_manager, &bob, 8, 1_900_001_040)?,
-    )?;
+    alice_manager.observe_device_invite(support::manager_public_device_invite(
+        &mut bob_manager,
+        &bob,
+        8,
+        1_900_001_040,
+    )?)?;
 
     let mut create_ctx = context(8, 1_900_001_041);
     let created = alice_groups.create_group(

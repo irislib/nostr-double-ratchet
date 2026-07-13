@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 /// - `RosterEditor` helps product code build the next full roster snapshot
 ///
 /// The resulting `DeviceRoster` can then be:
-/// - applied locally with `SessionManager::apply_local_roster(...)`
-/// - published through the Nostr adapter as the next replaceable roster event
+/// - signed and published as the next AppKeys fact snapshot
+/// - verified into an `OwnerRosterProof` before `SessionManager` observes it
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RosterEditor {
     devices: BTreeMap<DevicePubkey, AuthorizedDevice>,
