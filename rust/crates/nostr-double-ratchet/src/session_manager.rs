@@ -22,7 +22,7 @@ pub struct SessionManager {
 struct UserRecord {
     owner_pubkey: OwnerPubkey,
     roster: Option<DeviceRoster>,
-    verified_roster_event_id: Option<String>,
+    roster_verified: bool,
     devices: BTreeMap<DevicePubkey, DeviceRecord>,
 }
 
@@ -52,8 +52,8 @@ pub struct SessionManagerSnapshot {
 pub struct UserRecordSnapshot {
     pub owner_pubkey: OwnerPubkey,
     pub roster: Option<DeviceRoster>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub verified_roster_event_id: Option<String>,
+    #[serde(default)]
+    pub roster_verified: bool,
     pub devices: Vec<DeviceRecordSnapshot>,
 }
 
@@ -212,8 +212,7 @@ impl SessionManager {
         let existing_is_verified = self
             .users
             .get(&proof.owner_pubkey())
-            .and_then(|user| user.verified_roster_event_id.as_ref())
-            .is_some();
+            .is_some_and(|user| user.roster_verified);
         let current_created_at = existing_is_verified
             .then(|| {
                 self.users
@@ -232,8 +231,7 @@ impl SessionManager {
             proof.roster().clone(),
             !existing_is_verified,
         );
-        self.user_record_mut(owner_pubkey).verified_roster_event_id =
-            Some(proof.event_id().to_string());
+        self.user_record_mut(owner_pubkey).roster_verified = true;
 
         if owner_pubkey == self.local_owner_pubkey {
             if proof
@@ -310,7 +308,7 @@ impl SessionManager {
     pub fn observe_device_invite(&mut self, invite: Invite) -> Result<ObservedDeviceInvite> {
         let device_pubkey = invite.inviter_device_pubkey;
         let mut owners = self.users.values().filter_map(|user| {
-            (user.verified_roster_event_id.is_some()
+            (user.roster_verified
                 && user
                     .roster
                     .as_ref()
@@ -396,7 +394,7 @@ impl SessionManager {
         let effective_roster_authorizes = self
             .users
             .get(&owner_pubkey)
-            .filter(|user| user.verified_roster_event_id.is_some())
+            .filter(|user| user.roster_verified)
             .and_then(|user| user.roster.as_ref())
             .and_then(|roster| roster.get_device(&invitee_device_pubkey))
             .is_some();
@@ -672,7 +670,7 @@ impl SessionManager {
         let Some(user) = self.users.get(&self.local_owner_pubkey) else {
             return false;
         };
-        if user.verified_roster_event_id.is_none() || user.roster.is_none() {
+        if !user.roster_verified || user.roster.is_none() {
             return false;
         }
         user.authorized_non_stale_devices()
@@ -682,7 +680,7 @@ impl SessionManager {
 
     pub fn resolve_sender(&self, sender: DevicePubkey) -> Option<VerifiedDeviceIdentity> {
         self.users.values().find_map(|user| {
-            if user.verified_roster_event_id.is_none() {
+            if !user.roster_verified {
                 return None;
             }
             user.devices.values().find_map(|record| {
@@ -701,6 +699,28 @@ impl SessionManager {
                     owner_pubkey: user.owner_pubkey,
                     device_pubkey: record.device_pubkey,
                 })
+            })
+        })
+    }
+
+    pub fn verified_identity_for_device(
+        &self,
+        device_pubkey: DevicePubkey,
+    ) -> Option<VerifiedDeviceIdentity> {
+        self.users.values().find_map(|user| {
+            let is_authorized = user.roster_verified
+                && user
+                    .roster
+                    .as_ref()
+                    .and_then(|roster| roster.get_device(&device_pubkey))
+                    .is_some()
+                && user
+                    .devices
+                    .get(&device_pubkey)
+                    .is_some_and(|record| record.authorized && !record.is_stale);
+            is_authorized.then_some(VerifiedDeviceIdentity {
+                owner_pubkey: user.owner_pubkey,
+                device_pubkey,
             })
         })
     }
@@ -731,7 +751,7 @@ impl SessionManager {
         let Some(user) = self.users.get_mut(&sender_owner) else {
             return Ok(None);
         };
-        if user.verified_roster_event_id.is_none() {
+        if !user.roster_verified {
             return Ok(None);
         }
 
@@ -831,7 +851,7 @@ impl SessionManager {
         now: UnixSeconds,
     ) -> Result<()> {
         let is_authorized = self.users.get(&owner_pubkey).is_some_and(|user| {
-            user.verified_roster_event_id.is_some()
+            user.roster_verified
                 && user
                     .roster
                     .as_ref()
@@ -1172,7 +1192,7 @@ impl SessionManager {
             return;
         };
 
-        if user.verified_roster_event_id.is_none()
+        if !user.roster_verified
             || user
                 .roster
                 .as_ref()
@@ -1197,7 +1217,7 @@ impl SessionManager {
             return;
         };
 
-        if user.verified_roster_event_id.is_none() || user.roster.is_none() {
+        if !user.roster_verified || user.roster.is_none() {
             return;
         }
 
@@ -1294,17 +1314,17 @@ impl UserRecord {
         Self {
             owner_pubkey,
             roster: None,
-            verified_roster_event_id: None,
+            roster_verified: false,
             devices: BTreeMap::new(),
         }
     }
 
     fn from_snapshot(snapshot: UserRecordSnapshot) -> Self {
-        let roster_is_verified = snapshot.verified_roster_event_id.is_some();
+        let roster_is_verified = snapshot.roster_verified;
         Self {
             owner_pubkey: snapshot.owner_pubkey,
             roster: snapshot.roster,
-            verified_roster_event_id: snapshot.verified_roster_event_id,
+            roster_verified: snapshot.roster_verified,
             devices: snapshot
                 .devices
                 .into_iter()
@@ -1318,7 +1338,7 @@ impl UserRecord {
         UserRecordSnapshot {
             owner_pubkey: self.owner_pubkey,
             roster: self.roster.clone(),
-            verified_roster_event_id: self.verified_roster_event_id.clone(),
+            roster_verified: self.roster_verified,
             devices: self.devices.values().map(DeviceRecord::snapshot).collect(),
         }
     }

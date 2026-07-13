@@ -264,7 +264,7 @@ pub fn resolve_conversation_candidate_pubkeys(
 mod tests {
     use super::*;
     use crate::DeviceEntry;
-    use nostr::{EventBuilder, Keys, Kind, PublicKey, Timestamp};
+    use nostr::{EventBuilder, Keys, Kind, Timestamp};
 
     #[test]
     fn merges_same_second_app_keys_snapshots_monotonically() {

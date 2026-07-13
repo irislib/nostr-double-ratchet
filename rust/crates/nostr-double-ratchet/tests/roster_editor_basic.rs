@@ -1,4 +1,5 @@
 mod support;
+use support::SessionManagerCompatExt;
 
 use nostr_double_ratchet::{DevicePubkey, Result, RosterEditor, UnixSeconds};
 use support::{
@@ -74,16 +75,20 @@ fn roster_editor_can_drive_local_sibling_fanout_without_session_manager_crud() -
     local_roster.authorize_device(alice2.device_pubkey, UnixSeconds(41));
     alice_manager.apply_local_roster(local_roster.build(UnixSeconds(42)));
 
-    alice_manager.observe_device_invite(
-        alice1.owner_pubkey,
-        manager_public_device_invite(&mut alice2_manager, &alice2, 42, 1_850_000_042)?,
-    )?;
+    alice_manager.observe_device_invite(manager_public_device_invite(
+        &mut alice2_manager,
+        &alice2,
+        42,
+        1_850_000_042,
+    )?)?;
 
     alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 43));
-    alice_manager.observe_device_invite(
-        bob.owner_pubkey,
-        manager_public_device_invite(&mut bob_manager, &bob, 43, 1_850_000_043)?,
-    )?;
+    alice_manager.observe_device_invite(manager_public_device_invite(
+        &mut bob_manager,
+        &bob,
+        43,
+        1_850_000_043,
+    )?)?;
 
     let mut send_ctx = context(44, 1_850_000_044);
     let prepared =

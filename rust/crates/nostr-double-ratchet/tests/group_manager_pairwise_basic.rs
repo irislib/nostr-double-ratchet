@@ -1,4 +1,5 @@
 mod support;
+use support::SessionManagerCompatExt;
 
 use nostr_double_ratchet::GroupEventManager as GroupManager;
 use nostr_double_ratchet::{
@@ -142,10 +143,12 @@ fn retry_create_group_reuses_existing_group_id_without_remutating_state() -> Res
 
     bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 60));
     alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 61));
-    alice_manager.observe_device_invite(
-        bob.owner_pubkey,
-        manager_public_device_invite(&mut bob_manager, &bob, 18, 1_900_001_101)?,
-    )?;
+    alice_manager.observe_device_invite(manager_public_device_invite(
+        &mut bob_manager,
+        &bob,
+        18,
+        1_900_001_101,
+    )?)?;
 
     let mut retry_ctx = context(19, 1_900_001_102);
     let retried = alice_groups.retry_create_group(
@@ -202,10 +205,12 @@ fn add_members_bootstraps_new_member_with_current_group_state() -> Result<()> {
 
     bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 10));
     alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 11));
-    alice_manager.observe_device_invite(
-        bob.owner_pubkey,
-        manager_public_device_invite(&mut bob_manager, &bob, 3, 1_900_000_101)?,
-    )?;
+    alice_manager.observe_device_invite(manager_public_device_invite(
+        &mut bob_manager,
+        &bob,
+        3,
+        1_900_000_101,
+    )?)?;
 
     let mut add_ctx = context(4, 1_900_000_102);
     let prepared = alice_groups.add_members(
@@ -288,10 +293,12 @@ fn retry_add_members_reuses_applied_group_state() -> Result<()> {
 
     bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 62));
     alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 63));
-    alice_manager.observe_device_invite(
-        bob.owner_pubkey,
-        manager_public_device_invite(&mut bob_manager, &bob, 23, 1_900_001_201)?,
-    )?;
+    alice_manager.observe_device_invite(manager_public_device_invite(
+        &mut bob_manager,
+        &bob,
+        23,
+        1_900_001_201,
+    )?)?;
 
     let mut retry_ctx = context(25, 1_900_001_203);
     let retried = alice_groups.retry_add_members(
@@ -343,15 +350,19 @@ fn create_and_send_message_fan_out_to_remote_member_and_local_sibling() -> Resul
     alice1_manager.apply_local_roster(roster_for(&[&alice1, &alice2], 20));
     alice2_manager.apply_local_roster(roster_for(&[&alice1, &alice2], 20));
     bob_manager.observe_peer_roster(alice1.owner_pubkey, roster_for(&[&alice1], 20));
-    alice1_manager.observe_device_invite(
-        alice1.owner_pubkey,
-        manager_public_device_invite(&mut alice2_manager, &alice2, 20, 1_900_000_200)?,
-    )?;
+    alice1_manager.observe_device_invite(manager_public_device_invite(
+        &mut alice2_manager,
+        &alice2,
+        20,
+        1_900_000_200,
+    )?)?;
     alice1_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 21));
-    alice1_manager.observe_device_invite(
-        bob.owner_pubkey,
-        manager_public_device_invite(&mut bob_manager, &bob, 21, 1_900_000_201)?,
-    )?;
+    alice1_manager.observe_device_invite(manager_public_device_invite(
+        &mut bob_manager,
+        &bob,
+        21,
+        1_900_000_201,
+    )?)?;
 
     let mut create_ctx = context(7, 1_900_000_202);
     let created = alice1_groups.create_group(
@@ -478,10 +489,12 @@ fn send_message_bootstraps_existing_group_to_new_local_sibling() -> Result<()> {
 
     alice1_manager.apply_local_roster(roster_for(&[&alice1], 70));
     alice1_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 71));
-    alice1_manager.observe_device_invite(
-        bob.owner_pubkey,
-        manager_public_device_invite(&mut bob_manager, &bob, 72, 1_900_001_300)?,
-    )?;
+    alice1_manager.observe_device_invite(manager_public_device_invite(
+        &mut bob_manager,
+        &bob,
+        72,
+        1_900_001_300,
+    )?)?;
 
     let mut create_ctx = context(73, 1_900_001_301);
     let created = alice1_groups.create_group(
@@ -493,10 +506,12 @@ fn send_message_bootstraps_existing_group_to_new_local_sibling() -> Result<()> {
 
     alice1_manager.apply_local_roster(roster_for(&[&alice1, &alice2], 76));
     alice2_manager.apply_local_roster(roster_for(&[&alice1, &alice2], 76));
-    alice1_manager.observe_device_invite(
-        alice1.owner_pubkey,
-        manager_public_device_invite(&mut alice2_manager, &alice2, 77, 1_900_001_304)?,
-    )?;
+    alice1_manager.observe_device_invite(manager_public_device_invite(
+        &mut alice2_manager,
+        &alice2,
+        77,
+        1_900_001_304,
+    )?)?;
 
     let mut send_ctx = context(78, 1_900_001_305);
     let sent = alice1_groups.send_message(
