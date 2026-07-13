@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { Invite } from '../src/Invite'
-import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools'
-import { INVITE_EVENT_KIND, INVITE_RESPONSE_KIND } from '../src/types'
+import { finalizeEvent, generateSecretKey, getEventHash, getPublicKey, nip44 } from 'nostr-tools'
+import { getConversationKey } from 'nostr-tools/nip44'
+import { INVITE_EVENT_KIND, INVITE_RESPONSE_KIND, MESSAGE_EVENT_KIND } from '../src/types'
 import { Session } from '../src/Session'
 import { buildTextRumor } from '../src/messageBuilders'
 import { serializeSessionState, deserializeSessionState } from '../src/utils'
@@ -49,6 +50,29 @@ describe('Invite', () => {
     expect(event.pubkey).not.toBe(bobPublicKey)
     expect(event.kind).toBe(INVITE_RESPONSE_KIND)
     expect(event.tags).toEqual([['p', invite.inviterEphemeralPublicKey]])
+  })
+
+  it('encodes invite response inner payload as an unsigned kind 1060 rumor', async () => {
+    const alicePrivateKey = generateSecretKey()
+    const alicePublicKey = getPublicKey(alicePrivateKey)
+    const invite = Invite.createNew(alicePublicKey)
+    const bobSecretKey = generateSecretKey()
+    const bobPublicKey = getPublicKey(bobSecretKey)
+    const bobOwnerPublicKey = getPublicKey(generateSecretKey())
+
+    const { event } = await invite.accept(bobPublicKey, bobSecretKey, bobOwnerPublicKey)
+    const innerJson = nip44.decrypt(
+      event.content,
+      getConversationKey(invite.inviterEphemeralPrivateKey!, event.pubkey)
+    )
+    const inner = JSON.parse(innerJson)
+
+    expect(inner.pubkey).toBe(bobPublicKey)
+    expect(inner.kind).toBe(MESSAGE_EVENT_KIND)
+    expect(inner.tags).toEqual([])
+    expect(typeof inner.content).toBe('string')
+    expect(inner.content.length).toBeGreaterThan(0)
+    expect(inner.id).toBe(getEventHash(inner))
   })
 
   it('should listen for invite acceptances', async () => {

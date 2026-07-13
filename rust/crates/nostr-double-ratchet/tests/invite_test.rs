@@ -1,4 +1,6 @@
-use nostr::Keys;
+use base64::Engine;
+use nostr::nips::nip44;
+use nostr::{Keys, SecretKey, UnsignedEvent};
 use nostr_double_ratchet::{
     invite_response_event, InviteNostrExt, INVITE_EVENT_KIND, INVITE_RESPONSE_KIND,
 };
@@ -195,6 +197,39 @@ fn test_invite_accept_creates_session() -> Result<()> {
                 == Some(&hex::encode(invite.inviter_ephemeral_public_key.to_bytes()))
     });
     assert!(has_p_tag);
+
+    Ok(())
+}
+
+#[test]
+fn invite_response_inner_payload_is_kind_1060_rumor() -> Result<()> {
+    let alice_keys = Keys::generate();
+    let invite = Invite::create_new(alice_keys.public_key(), None, None)?;
+
+    let bob_keys = Keys::generate();
+    let bob_pk = bob_keys.public_key();
+    let bob_sk = bob_keys.secret_key().to_secret_bytes();
+
+    let (_session, envelope) = invite.accept(bob_pk, bob_sk, Some("device-1".to_string()))?;
+    let event = invite_response_event(&envelope)?;
+    let inviter_ephemeral_private_key = invite
+        .inviter_ephemeral_private_key
+        .expect("owned invite includes ephemeral private key");
+    let decrypted_inner = nip44::decrypt(
+        &SecretKey::from_slice(&inviter_ephemeral_private_key)?,
+        &event.pubkey,
+        &event.content,
+    )?;
+    let rumor: UnsignedEvent = serde_json::from_str(&decrypted_inner)?;
+
+    assert!(rumor.id.is_some());
+    rumor.verify_id()?;
+    assert_eq!(rumor.kind.as_u16(), 1060);
+    assert_eq!(rumor.pubkey.to_bytes(), bob_pk.to_bytes());
+    assert!(rumor.tags.is_empty());
+    base64::engine::general_purpose::STANDARD
+        .decode(rumor.content.as_bytes())
+        .expect("inner rumor content remains base64 encrypted payload");
 
     Ok(())
 }

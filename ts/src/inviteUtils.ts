@@ -1,8 +1,8 @@
-import { generateSecretKey, getPublicKey, nip44 } from 'nostr-tools'
+import { generateSecretKey, getEventHash, getPublicKey, nip44 } from 'nostr-tools'
 import { getConversationKey } from 'nostr-tools/nip44'
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils'
 import { Session } from './Session'
-import { INVITE_RESPONSE_KIND, EncryptFunction, DecryptFunction, KeyPair } from './types'
+import { INVITE_RESPONSE_KIND, MESSAGE_EVENT_KIND, EncryptFunction, DecryptFunction, KeyPair, Rumor } from './types'
 
 /**
  * Device payload for QR code / text code sharing.
@@ -67,11 +67,7 @@ export interface EncryptInviteResponseParams {
 
 export interface EncryptedInviteResponse {
   /** The inner event containing the encrypted payload */
-  innerEvent: {
-    pubkey: string
-    content: string
-    created_at: number
-  }
+  innerEvent: Rumor
   /** The outer envelope event */
   envelope: {
     kind: number
@@ -89,6 +85,21 @@ export interface EncryptedInviteResponse {
 const TWO_DAYS = 2 * 24 * 60 * 60
 const now = () => Math.round(Date.now() / 1000)
 const randomNow = () => Math.round(now() - Math.random() * TWO_DAYS)
+
+function parseInviteResponseInnerRumor(json: string): Rumor {
+  const rumor = JSON.parse(json) as Rumor
+  if (
+    typeof rumor.id !== 'string' ||
+    rumor.kind !== MESSAGE_EVENT_KIND ||
+    !Array.isArray(rumor.tags) ||
+    rumor.tags.length !== 0 ||
+    getEventHash(rumor) !== rumor.id
+  ) {
+    throw new Error('Invalid invite response inner rumor')
+  }
+
+  return rumor
+}
 
 /**
  * Encrypts an invite response with two-layer encryption.
@@ -129,11 +140,15 @@ export async function encryptInviteResponse(params: EncryptInviteResponseParams)
   const dhEncrypted = await encryptFn(payload, inviterPublicKey)
 
   // Encrypt with shared secret
-  const innerEvent = {
+  const innerEvent: Rumor = {
+    id: '',
     pubkey: inviteePublicKey,
     content: nip44.encrypt(dhEncrypted, sharedSecretBytes),
     created_at: now(),
+    kind: MESSAGE_EVENT_KIND,
+    tags: [],
   }
+  innerEvent.id = getEventHash(innerEvent)
 
   // Create a random keypair for the envelope sender
   const randomSenderPrivateKey = generateSecretKey()
@@ -201,7 +216,7 @@ export async function decryptInviteResponse(params: DecryptInviteResponseParams)
     envelopeContent,
     getConversationKey(inviterEphemeralPrivateKey, envelopeSenderPubkey)
   )
-  const innerEvent = JSON.parse(decrypted)
+  const innerEvent = parseInviteResponseInnerRumor(decrypted)
 
   const inviteeIdentity = innerEvent.pubkey
 
