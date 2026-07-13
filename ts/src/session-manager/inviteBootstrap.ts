@@ -12,7 +12,7 @@ export const INVITE_BOOTSTRAP_EXPIRATION_SECONDS = 1
 export function planInviteBootstrapEvent(
   session: Session,
   recipientDevicePubkey?: string,
-){
+) {
   const expiresAt = INVITE_BOOTSTRAP_EXPIRATION_SECONDS
   const outerTags = recipientDevicePubkey ? [["p", recipientDevicePubkey]] : []
 

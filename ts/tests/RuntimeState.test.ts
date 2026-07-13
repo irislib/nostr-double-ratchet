@@ -138,7 +138,16 @@ describe("RuntimeState", () => {
   })
 
   it("fails closed on corrupt or future canonical snapshots", async () => {
-    for (const snapshot of [{ version: 3 }, { version: 2, outbound: null }]) {
+    for (const snapshot of [
+      { version: 3 },
+      { version: 2, outbound: null },
+      { version: 2, userRecords: [{ publicKey: "owner" }], outbound: [] },
+      {
+        version: 2,
+        userRecords: [],
+        outbound: [{ type: "prepared", id: "event", createdAt: 1 }],
+      },
+    ]) {
       const storage = new InMemoryStorageAdapter()
       await storage.put("v2/runtime-snapshot", snapshot)
       await expect(new RuntimeState(storage).init()).rejects.toThrow(

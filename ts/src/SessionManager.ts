@@ -152,8 +152,7 @@ export class SessionManager {
   private runtimeEventCallbacks: Set<SessionManagerEventCallback> = new Set()
   private preparedPublishCallbacks: Set<() => void> = new Set()
   private outboundTransitionTail: Promise<void> = Promise.resolve()
-  private legacyBootstrapRetryTimeouts = new Set<ReturnType<typeof setTimeout>>()
-  private legacyBootstrapRetries = new Map<string, VerifiedEvent>()
+  private legacyPublishTimeouts = new Set<ReturnType<typeof setTimeout>>()
 
   // Initialization flag
   private initialized: boolean = false
@@ -185,13 +184,8 @@ export class SessionManager {
     this.nostrFacade = {
       ready: () => this.runtimeState.barrier(),
       subscribe: (subid, filter, onEvent) => this.emitSubscribe(subid, filter, onEvent),
-      publish: (event, innerEventId, intentId, retryExactForLegacyBootstrap) =>
-        this.emitPublish(
-          event,
-          innerEventId,
-          intentId,
-          retryExactForLegacyBootstrap,
-        ),
+      publish: (event, innerEventId, intentId) =>
+        this.emitPublish(event, innerEventId, intentId),
     }
   }
 
@@ -309,11 +303,8 @@ export class SessionManager {
     event: Parameters<NostrFacade["publish"]>[0],
     innerEventId?: string,
     intentId?: string,
-    retryExactForLegacyBootstrap?: boolean,
   ): Promise<void> {
-    return this.preparePublishes([
-      { event, innerEventId, intentId, retryExactForLegacyBootstrap },
-    ])
+    return this.preparePublishes([{ event, innerEventId, intentId }])
   }
 
   private async preparePublishes(
@@ -321,8 +312,8 @@ export class SessionManager {
       event: VerifiedEvent
       innerEventId?: string
       intentId?: string
-      retryExactForLegacyBootstrap?: boolean
     }>,
+    awaitLegacyPublish = true,
   ): Promise<void> {
     await this.runtimeState.preparePublishes(
       () => serializeUserRecords(this.userRecords),
@@ -331,28 +322,26 @@ export class SessionManager {
     for (const callback of this.preparedPublishCallbacks) callback()
 
     if (!this.legacyNostrPublish) return
-    for (const publish of publishes) {
-      try {
-        await this.legacyNostrPublish(publish.event)
-        await this.acknowledgePublish(publish.event.id)
-        if (publish.retryExactForLegacyBootstrap) {
-          this.scheduleExactLegacyBootstrapRetries(publish.event)
-        }
-      } catch (error) {
-        await this.publishFailed(publish.event.id, error).catch(() => {})
-        throw error
-      }
+    if (!awaitLegacyPublish) {
+      const timeout = setTimeout(() => {
+        this.legacyPublishTimeouts.delete(timeout)
+        void Promise.allSettled(
+          publishes.map((publish) => this.publishLegacy(publish))
+        )
+      }, 0)
+      this.legacyPublishTimeouts.add(timeout)
+      return
     }
+    for (const publish of publishes) await this.publishLegacy(publish)
   }
 
-  private scheduleExactLegacyBootstrapRetries(event: VerifiedEvent): void {
-    this.legacyBootstrapRetries.set(event.id, event)
-    for (const delay of [500, 1500]) {
-      const timeout = setTimeout(() => {
-        this.legacyBootstrapRetryTimeouts.delete(timeout)
-        void this.legacyNostrPublish?.(event).catch(() => {})
-      }, delay)
-      this.legacyBootstrapRetryTimeouts.add(timeout)
+  private async publishLegacy(publish: { event: VerifiedEvent }): Promise<void> {
+    try {
+      await this.legacyNostrPublish!(publish.event)
+      await this.acknowledgePublish(publish.event.id)
+    } catch (error) {
+      await this.publishFailed(publish.event.id, error).catch(() => {})
+      throw error
     }
   }
 
@@ -379,8 +368,14 @@ export class SessionManager {
     // Setup sessions with our own devices and resume discovery for all known users
     Array.from(this.userRecords.keys()).forEach(pubkey => this.setupUser(pubkey))
 
-    if (this.pendingPublishes().length > 0) {
+    const pendingPublishes = this.pendingPublishes()
+    if (pendingPublishes.length > 0) {
       for (const callback of this.preparedPublishCallbacks) callback()
+      if (this.legacyNostrPublish) {
+        await Promise.allSettled(
+          pendingPublishes.map((publish) => this.publishLegacy(publish))
+        )
+      }
     }
   }
 
@@ -923,9 +918,8 @@ export class SessionManager {
   }
 
   close() {
-    for (const timeout of this.legacyBootstrapRetryTimeouts) clearTimeout(timeout)
-    this.legacyBootstrapRetryTimeouts.clear()
-    this.legacyBootstrapRetries.clear()
+    for (const timeout of this.legacyPublishTimeouts) clearTimeout(timeout)
+    this.legacyPublishTimeouts.clear()
 
     for (const userRecord of this.userRecords.values()) {
       userRecord.close()
@@ -1018,12 +1012,7 @@ export class SessionManager {
     }
 
     try {
-      await this.emitPublish(
-        planInviteBootstrapEvent(session, deviceId),
-        undefined,
-        undefined,
-        true,
-      )
+      await this.emitPublish(planInviteBootstrapEvent(session, deviceId))
     } catch {
       // Ignore bootstrap send failures; the next valid inbound event will retry queue flush.
     }
@@ -1035,10 +1024,7 @@ export class SessionManager {
   ): Promise<void> {
     try {
       await this.emitPublish(
-        planInviteBootstrapEvent(session, recipientDevicePubkey),
-        undefined,
-        undefined,
-        true,
+        planInviteBootstrapEvent(session, recipientDevicePubkey)
       )
     } catch {
       // The session is still established even if the bootstrap publish fails.
@@ -1212,6 +1198,7 @@ export class SessionManager {
       preferActive: true,
     })
     await this.emitPublish(event)
+    this.notifyMessagePushAuthorsChanged()
     await this.sendInviteBootstrap(session, deviceId)
     if (invite.purpose === "link" && ownerPublicKey === this.ownerPublicKey) {
       await this.sendLinkBootstrap(ownerPublicKey, deviceId)
@@ -1246,24 +1233,16 @@ export class SessionManager {
     event: Partial<Rumor>
   ): Promise<Rumor | undefined> {
     return this.serializeOutboundTransition(() =>
-      this.sendEventTransition(recipientIdentityKey, event)
+      this.sendEventTransition(recipientIdentityKey, event, false)
     )
   }
 
   private async sendEventTransition(
     recipientIdentityKey: string,
     event: Partial<Rumor>,
+    deferLegacyPublish: boolean,
   ): Promise<Rumor | undefined> {
     await this.init()
-
-    if (this.legacyNostrPublish && this.legacyBootstrapRetries.size > 0) {
-      await Promise.allSettled(
-        Array.from(this.legacyBootstrapRetries.values(), (bootstrap) =>
-          this.legacyNostrPublish!(bootstrap)
-        )
-      )
-      this.legacyBootstrapRetries.clear()
-    }
 
     await Promise.allSettled([
       this.setupUser(recipientIdentityKey),
@@ -1349,7 +1328,8 @@ export class SessionManager {
           event: prepared,
           innerEventId: completeEvent.id,
           intentId: `${completeEvent.id}/${sentDeviceIds[index]}`,
-        }))
+        })),
+        !deferLegacyPublish,
       )
     } catch (error) {
       this.hydrateUserRecords(recordsBefore)
@@ -1405,9 +1385,9 @@ export class SessionManager {
       ensureMsTag: false,
     })
 
-    // Use sendEvent for actual sending (includes queueing).
-    // Note: sendEvent is not awaited to maintain backward compatibility.
-    this.sendEvent(recipientPublicKey, rumor).catch(() => {})
+    await this.serializeOutboundTransition(() =>
+      this.sendEventTransition(recipientPublicKey, rumor, true)
+    )
 
     return rumor
   }

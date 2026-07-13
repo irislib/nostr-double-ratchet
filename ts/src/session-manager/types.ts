@@ -116,7 +116,6 @@ export interface NostrFacade {
     event: VerifiedEvent,
     innerEventId?: string,
     intentId?: string,
-    retryExactForLegacyBootstrap?: boolean,
   ): Promise<void>
 }
 

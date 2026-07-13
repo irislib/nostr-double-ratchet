@@ -17,14 +17,23 @@ type StoredRuntimeSnapshot = { outbound: StoredQueueEntry[] }
 
 class FailFirstMessageQueuePutStorage extends InMemoryStorageAdapter {
   private failed = false
+  private expansionSource?: string
+
+  armForExpansionFrom(targetKey: string): void {
+    this.expansionSource = targetKey
+  }
 
   async put<T = unknown>(key: string, value: T): Promise<void> {
     const snapshot = value as StoredRuntimeSnapshot
     if (
       !this.failed &&
+      this.expansionSource &&
       key === "v2/runtime-snapshot" &&
       snapshot.outbound?.some(
-        (entry) => entry.type === "intent" && entry.stage === "device"
+        (entry) =>
+          entry.type === "intent" &&
+          entry.stage === "device" &&
+          entry.targetKey !== this.expansionSource
       )
     ) {
       this.failed = true
@@ -36,12 +45,11 @@ class FailFirstMessageQueuePutStorage extends InMemoryStorageAdapter {
 
 const countQueueEntries = async (
   storage: StorageAdapter,
-  prefix: string,
+  stage: "discovery" | "device",
   targetKey: string,
   eventId: string
 ): Promise<number> => {
   const snapshot = await storage.get<StoredRuntimeSnapshot>("v2/runtime-snapshot")
-  const stage = prefix.includes("discovery") ? "discovery" : "device"
   return snapshot?.outbound.filter(
     (entry) =>
       entry.type === "intent" &&
@@ -55,7 +63,8 @@ const publishAppKeys = (
   relay: MockRelay,
   ownerSecretKey: Uint8Array,
   ownerPublicKey: string,
-  devicePubkeys: string[]
+  devicePubkeys: string[],
+  createdAt = Math.floor(Date.now() / 1000),
 ) => {
   const appKeys = new AppKeys(
     devicePubkeys.map((identityPubkey, i) => ({
@@ -66,14 +75,15 @@ const publishAppKeys = (
   const event = appKeys.getEvent({
     ownerPrivateKey: ownerSecretKey,
     ownerPubkey: ownerPublicKey,
+    createdAt,
   })
   const signed = finalizeEvent(event, ownerSecretKey)
   relay.storeAndDeliver(signed as unknown as VerifiedEvent)
 }
 
 /**
- * Tests that the persistent MessageQueue + DiscoveryQueue survive crash/restart
- * and deliver queued messages once the session is (re-)established.
+ * Tests that durable outbound intents survive crash/restart and deliver once
+ * the session is (re-)established.
  */
 describe("MessageQueue crash recovery", () => {
   it("queued message delivers after sender restart", async () => {
@@ -195,7 +205,7 @@ describe("MessageQueue crash recovery", () => {
     })
   })
 
-  it("keeps discovery entries when expansion to message queue partially fails", async () => {
+  it("keeps the fallback intent when device expansion fails", async () => {
     const relay = new MockRelay()
     const aliceStorage = new FailFirstMessageQueuePutStorage()
     const alice = await createMockSessionManager("alice-main", relay, undefined, aliceStorage)
@@ -207,8 +217,9 @@ describe("MessageQueue crash recovery", () => {
     const rumorId = rumor.id
 
     expect(
-      await countQueueEntries(aliceStorage, "v1/discovery-queue/", bobPubkey, rumorId)
+      await countQueueEntries(aliceStorage, "device", bobPubkey, rumorId)
     ).toBeGreaterThan(0)
+    aliceStorage.armForExpansionFrom(bobPubkey)
 
     const bob = await createMockSessionManager("bob-main", relay, bobSecret)
     const bobReceived = new Promise<void>((resolve, reject) => {
@@ -227,7 +238,7 @@ describe("MessageQueue crash recovery", () => {
     // First expansion attempt consumes the injected storage failure.
     await new Promise((r) => setTimeout(r, 250))
     expect(
-      await countQueueEntries(aliceStorage, "v1/discovery-queue/", bobPubkey, rumorId)
+      await countQueueEntries(aliceStorage, "device", bobPubkey, rumorId)
     ).toBeGreaterThan(0)
 
     // Trigger a second AppKeys cycle to retry expansion and flush.
@@ -244,6 +255,7 @@ describe("MessageQueue crash recovery", () => {
     const bobOwnerPubkey = getPublicKey(bobOwnerSecret)
     const bobDevice1 = getPublicKey(generateSecretKey())
     const bobDevice2 = getPublicKey(generateSecretKey())
+    const firstRosterAt = Math.floor(Date.now() / 1000)
 
     const rumor = await alice.manager.sendMessage(
       bobOwnerPubkey,
@@ -252,25 +264,37 @@ describe("MessageQueue crash recovery", () => {
     const rumorId = rumor.id
 
     expect(
-      await countQueueEntries(storage, "v1/discovery-queue/", bobOwnerPubkey, rumorId)
+      await countQueueEntries(storage, "device", bobOwnerPubkey, rumorId)
     ).toBeGreaterThan(0)
 
-    publishAppKeys(relay, bobOwnerSecret, bobOwnerPubkey, [bobDevice1, bobDevice2])
+    publishAppKeys(
+      relay,
+      bobOwnerSecret,
+      bobOwnerPubkey,
+      [bobDevice1, bobDevice2],
+      firstRosterAt,
+    )
     await new Promise((r) => setTimeout(r, 120))
 
     expect(
-      await countQueueEntries(storage, "v1/message-queue/", bobDevice1, rumorId)
+      await countQueueEntries(storage, "device", bobDevice1, rumorId)
     ).toBeGreaterThan(0)
     expect(
-      await countQueueEntries(storage, "v1/message-queue/", bobDevice2, rumorId)
+      await countQueueEntries(storage, "device", bobDevice2, rumorId)
     ).toBeGreaterThan(0)
 
-    publishAppKeys(relay, bobOwnerSecret, bobOwnerPubkey, [bobDevice1])
+    publishAppKeys(
+      relay,
+      bobOwnerSecret,
+      bobOwnerPubkey,
+      [bobDevice1],
+      firstRosterAt + 1,
+    )
     await new Promise((r) => setTimeout(r, 120))
 
-    expect(await countQueueEntries(storage, "v1/message-queue/", bobDevice2, rumorId)).toBe(0)
+    expect(await countQueueEntries(storage, "device", bobDevice2, rumorId)).toBe(0)
     expect(
-      await countQueueEntries(storage, "v1/message-queue/", bobDevice1, rumorId)
+      await countQueueEntries(storage, "device", bobDevice1, rumorId)
     ).toBeGreaterThan(0)
   })
 
@@ -283,6 +307,7 @@ describe("MessageQueue crash recovery", () => {
     const bobOwnerPubkey = getPublicKey(bobOwnerSecret)
     const bobDevice1 = getPublicKey(generateSecretKey())
     const bobDevice2 = getPublicKey(generateSecretKey())
+    const firstRosterAt = Math.floor(Date.now() / 1000)
 
     const rumor = await alice.manager.sendMessage(
       bobOwnerPubkey,
@@ -291,24 +316,43 @@ describe("MessageQueue crash recovery", () => {
     const rumorId = rumor.id
 
     expect(
-      await countQueueEntries(aliceStorage, "v1/discovery-queue/", bobOwnerPubkey, rumorId)
+      await countQueueEntries(aliceStorage, "device", bobOwnerPubkey, rumorId)
     ).toBeGreaterThan(0)
+    aliceStorage.armForExpansionFrom(bobOwnerPubkey)
 
-    publishAppKeys(relay, bobOwnerSecret, bobOwnerPubkey, [bobDevice1, bobDevice2])
+    publishAppKeys(
+      relay,
+      bobOwnerSecret,
+      bobOwnerPubkey,
+      [bobDevice1, bobDevice2],
+      firstRosterAt,
+    )
     await new Promise((r) => setTimeout(r, 120))
 
     expect(
-      await countQueueEntries(aliceStorage, "v1/discovery-queue/", bobOwnerPubkey, rumorId)
+      await countQueueEntries(aliceStorage, "device", bobOwnerPubkey, rumorId)
     ).toBeGreaterThan(0)
 
-    publishAppKeys(relay, bobOwnerSecret, bobOwnerPubkey, [bobDevice1])
+    publishAppKeys(
+      relay,
+      bobOwnerSecret,
+      bobOwnerPubkey,
+      [bobDevice1],
+      firstRosterAt + 1,
+    )
     await new Promise((r) => setTimeout(r, 120))
-    publishAppKeys(relay, bobOwnerSecret, bobOwnerPubkey, [bobDevice1])
+    publishAppKeys(
+      relay,
+      bobOwnerSecret,
+      bobOwnerPubkey,
+      [bobDevice1],
+      firstRosterAt + 2,
+    )
     await new Promise((r) => setTimeout(r, 120))
 
-    expect(await countQueueEntries(aliceStorage, "v1/message-queue/", bobDevice2, rumorId)).toBe(0)
+    expect(await countQueueEntries(aliceStorage, "device", bobDevice2, rumorId)).toBe(0)
     expect(
-      await countQueueEntries(aliceStorage, "v1/message-queue/", bobDevice1, rumorId)
+      await countQueueEntries(aliceStorage, "device", bobDevice1, rumorId)
     ).toBeGreaterThan(0)
   })
 })

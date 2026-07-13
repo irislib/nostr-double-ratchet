@@ -182,6 +182,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
         preferActive: true,
       })
       await this.deps.nostr.publish(event)
+      this.deps.user.onDeviceDirty()
       await this.publishInviteBootstrap(session)
       this.state = "session-ready"
       await this.flushMessageQueue()
@@ -202,7 +203,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
         }),
         [["p", this.deviceId]],
       )
-      await this.deps.nostr.publish(event, undefined, undefined, true)
+      await this.deps.nostr.publish(event)
     } catch {
       this.restore(checkpoint)
     }

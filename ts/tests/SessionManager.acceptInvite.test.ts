@@ -249,7 +249,7 @@ describe("SessionManager.acceptInvite", () => {
     expect(decrypted.ownerPublicKey).toBe(ownerPublicKey)
   })
 
-  it("does not pre-ratchet fresh bootstrap events for scheduled retries", async () => {
+  it("does not schedule bootstrap retries after a successful publish", async () => {
     const relay = new MockRelay()
 
     const bob = await createMockSessionManager("bob-device-1", relay)
@@ -265,17 +265,12 @@ describe("SessionManager.acceptInvite", () => {
       .getAllEvents()
       .filter((event) => event.kind === 1060)
     expect(initialBootstrapEvents.length).toBeGreaterThan(0)
-    const initialIds = initialBootstrapEvents.map((event) => event.id).sort()
-
     await new Promise((resolve) => setTimeout(resolve, 2_100))
 
     const retriedBootstrapEvents = relay
       .getAllEvents()
       .filter((event) => event.kind === 1060)
-    expect(
-      [...new Set(retriedBootstrapEvents.map((event) => event.id))].sort()
-    ).toEqual([...new Set(initialIds)].sort())
-    expect(retriedBootstrapEvents.length).toBeGreaterThan(initialBootstrapEvents.length)
+    expect(retriedBootstrapEvents).toEqual(initialBootstrapEvents)
   }, 10_000)
 
   it("lets an unregistered same-owner device receive the inviter reply after sending first", async () => {

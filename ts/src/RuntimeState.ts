@@ -301,10 +301,53 @@ export class RuntimeState {
   private isSnapshot(value: unknown): value is RuntimeSnapshotV2 {
     if (!value || typeof value !== "object") return false
     const snapshot = value as Partial<RuntimeSnapshotV2>
-    return (
+    if (
       snapshot.version === 2 &&
       Array.isArray(snapshot.userRecords) &&
       Array.isArray(snapshot.outbound)
+    ) {
+      return snapshot.userRecords.every(
+        (record) =>
+          Boolean(record) &&
+          typeof record === "object" &&
+          typeof record.publicKey === "string" &&
+          Array.isArray(record.devices)
+      ) && snapshot.outbound.every((entry) => {
+        if (
+          !entry ||
+          typeof entry !== "object" ||
+          typeof entry.id !== "string" ||
+          typeof entry.createdAt !== "number"
+        ) return false
+        if (entry.type === "intent") {
+          return (
+            (entry.stage === "discovery" || entry.stage === "device") &&
+            typeof entry.targetKey === "string" &&
+            this.isStoredEvent(entry.event, false)
+          )
+        }
+        return (
+          entry.type === "prepared" &&
+          typeof entry.attempts === "number" &&
+          this.isStoredEvent(entry.event, true) &&
+          entry.event.id === entry.id
+        )
+      })
+    }
+    return false
+  }
+
+  private isStoredEvent(value: unknown, signed: boolean): boolean {
+    if (!value || typeof value !== "object") return false
+    const event = value as Partial<VerifiedEvent>
+    return (
+      typeof event.id === "string" &&
+      typeof event.pubkey === "string" &&
+      typeof event.created_at === "number" &&
+      typeof event.kind === "number" &&
+      Array.isArray(event.tags) &&
+      typeof event.content === "string" &&
+      (!signed || typeof event.sig === "string")
     )
   }
 
