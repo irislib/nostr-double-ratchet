@@ -133,7 +133,3 @@ pub(crate) fn parse_hex_pubkey(value: &str) -> Result<[u8; 32], String> {
     let bytes = hex::decode(value).map_err(|e| e.to_string())?;
     <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| "expected 32-byte public key".to_string())
 }
-
-pub(crate) fn owner_pubkey_from_device_pubkey(device_pubkey: DevicePubkey) -> OwnerPubkey {
-    OwnerPubkey::from_bytes(device_pubkey.to_bytes())
-}

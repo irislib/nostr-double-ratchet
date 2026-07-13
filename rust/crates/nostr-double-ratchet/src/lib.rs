@@ -11,6 +11,7 @@ pub mod message_builders;
 pub mod message_origin;
 pub mod multi_device;
 pub mod one_to_many;
+pub mod owner_roster_proof;
 pub mod protocol_types;
 pub mod roster;
 pub mod roster_editor;
@@ -24,6 +25,7 @@ pub mod wire;
 pub use app_keys::{
     build_app_keys_device_authorization_filter,
     encrypted_device_label_payloads_from_app_keys_event, is_app_keys_event,
+    owner_roster_proof_from_app_keys_event, parse_owner_roster_proof,
     resolve_app_keys_owner_for_device, AppKeys, DeviceEntry, DeviceLabels,
     APP_KEYS_ENCRYPTED_DEVICE_LABELS_FACT, APP_KEYS_ENCRYPTED_DEVICE_LABELS_SCHEMA,
     APP_KEYS_FACT_TYPE, APP_KEYS_OWNER_PUBKEY_FACT, APP_KEYS_SCHEMA, APP_KEYS_SNAPSHOT_KIND,
@@ -50,17 +52,18 @@ pub use group_wire::{
     GROUP_ROSTER_FACT_TYPE,
 };
 pub use ids::{DevicePubkey, OwnerPubkey, UnixSeconds};
-pub use invite::{Invite, InviteResponse, InviteResponseEnvelope, OwnerClaimVerifier};
+pub use invite::{Invite, InviteResponse, InviteResponseEnvelope};
 pub use message_builders::*;
 pub use message_origin::{classify_message_origin, MessageOrigin};
 pub use multi_device::{
     apply_app_keys_snapshot, apply_app_keys_snapshot_with_required_device,
     evaluate_device_registration_state, resolve_conversation_candidate_pubkeys,
-    resolve_invite_owner_routing, resolve_rumor_peer_pubkey, select_latest_app_keys_from_events,
+    resolve_rumor_peer_pubkey, select_latest_app_keys_from_events,
     should_require_relay_registration_confirmation, AppKeysSnapshot, AppKeysSnapshotDecision,
-    DeviceRegistrationState, InviteOwnerRoutingResolution,
+    DeviceRegistrationState,
 };
 pub use one_to_many::*;
+pub use owner_roster_proof::OwnerRosterProof;
 pub use protocol_types::{ProtocolContext, MAX_SKIP};
 pub use roster::{AuthorizedDevice, DeviceRoster, RosterSnapshotDecision};
 pub use roster_editor::RosterEditor;
@@ -83,16 +86,9 @@ pub use wire::{
     INVITE_LIST_LABEL, INVITE_RESPONSE_KIND, MESSAGE_EVENT_KIND, ROSTER_EVENT_KIND,
 };
 
-pub(crate) use ids::owner_pubkey_from_device_pubkey;
 pub(crate) use utils::{
     device_pubkey_from_secret_bytes, kdf, random_secret_key_bytes, secret_key_from_bytes,
 };
-
-impl OwnerClaimVerifier for AppKeys {
-    fn has_device(&self, _device_pubkey: DevicePubkey, device_identity: nostr::PublicKey) -> bool {
-        self.get_device(&device_identity).is_some()
-    }
-}
 
 pub const APP_KEYS_EVENT_KIND: u32 = APP_KEYS_SNAPSHOT_KIND;
 pub const CHAT_MESSAGE_KIND: u32 = 14;
