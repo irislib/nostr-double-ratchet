@@ -31,6 +31,22 @@ export interface PreparedPublish {
   lastError?: string
 }
 
+export interface PreparedPublishInput {
+  event: VerifiedEvent
+  innerEventId?: string
+  intentId?: string
+}
+
+export interface PreparedTransition<T> {
+  result: T
+  userRecords: StoredUserRecord[]
+  publishes: PreparedPublishInput[]
+}
+
+export interface PreparedTransitionContext {
+  hasIntent(id: string): boolean
+}
+
 export type OutboundEntry = OutboundIntent | PreparedPublish
 
 export interface RuntimeSnapshotV2 {
@@ -80,6 +96,7 @@ const serializeUserRecord = (
       createdAt: device.createdAt,
     })),
     appKeys: userRecord.appKeys?.serialize(),
+    appKeysCreatedAt: userRecord.appKeysCreatedAt(),
   }
 }
 
@@ -136,22 +153,17 @@ export class RuntimeState {
     )
   }
 
-  barrier(): Promise<void> {
-    return this.transitionTail
-  }
-
-  async persistRecords(userRecords: () => StoredUserRecord[]): Promise<void> {
-    await this.replace(userRecords, (outbound) => outbound)
+  async persistRecords(userRecords: StoredUserRecord[]): Promise<void> {
+    await this.replaceRecords(userRecords)
   }
 
   async addIntent(
-    userRecords: () => StoredUserRecord[],
     stage: OutboundIntentStage,
     targetKey: string,
     event: Rumor,
   ): Promise<string> {
     const id = `${event.id}/${targetKey}`
-    await this.replace(userRecords, (outbound) => {
+    await this.updateOutbound((outbound) => {
       const withoutDuplicate = outbound.filter(
         (entry) =>
           !(
@@ -169,11 +181,10 @@ export class RuntimeState {
   }
 
   async removeIntent(
-    userRecords: () => StoredUserRecord[],
     stage: OutboundIntentStage,
     id: string,
   ): Promise<void> {
-    await this.replace(userRecords, (outbound) =>
+    await this.updateOutbound((outbound) =>
       outbound.filter(
         (entry) =>
           !(entry.type === "intent" && entry.stage === stage && entry.id === id)
@@ -182,11 +193,10 @@ export class RuntimeState {
   }
 
   async removeIntentsForTarget(
-    userRecords: () => StoredUserRecord[],
     stage: OutboundIntentStage,
     targetKey: string,
   ): Promise<void> {
-    await this.replace(userRecords, (outbound) =>
+    await this.updateOutbound((outbound) =>
       outbound.filter(
         (entry) =>
           !(
@@ -198,50 +208,42 @@ export class RuntimeState {
     )
   }
 
-  async preparePublishes(
-    userRecords: () => StoredUserRecord[],
-    publishes: Array<{
-      event: VerifiedEvent
-      innerEventId?: string
-      intentId?: string
-    }>,
-  ): Promise<void> {
-    if (publishes.length === 0) {
-      await this.persistRecords(userRecords)
-      return
-    }
-
-    await this.replace(userRecords, (outbound) => {
-      const intentIds = new Set(
-        publishes.flatMap(({ intentId }) => intentId ? [intentId] : [])
-      )
-      const existingPreparedIds = new Set(
-        outbound.flatMap((entry) => entry.type === "prepared" ? [entry.id] : [])
-      )
-      const next = outbound.filter(
-        (entry) => !(entry.type === "intent" && intentIds.has(entry.id))
-      )
-      for (const publish of publishes) {
-        if (existingPreparedIds.has(publish.event.id)) continue
-        next.push({
-          type: "prepared",
-          id: publish.event.id,
-          event: publish.event,
-          innerEventId: publish.innerEventId,
-          createdAt: Date.now(),
-          attempts: 0,
+  async commitPreparedTransition<T>(
+    mutate: (context: PreparedTransitionContext) => PreparedTransition<T>,
+    checkpoint: () => () => void,
+  ): Promise<T> {
+    return this.serialize(async () => {
+      const rollback = checkpoint()
+      let transition: PreparedTransition<T>
+      try {
+        transition = mutate({
+          hasIntent: (id) => this.snapshot.outbound.some(
+            (entry) => entry.type === "intent" && entry.id === id
+          ),
         })
-        existingPreparedIds.add(publish.event.id)
+      } catch (error) {
+        rollback()
+        throw error
       }
-      return next
+
+      const next: RuntimeSnapshotV2 = {
+        version: 2,
+        userRecords: transition.userRecords,
+        outbound: prepareOutbound(this.snapshot.outbound, transition.publishes),
+      }
+      try {
+        await this.storage.put(SNAPSHOT_KEY, next)
+      } catch (error) {
+        rollback()
+        throw error
+      }
+      this.snapshot = next
+      return transition.result
     })
   }
 
-  async acknowledgePublish(
-    userRecords: () => StoredUserRecord[],
-    id: string,
-  ): Promise<void> {
-    await this.replace(userRecords, (outbound) =>
+  async acknowledgePublish(id: string): Promise<void> {
+    await this.updateOutbound((outbound) =>
       outbound.filter(
         (entry) => !(entry.type === "prepared" && entry.id === id)
       )
@@ -249,11 +251,10 @@ export class RuntimeState {
   }
 
   async publishFailed(
-    userRecords: () => StoredUserRecord[],
     id: string,
     error: string,
   ): Promise<void> {
-    await this.replace(userRecords, (outbound) =>
+    await this.updateOutbound((outbound) =>
       outbound.map((entry) =>
         entry.type === "prepared" && entry.id === id
           ? {
@@ -268,33 +269,43 @@ export class RuntimeState {
   }
 
   async deleteUser(
-    userRecords: () => StoredUserRecord[],
+    userRecords: StoredUserRecord[],
     publicKey: string,
   ): Promise<void> {
-    await this.replace(
-      () => userRecords().filter((record) => record.publicKey !== publicKey),
-      (outbound) => outbound,
+    await this.replaceRecords(
+      userRecords.filter((record) => record.publicKey !== publicKey),
     )
   }
 
-  private async replace(
-    userRecords: () => StoredUserRecord[],
-    reduceOutbound: (current: OutboundEntry[]) => OutboundEntry[],
-  ): Promise<void> {
+  private async replaceRecords(userRecords: StoredUserRecord[]): Promise<void> {
     await this.serialize(async () => {
       const next: RuntimeSnapshotV2 = {
         version: 2,
-        userRecords: userRecords(),
-        outbound: reduceOutbound(this.snapshot.outbound),
+        userRecords,
+        outbound: this.snapshot.outbound,
       }
       await this.storage.put(SNAPSHOT_KEY, next)
       this.snapshot = next
     })
   }
 
-  private serialize(operation: () => Promise<void>): Promise<void> {
+  private async updateOutbound(
+    reduce: (current: OutboundEntry[]) => OutboundEntry[],
+  ): Promise<void> {
+    await this.serialize(async () => {
+      const next: RuntimeSnapshotV2 = {
+        version: 2,
+        userRecords: this.snapshot.userRecords,
+        outbound: reduce(this.snapshot.outbound),
+      }
+      await this.storage.put(SNAPSHOT_KEY, next)
+      this.snapshot = next
+    })
+  }
+
+  private serialize<T>(operation: () => Promise<T>): Promise<T> {
     const next = this.transitionTail.then(operation, operation)
-    this.transitionTail = next.catch(() => {})
+    this.transitionTail = next.then(() => {}, () => {})
     return next
   }
 
@@ -311,7 +322,9 @@ export class RuntimeState {
           Boolean(record) &&
           typeof record === "object" &&
           typeof record.publicKey === "string" &&
-          Array.isArray(record.devices)
+          Array.isArray(record.devices) &&
+          (record.appKeysCreatedAt === undefined ||
+            typeof record.appKeysCreatedAt === "number")
       ) && snapshot.outbound.every((entry) => {
         if (
           !entry ||
@@ -397,11 +410,10 @@ export class OutboundIntentQueue {
   constructor(
     private readonly runtimeState: RuntimeState,
     private readonly stage: OutboundIntentStage,
-    private readonly records: () => StoredUserRecord[],
   ) {}
 
   add(targetKey: string, event: Rumor): Promise<string> {
-    return this.runtimeState.addIntent(this.records, this.stage, targetKey, event)
+    return this.runtimeState.addIntent(this.stage, targetKey, event)
   }
 
   getForTarget(targetKey: string): Promise<OutboundIntent[]> {
@@ -421,17 +433,40 @@ export class OutboundIntentQueue {
 
   removeForTarget(targetKey: string): Promise<void> {
     return this.runtimeState.removeIntentsForTarget(
-      this.records,
       this.stage,
       targetKey,
     )
   }
 
-  removeByTargetAndEventId(targetKey: string, eventId: string): Promise<void> {
-    return this.remove(`${eventId}/${targetKey}`)
-  }
-
   remove(id: string): Promise<void> {
-    return this.runtimeState.removeIntent(this.records, this.stage, id)
+    return this.runtimeState.removeIntent(this.stage, id)
   }
+}
+
+function prepareOutbound(
+  current: OutboundEntry[],
+  publishes: PreparedPublishInput[],
+): OutboundEntry[] {
+  const intentIds = new Set(
+    publishes.flatMap(({ intentId }) => intentId ? [intentId] : [])
+  )
+  const existingPreparedIds = new Set(
+    current.flatMap((entry) => entry.type === "prepared" ? [entry.id] : [])
+  )
+  const next = current.filter(
+    (entry) => !(entry.type === "intent" && intentIds.has(entry.id))
+  )
+  for (const publish of publishes) {
+    if (existingPreparedIds.has(publish.event.id)) continue
+    next.push({
+      type: "prepared",
+      id: publish.event.id,
+      event: publish.event,
+      innerEventId: publish.innerEventId,
+      createdAt: Date.now(),
+      attempts: 0,
+    })
+    existingPreparedIds.add(publish.event.id)
+  }
+  return next
 }

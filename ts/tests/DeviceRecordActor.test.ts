@@ -1,12 +1,17 @@
 import { describe, expect, it, vi } from "vitest"
-import { finalizeEvent, generateSecretKey, getPublicKey, type UnsignedEvent, type VerifiedEvent } from "nostr-tools"
+import { finalizeEvent, generateSecretKey, getPublicKey, type VerifiedEvent } from "nostr-tools"
 import { Invite } from "../src/Invite"
 import { Session } from "../src/Session"
 import { buildTextRumor, buildTypingRumor } from "../src/messageBuilders"
 import { InMemoryStorageAdapter } from "../src/StorageAdapter"
+import type { PreparedTransitionContext } from "../src/RuntimeState"
 import { DeviceRecordActor } from "../src/session-manager/DeviceRecordActor"
 import { createSessionFromAccept, decryptInviteResponse } from "../src/inviteUtils"
-import type { NostrFacade, DeviceRecordUserHooks } from "../src/session-manager/types"
+import type {
+  NostrFacade,
+  DeviceRecordUserHooks,
+  OutboundMutation,
+} from "../src/session-manager/types"
 import type { NostrSubscribe, Rumor, SessionState } from "../src/types"
 import { MockRelay } from "./helpers/mockRelay"
 
@@ -31,14 +36,67 @@ class MessageQueue {
       .filter((entry) => entry.targetKey === targetKey)
   }
 
-  async removeByTargetAndEventId(targetKey: string, eventId: string) {
-    this.entriesById.delete(`${eventId}/${targetKey}`)
+  async remove(id: string) {
+    this.entriesById.delete(id)
+  }
+
+  has(id: string): boolean {
+    return this.entriesById.has(id)
   }
 
   async removeForTarget(targetKey: string) {
     for (const entry of this.entriesById.values()) {
       if (entry.targetKey === targetKey) this.entriesById.delete(entry.id)
     }
+  }
+}
+
+const immediateCommit = (
+  queue: MessageQueue,
+  publish: (event: VerifiedEvent, innerEventId?: string) => Promise<unknown> = async () => {},
+) => async <T>(
+  mutate: (context: PreparedTransitionContext) => OutboundMutation<T>,
+  checkpoint: () => () => void,
+): Promise<T> => {
+  const rollback = checkpoint()
+  try {
+    const transition = mutate({ hasIntent: (id) => queue.has(id) })
+    for (const prepared of transition.publishes) {
+      await publish(prepared.event, prepared.innerEventId)
+      if (prepared.intentId) await queue.remove(prepared.intentId)
+    }
+    return transition.result
+  } catch (error) {
+    rollback()
+    throw error
+  }
+}
+
+const serializedCommit = (
+  queue: MessageQueue,
+  prepared: VerifiedEvent[],
+) => {
+  let tail: Promise<void> = Promise.resolve()
+  return async <T>(
+    mutate: (context: PreparedTransitionContext) => OutboundMutation<T>,
+    checkpoint: () => () => void,
+  ): Promise<T> => {
+    const operation = tail.then(async () => {
+      const rollback = checkpoint()
+      try {
+        const transition = mutate({ hasIntent: (id) => queue.has(id) })
+        for (const publish of transition.publishes) {
+          prepared.push(publish.event)
+          if (publish.intentId) await queue.remove(publish.intentId)
+        }
+        return transition.result
+      } catch (error) {
+        rollback()
+        throw error
+      }
+    })
+    tail = operation.then(() => {}, () => {})
+    return operation
   }
 }
 
@@ -156,7 +214,6 @@ describe("DeviceRecordActor", () => {
 
     const nostr: NostrFacade = {
       subscribe: () => () => {},
-      publish: vi.fn(async () => undefined as never),
     }
 
     const actor = new DeviceRecordActor("device-a", {
@@ -167,6 +224,7 @@ describe("DeviceRecordActor", () => {
       ourDeviceId: "our-device",
       ourOwnerPubkey: "our-owner",
       identityKey: generateSecretKey(),
+      commitOutbound: immediateCommit(messageQueue),
     })
 
     const bidirectional = makeSession("bidirectional", {
@@ -184,6 +242,83 @@ describe("DeviceRecordActor", () => {
 
     expect(actor.activeSession).toBe(bidirectional)
     expect(actor.inactiveSessions).toContain(sendOnly)
+  })
+
+  it("keeps a preceding serialized session transition when invite persistence fails", async () => {
+    const inviterSecretKey = generateSecretKey()
+    const inviterPublicKey = getPublicKey(inviterSecretKey)
+    const ourSecretKey = generateSecretKey()
+    const ourPublicKey = getPublicKey(ourSecretKey)
+    const messageQueue = new MessageQueue()
+    const preceding = makeSession("preceding-transition", {
+      canSend: true,
+      canReceive: true,
+    })
+    let actor!: DeviceRecordActor
+    const commitOutbound = async <T>(
+      mutate: (context: PreparedTransitionContext) => OutboundMutation<T>,
+      checkpoint: () => () => void,
+    ): Promise<T> => {
+      actor.installSession(preceding, false, { persist: false })
+      const rollback = checkpoint()
+      mutate({ hasIntent: () => false })
+      rollback()
+      throw new Error("injected prepared snapshot failure")
+    }
+    actor = new DeviceRecordActor(inviterPublicKey, {
+      ownerPubkey: inviterPublicKey,
+      user: {
+        isDeviceAuthorized: vi.fn(() => true),
+        onDeviceRumor: vi.fn(),
+        onDeviceDirty: vi.fn(),
+      },
+      nostr: { subscribe: () => () => {} },
+      messageQueue,
+      ourDeviceId: ourPublicKey,
+      ourOwnerPubkey: ourPublicKey,
+      identityKey: ourSecretKey,
+      commitOutbound,
+    })
+
+    await expect(
+      actor.acceptInvite(Invite.createNew(inviterPublicKey, inviterPublicKey, 1))
+    ).rejects.toThrow("injected prepared snapshot failure")
+
+    expect(actor.activeSession).toBe(preceding)
+    expect(actor.state).toBe("session-ready")
+  })
+
+  it("claims one queued intent once across concurrent device flushes", async () => {
+    const deviceId = getPublicKey(generateSecretKey())
+    const ourDeviceId = getPublicKey(generateSecretKey())
+    const messageQueue = new MessageQueue()
+    const prepared: VerifiedEvent[] = []
+    const actor = new DeviceRecordActor(deviceId, {
+      ownerPubkey: deviceId,
+      user: {
+        isDeviceAuthorized: vi.fn(() => true),
+        onDeviceRumor: vi.fn(),
+        onDeviceDirty: vi.fn(),
+      },
+      nostr: { subscribe: () => () => {} },
+      messageQueue,
+      ourDeviceId,
+      ourOwnerPubkey: ourDeviceId,
+      identityKey: generateSecretKey(),
+      commitOutbound: serializedCommit(messageQueue, prepared),
+    })
+    actor.installSession(makeSession("sendable", {
+      canSend: true,
+      canReceive: true,
+    }), false, { persist: false })
+    await messageQueue.add(deviceId, buildTextRumor("send once"))
+    const prepare = vi.spyOn(actor, "prepareOutboundEvent")
+
+    await Promise.all([actor.flushMessageQueue(), actor.flushMessageQueue()])
+
+    expect(prepare).toHaveBeenCalledTimes(1)
+    expect(prepared).toHaveLength(1)
+    await expect(messageQueue.getForTarget(deviceId)).resolves.toEqual([])
   })
 
   it("flushes queued messages after the first inbound event makes a passive session sendable", async () => {
@@ -232,12 +367,10 @@ describe("DeviceRecordActor", () => {
       onDeviceDirty: vi.fn(),
     }
 
-    const nostr: NostrFacade = {
-      subscribe,
-      publish: vi.fn(async (event: UnsignedEvent | VerifiedEvent) => {
-        activeSession.receiveEvent(event as VerifiedEvent)
-      }),
-    }
+    const publish = vi.fn(async (event: VerifiedEvent) => {
+      activeSession.receiveEvent(event)
+    })
+    const nostr: NostrFacade = { subscribe }
 
     const actor = new DeviceRecordActor(passiveSidePublicKey, {
       ownerPubkey: passiveSidePublicKey,
@@ -247,6 +380,7 @@ describe("DeviceRecordActor", () => {
       ourDeviceId: activeSidePublicKey,
       ourOwnerPubkey: activeSidePublicKey,
       identityKey: activeSideSecretKey,
+      commitOutbound: immediateCommit(messageQueue, publish),
     })
 
     actor.installSession(passiveSession)
@@ -278,7 +412,7 @@ describe("DeviceRecordActor", () => {
 
     const after = await messageQueue.getForTarget(passiveSidePublicKey)
     expect(after).toHaveLength(0)
-    expect(nostr.publish).toHaveBeenCalled()
+    expect(publish).toHaveBeenCalled()
   })
 
   it("flushes queued messages with a send-capable inactive session when active cannot send", async () => {
@@ -295,10 +429,8 @@ describe("DeviceRecordActor", () => {
       onDeviceDirty: vi.fn(),
     }
 
-    const nostr: NostrFacade = {
-      subscribe: () => () => {},
-      publish: vi.fn(async () => undefined as never),
-    }
+    const publish = vi.fn(async () => undefined)
+    const nostr: NostrFacade = { subscribe: () => () => {} }
 
     const actor = new DeviceRecordActor(deviceKey, {
       ownerPubkey: "owner-a",
@@ -308,6 +440,7 @@ describe("DeviceRecordActor", () => {
       ourDeviceId: ourDeviceKey,
       ourOwnerPubkey: "our-owner",
       identityKey: generateSecretKey(),
+      commitOutbound: immediateCommit(messageQueue, publish),
     })
 
     const receiveOnly = makeSession("receive-only-active", {
@@ -336,7 +469,7 @@ describe("DeviceRecordActor", () => {
 
     await actor.flushMessageQueue()
 
-    expect(nostr.publish).toHaveBeenCalledTimes(1)
+    expect(publish).toHaveBeenCalledTimes(1)
     expect(actor.activeSession).toBe(sendCapable)
     expect(actor.inactiveSessions).toContain(receiveOnly)
     await expect(messageQueue.getForTarget(deviceKey)).resolves.toHaveLength(0)
@@ -356,14 +489,12 @@ describe("DeviceRecordActor", () => {
         onDeviceRumor: vi.fn(),
         onDeviceDirty: vi.fn(),
       },
-      nostr: {
-        subscribe: () => () => {},
-        publish: vi.fn(async () => undefined as never),
-      },
+      nostr: { subscribe: () => () => {} },
       messageQueue,
       ourDeviceId: ourDeviceKey,
       ourOwnerPubkey: "our-owner",
       identityKey: generateSecretKey(),
+      commitOutbound: immediateCommit(messageQueue),
     })
 
     const active = makeSession("active", {
@@ -405,14 +536,12 @@ describe("DeviceRecordActor", () => {
         onDeviceRumor: vi.fn(),
         onDeviceDirty: vi.fn(),
       },
-      nostr: {
-        subscribe: () => () => {},
-        publish: vi.fn(async () => undefined as never),
-      },
+      nostr: { subscribe: () => () => {} },
       messageQueue,
       ourDeviceId: ourDeviceKey,
       ourOwnerPubkey: "our-owner",
       identityKey: generateSecretKey(),
+      commitOutbound: immediateCommit(messageQueue),
     })
 
     const oldEpoch = makeSession("old-epoch", {
@@ -495,12 +624,7 @@ describe("DeviceRecordActor", () => {
       onDeviceDirty: vi.fn(),
     }
 
-    const nostr: NostrFacade = {
-      subscribe,
-      publish: vi.fn(async (event: UnsignedEvent | VerifiedEvent) => {
-        relay.storeAndDeliver(event as VerifiedEvent)
-      }),
-    }
+    const nostr: NostrFacade = { subscribe }
 
     const actor = new DeviceRecordActor(devicePublicKey, {
       ownerPubkey: getPublicKey(generateSecretKey()),
@@ -510,6 +634,7 @@ describe("DeviceRecordActor", () => {
       ourDeviceId: senderPublicKey,
       ourOwnerPubkey: getPublicKey(generateSecretKey()),
       identityKey: senderSecretKey,
+      commitOutbound: immediateCommit(messageQueue),
     })
 
     actor.installSession(establishedActiveSession)
@@ -587,10 +712,7 @@ describe("DeviceRecordActor", () => {
       onDeviceDirty: vi.fn(),
     }
 
-    const nostr: NostrFacade = {
-      subscribe,
-      publish: vi.fn(async () => undefined as never),
-    }
+    const nostr: NostrFacade = { subscribe }
 
     const actor = new DeviceRecordActor(passiveSidePublicKey, {
       ownerPubkey: passiveSidePublicKey,
@@ -600,6 +722,7 @@ describe("DeviceRecordActor", () => {
       ourDeviceId: activeSidePublicKey,
       ourOwnerPubkey: activeSidePublicKey,
       identityKey: activeSideSecretKey,
+      commitOutbound: immediateCommit(messageQueue),
     })
 
     actor.installSession(passiveSession)

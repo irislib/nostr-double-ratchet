@@ -164,7 +164,8 @@ export class DeviceRecordActor implements DeviceRecordShape {
   }
 
   private async doAcceptInvite(invite: Invite): Promise<Session> {
-    const checkpoint = this.checkpoint()
+    const setupState = this.state
+    let responseCommitted = false
     this.state = "accepting-invite"
 
     try {
@@ -176,36 +177,45 @@ export class DeviceRecordActor implements DeviceRecordShape {
         encryptor,
         this.deps.ourOwnerPubkey
       )
-      await this.deps.nostr.ready?.()
-      this.installSession(session, false, {
-        persist: false,
-        preferActive: true,
-      })
-      await this.deps.nostr.publish(event)
-      this.deps.user.onDeviceDirty()
+      await this.deps.commitOutbound(
+        () => {
+          this.installSession(session, false, {
+            persist: false,
+            preferActive: true,
+          })
+          return { result: undefined, publishes: [{ event }] }
+        },
+        () => this.captureRollback(),
+      )
+      responseCommitted = true
       await this.publishInviteBootstrap(session)
       this.state = "session-ready"
       await this.flushMessageQueue()
       return session
     } catch (error) {
-      this.restore(checkpoint)
+      if (!responseCommitted && this.state === "accepting-invite") {
+        this.state = setupState
+      }
       throw error
     }
   }
 
   private async publishInviteBootstrap(session: Session): Promise<void> {
-    await this.deps.nostr.ready?.()
-    const checkpoint = this.checkpoint()
     try {
-      const { event } = session.sendEvent(
-        buildTypingRumor({
-          expiration: { expiresAt: Math.floor(Date.now() / 1000) },
-        }),
-        [["p", this.deviceId]],
+      await this.deps.commitOutbound(
+        () => {
+          const { event } = session.sendEvent(
+            buildTypingRumor({
+              expiration: { expiresAt: Math.floor(Date.now() / 1000) },
+            }),
+            [["p", this.deviceId]],
+          )
+          return { result: undefined, publishes: [{ event }] }
+        },
+        () => this.captureRollback(),
       )
-      await this.deps.nostr.publish(event)
     } catch {
-      this.restore(checkpoint)
+      // The invite response remains committed even if bootstrap persistence fails.
     }
   }
 
@@ -267,6 +277,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
       this.activeSession,
       this.inactiveSessions,
     )) {
+      const state = deepCopyState(candidate.session.state)
       try {
         const { event } = candidate.session.sendEvent(rumor, [["p", this.deviceId]])
         if (!candidate.active) {
@@ -274,6 +285,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
         }
         return event
       } catch {
+        candidate.session.state = state
         // Try the next send-capable session.
       }
     }
@@ -393,24 +405,31 @@ export class DeviceRecordActor implements DeviceRecordShape {
     }
 
     for (const entry of entries) {
-      await this.deps.nostr.ready?.()
-      const checkpoint = this.checkpoint()
-      const event = this.prepareOutboundEvent(entry.event)
-      if (!event) {
-        continue
-      }
       try {
-        await this.deps.nostr.publish(event, entry.event.id, entry.id)
-        await this.deps.messageQueue.removeByTargetAndEventId(
-          this.deviceId,
-          entry.event.id,
+        await this.deps.commitOutbound(
+          ({ hasIntent }) => {
+            if (!hasIntent(entry.id)) {
+              return { result: false, publishes: [] }
+            }
+            const event = this.prepareOutboundEvent(entry.event)
+            return {
+              result: event !== undefined,
+              publishes: event
+                ? [{ event, innerEventId: entry.event.id, intentId: entry.id }]
+                : [],
+            }
+          },
+          () => this.captureRollback(),
         )
       } catch {
-        this.restore(checkpoint)
+        // Keep the durable intent for a later retry.
       }
     }
+  }
 
-    this.deps.user.onDeviceDirty()
+  private captureRollback(): () => void {
+    const checkpoint = this.checkpoint()
+    return () => this.restore(checkpoint)
   }
 
   private checkpoint() {

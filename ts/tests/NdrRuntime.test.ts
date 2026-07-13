@@ -253,11 +253,13 @@ describe("NdrRuntime", () => {
         feedEvent: (event: VerifiedEvent) => boolean
         getAllMessagePushAuthorPubkeys: () => string[]
         pendingPublishes: () => []
+        drainPendingPublishes: () => Promise<void>
       }
     }).sessionManager = {
       feedEvent,
       getAllMessagePushAuthorPubkeys: () => [],
       pendingPublishes: () => [],
+      drainPendingPublishes: async () => {},
     }
 
     runtime.startAppKeysSubscription(ownerPubkey)
@@ -336,6 +338,7 @@ describe("NdrRuntime", () => {
         setupUser: (pubkey: string) => Promise<void>
         getAllMessagePushAuthorPubkeys: () => string[]
         pendingPublishes: () => []
+        drainPendingPublishes: () => Promise<void>
       }
     }).state.ownerPubkey = ownerPubkey
     ;(runtime as unknown as {
@@ -350,6 +353,7 @@ describe("NdrRuntime", () => {
       setupUser,
       getAllMessagePushAuthorPubkeys: () => [],
       pendingPublishes: () => [],
+      drainPendingPublishes: async () => {},
     }
     await runtime.publishPreparedRegistration({
       appKeys: new AppKeys([
@@ -1070,11 +1074,13 @@ describe("NdrRuntime", () => {
           getAllMessagePushAuthorPubkeys: () => string[]
           feedEvent: () => boolean
           pendingPublishes: () => []
+          drainPendingPublishes: () => Promise<void>
         }
       }).sessionManager = {
         getAllMessagePushAuthorPubkeys: () => authors,
         feedEvent: () => true,
         pendingPublishes: () => [],
+        drainPendingPublishes: async () => {},
       }
       const event = {
         id: "event",

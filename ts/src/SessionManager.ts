@@ -21,6 +21,8 @@ import {
   RuntimeState,
   serializeUserRecords,
   type PreparedPublish,
+  type PreparedPublishInput,
+  type PreparedTransitionContext,
 } from "./RuntimeState"
 import { AppKeys, isAppKeysEvent } from "./AppKeys"
 import { Invite } from "./Invite"
@@ -61,6 +63,7 @@ import {
 } from "./session-manager/sessionSelection"
 import { UserRecordActor } from "./session-manager/UserRecordActor"
 import { hydrateUserRecord } from "./session-manager/userRecordHydration"
+import { deepCopyState } from "./utils"
 import type {
   AcceptInviteOptions,
   AcceptInviteResult,
@@ -71,6 +74,7 @@ import type {
   OnEventMeta,
   SessionManagerEvent,
   SessionManagerEventCallback,
+  OutboundMutation,
   UserRecord,
 } from "./session-manager/types"
 
@@ -151,8 +155,7 @@ export class SessionManager {
   private messagePushAuthorCallbacks: Set<() => void> = new Set()
   private runtimeEventCallbacks: Set<SessionManagerEventCallback> = new Set()
   private preparedPublishCallbacks: Set<() => void> = new Set()
-  private outboundTransitionTail: Promise<void> = Promise.resolve()
-  private legacyPublishTimeouts = new Set<ReturnType<typeof setTimeout>>()
+  private preparedPublishDrainPromise: Promise<void> | null = null
 
   // Initialization flag
   private initialized: boolean = false
@@ -177,15 +180,11 @@ export class SessionManager {
     this.inviteKeys = inviteKeys
     this.storage = storage || new InMemoryStorageAdapter()
     this.runtimeState = new RuntimeState(this.storage)
-    const records = () => serializeUserRecords(this.userRecords)
-    this.messageQueue = new OutboundIntentQueue(this.runtimeState, "device", records)
-    this.discoveryQueue = new OutboundIntentQueue(this.runtimeState, "discovery", records)
+    this.messageQueue = new OutboundIntentQueue(this.runtimeState, "device")
+    this.discoveryQueue = new OutboundIntentQueue(this.runtimeState, "discovery")
     this.expirationSettings = new ExpirationSettings(this.storage, "v1")
     this.nostrFacade = {
-      ready: () => this.runtimeState.barrier(),
       subscribe: (subid, filter, onEvent) => this.emitSubscribe(subid, filter, onEvent),
-      publish: (event, innerEventId, intentId) =>
-        this.emitPublish(event, innerEventId, intentId),
     }
   }
 
@@ -233,15 +232,11 @@ export class SessionManager {
   }
 
   acknowledgePublish(id: string): Promise<void> {
-    return this.runtimeState.acknowledgePublish(
-      () => serializeUserRecords(this.userRecords),
-      id,
-    )
+    return this.runtimeState.acknowledgePublish(id)
   }
 
   publishFailed(id: string, error: unknown): Promise<void> {
     return this.runtimeState.publishFailed(
-      () => serializeUserRecords(this.userRecords),
       id,
       error instanceof Error ? error.message : String(error),
     )
@@ -299,50 +294,66 @@ export class SessionManager {
     }
   }
 
-  private emitPublish(
-    event: Parameters<NostrFacade["publish"]>[0],
-    innerEventId?: string,
-    intentId?: string,
-  ): Promise<void> {
-    return this.preparePublishes([{ event, innerEventId, intentId }])
-  }
-
-  private async preparePublishes(
-    publishes: Array<{
-      event: VerifiedEvent
-      innerEventId?: string
-      intentId?: string
-    }>,
-    awaitLegacyPublish = true,
-  ): Promise<void> {
-    await this.runtimeState.preparePublishes(
-      () => serializeUserRecords(this.userRecords),
-      publishes,
+  private async commitOutbound<T>(
+    mutate: (context: PreparedTransitionContext) => OutboundMutation<T>,
+    checkpoint: () => () => void,
+  ): Promise<T> {
+    const result = await this.runtimeState.commitPreparedTransition(
+      (context) => {
+        const transition = mutate(context)
+        return {
+          result: transition.result,
+          userRecords: serializeUserRecords(this.userRecords),
+          publishes: transition.publishes,
+        }
+      },
+      checkpoint,
     )
-    for (const callback of this.preparedPublishCallbacks) callback()
-
-    if (!this.legacyNostrPublish) return
-    if (!awaitLegacyPublish) {
-      const timeout = setTimeout(() => {
-        this.legacyPublishTimeouts.delete(timeout)
-        void Promise.allSettled(
-          publishes.map((publish) => this.publishLegacy(publish))
-        )
-      }, 0)
-      this.legacyPublishTimeouts.add(timeout)
-      return
+    this.notifyPreparedPublishes()
+    if (this.legacyNostrPublish) {
+      void this.drainPendingPublishes(this.legacyNostrPublish)
     }
-    for (const publish of publishes) await this.publishLegacy(publish)
+    return result
   }
 
-  private async publishLegacy(publish: { event: VerifiedEvent }): Promise<void> {
-    try {
-      await this.legacyNostrPublish!(publish.event)
-      await this.acknowledgePublish(publish.event.id)
-    } catch (error) {
-      await this.publishFailed(publish.event.id, error).catch(() => {})
-      throw error
+  private notifyPreparedPublishes(): void {
+    if (this.pendingPublishes().length === 0) return
+    for (const callback of this.preparedPublishCallbacks) {
+      try {
+        callback()
+      } catch {
+        // Durable ownership has already transferred to the outbox.
+      }
     }
+  }
+
+  async drainPendingPublishes(publish: NostrPublish): Promise<void> {
+    if (this.preparedPublishDrainPromise) {
+      return this.preparedPublishDrainPromise
+    }
+
+    this.preparedPublishDrainPromise = (async () => {
+      const attempted = new Set<string>()
+      while (true) {
+        const prepared = this.pendingPublishes()
+          .filter((entry) => !attempted.has(entry.id))
+        if (prepared.length === 0) return
+
+        for (const entry of prepared) {
+          attempted.add(entry.id)
+          try {
+            await publish(entry.event, entry.innerEventId)
+            await this.acknowledgePublish(entry.id)
+          } catch (error) {
+            await this.publishFailed(entry.id, error).catch(() => {})
+          }
+        }
+      }
+    })().finally(() => {
+      this.preparedPublishDrainPromise = null
+    })
+
+    return this.preparedPublishDrainPromise
   }
 
   async init() {
@@ -370,11 +381,9 @@ export class SessionManager {
 
     const pendingPublishes = this.pendingPublishes()
     if (pendingPublishes.length > 0) {
-      for (const callback of this.preparedPublishCallbacks) callback()
+      this.notifyPreparedPublishes()
       if (this.legacyNostrPublish) {
-        await Promise.allSettled(
-          pendingPublishes.map((publish) => this.publishLegacy(publish))
-        )
+        void this.drainPendingPublishes(this.legacyNostrPublish)
       }
     }
   }
@@ -395,11 +404,14 @@ export class SessionManager {
     )
   }
 
-  private fetchAppKeys(pubkey: string, timeoutMs = 2000): Promise<AppKeys | null> {
+  private fetchAppKeysSnapshot(
+    pubkey: string,
+    timeoutMs = 2000,
+  ): Promise<{ appKeys: AppKeys; createdAt: number } | null> {
     if (!this.legacyNostrSubscribe) {
       return Promise.resolve(null)
     }
-    return AppKeys.waitFor(pubkey, this.legacyNostrSubscribe, timeoutMs)
+    return AppKeys.waitForSnapshot(pubkey, this.legacyNostrSubscribe, timeoutMs)
   }
 
   // -------------------
@@ -423,6 +435,8 @@ export class SessionManager {
             this.storeUserRecord(ownerPubkey).catch(() => {})
             this.notifyMessagePushAuthorsChanged()
           },
+          commitOutbound: (mutate, checkpoint) =>
+            this.commitOutbound(mutate, checkpoint),
         },
         nostr: this.nostrFacade,
         messageQueue: this.messageQueue,
@@ -659,9 +673,11 @@ export class SessionManager {
     const userRecord = this.getOrCreateUserRecord(userPubkey)
     await userRecord.ensureSetup().catch(() => {})
 
-    const latestAppKeys = await this.fetchAppKeys(userPubkey, 50).catch(() => null)
+    const latestAppKeys = await this.fetchAppKeysSnapshot(userPubkey, 50).catch(() => null)
     if (latestAppKeys) {
-      await userRecord.onAppKeys(latestAppKeys).catch(() => {})
+      await userRecord
+        .applyAppKeysSnapshot(latestAppKeys.appKeys, latestAppKeys.createdAt)
+        .catch(() => {})
       return
     }
 
@@ -918,9 +934,6 @@ export class SessionManager {
   }
 
   close() {
-    for (const timeout of this.legacyPublishTimeouts) clearTimeout(timeout)
-    this.legacyPublishTimeouts.clear()
-
     for (const userRecord of this.userRecords.values()) {
       userRecord.close()
     }
@@ -974,7 +987,7 @@ export class SessionManager {
     }
 
     await this.runtimeState.deleteUser(
-      () => serializeUserRecords(this.userRecords),
+      serializeUserRecords(this.userRecords),
       ownerPubkey,
     )
   }
@@ -1012,9 +1025,20 @@ export class SessionManager {
     }
 
     try {
-      await this.emitPublish(planInviteBootstrapEvent(session, deviceId))
+      await this.commitOutbound(
+        () => ({
+          result: undefined,
+          publishes: [{ event: planInviteBootstrapEvent(session, deviceId) }],
+        }),
+        () => {
+          const before = deepCopyState(session.state)
+          return () => {
+            session.state = before
+          }
+        },
+      )
     } catch {
-      // Ignore bootstrap send failures; the next valid inbound event will retry queue flush.
+      // The established session remains usable if bootstrap persistence fails.
     }
   }
 
@@ -1023,11 +1047,22 @@ export class SessionManager {
     recipientDevicePubkey: string,
   ): Promise<void> {
     try {
-      await this.emitPublish(
-        planInviteBootstrapEvent(session, recipientDevicePubkey)
+      await this.commitOutbound(
+        () => ({
+          result: undefined,
+          publishes: [{
+            event: planInviteBootstrapEvent(session, recipientDevicePubkey),
+          }],
+        }),
+        () => {
+          const before = deepCopyState(session.state)
+          return () => {
+            session.state = before
+          }
+        },
       )
     } catch {
-      // The session is still established even if the bootstrap publish fails.
+      // The session is still established even if bootstrap persistence fails.
     }
   }
 
@@ -1097,16 +1132,21 @@ export class SessionManager {
 
     let ownerPublicKey = claimedOwnerPublicKey
     let preloadedAppKeys: AppKeys | null = null
+    let preloadedAppKeysCreatedAt = 0
     let shouldApplyPreloadedRoster = false
 
     // When an invite claims delegate ownership, verify against AppKeys when available.
     // If claim verification fails for chat invites, fall back to device-identity routing.
     // For owner-side link flow, allow pre-registration acceptance and register via AppKeys afterward.
     if (claimedOwnerPublicKey !== deviceId) {
-      const persistedAppKeys =
-        this.userRecords.get(claimedOwnerPublicKey)?.appKeys ||
-        (await this.fetchAppKeys(claimedOwnerPublicKey, 50).catch(() => null)) ||
-        undefined
+      const persistedRecord = this.userRecords.get(claimedOwnerPublicKey)
+      const fetchedSnapshot = persistedRecord?.appKeys
+        ? null
+        : await this.fetchAppKeysSnapshot(claimedOwnerPublicKey, 50).catch(() => null)
+      const persistedAppKeys = persistedRecord?.appKeys || fetchedSnapshot?.appKeys
+      const persistedAppKeysCreatedAt = persistedRecord?.appKeys
+        ? persistedRecord.appKeysCreatedAt()
+        : fetchedSnapshot?.createdAt ?? 0
       if (options.ownerPublicKey && !persistedAppKeys) {
         ownerPublicKey = claimedOwnerPublicKey
       } else {
@@ -1119,6 +1159,7 @@ export class SessionManager {
         })
         if (!routing.fellBackToDeviceIdentity && persistedAppKeys) {
           preloadedAppKeys = persistedAppKeys
+          preloadedAppKeysCreatedAt = persistedAppKeysCreatedAt
           shouldApplyPreloadedRoster = routing.verifiedWithAppKeys
           this.updateDelegateMapping(claimedOwnerPublicKey, persistedAppKeys)
         }
@@ -1131,7 +1172,7 @@ export class SessionManager {
 
     const userRecord = this.getOrCreateUserRecord(ownerPublicKey)
     if (preloadedAppKeys && ownerPublicKey === claimedOwnerPublicKey) {
-      userRecord.setAppKeys(preloadedAppKeys)
+      userRecord.setAppKeys(preloadedAppKeys, preloadedAppKeysCreatedAt)
     }
     const applyPreloadedRoster = async () => {
       if (
@@ -1139,7 +1180,9 @@ export class SessionManager {
         shouldApplyPreloadedRoster &&
         ownerPublicKey === claimedOwnerPublicKey
       ) {
-        await userRecord.onAppKeys(preloadedAppKeys).catch(() => {})
+        await userRecord
+          .onAppKeys(preloadedAppKeys, preloadedAppKeysCreatedAt)
+          .catch(() => {})
       }
     }
 
@@ -1190,21 +1233,27 @@ export class SessionManager {
       inviteeOwnerClaim
     )
 
-    const deviceRecord = this.upsertDeviceRecord(userRecord, deviceId)
-    this.delegateToOwner.set(deviceId, ownerPublicKey)
-    await this.runtimeState.barrier()
-    deviceRecord.installSession(session, false, {
-      persist: false,
-      preferActive: true,
-    })
-    await this.emitPublish(event)
+    await this.commitOutbound(
+      () => {
+        const deviceRecord = this.upsertDeviceRecord(userRecord, deviceId)
+        this.delegateToOwner.set(deviceId, ownerPublicKey)
+        deviceRecord.installSession(session, false, {
+          persist: false,
+          preferActive: true,
+        })
+        return { result: undefined, publishes: [{ event }] }
+      },
+      () => {
+        const recordsBefore = serializeUserRecords(this.userRecords)
+        return () => this.hydrateUserRecords(recordsBefore)
+      },
+    )
     this.notifyMessagePushAuthorsChanged()
     await this.sendInviteBootstrap(session, deviceId)
     if (invite.purpose === "link" && ownerPublicKey === this.ownerPublicKey) {
       await this.sendLinkBootstrap(ownerPublicKey, deviceId)
     }
     await this.flushMessageQueue(deviceId).catch(() => {})
-    await this.storeUserRecord(ownerPublicKey).catch(() => {})
     await applyPreloadedRoster()
 
     return { ownerPublicKey, deviceId, session }
@@ -1232,15 +1281,12 @@ export class SessionManager {
     recipientIdentityKey: string,
     event: Partial<Rumor>
   ): Promise<Rumor | undefined> {
-    return this.serializeOutboundTransition(() =>
-      this.sendEventTransition(recipientIdentityKey, event, false)
-    )
+    return this.sendEventTransition(recipientIdentityKey, event)
   }
 
   private async sendEventTransition(
     recipientIdentityKey: string,
     event: Partial<Rumor>,
-    deferLegacyPublish: boolean,
   ): Promise<Rumor | undefined> {
     await this.init()
 
@@ -1298,43 +1344,36 @@ export class SessionManager {
     }
     const devices = Array.from(deviceMap.values())
 
-    // Ratchet all sessions synchronously first, then persist state BEFORE network I/O.
-    //
-    // This is important for apps that "fire and forget" sendEvent() (e.g. UI click handlers):
-    // if the page reloads/crashes while publishes are still in-flight, we still want the
-    // updated session keys to be on disk so the next incoming message can be decrypted.
-    await this.runtimeState.barrier()
-    const recordsBefore = serializeUserRecords(this.userRecords)
-    const toPublish: VerifiedEvent[] = []
-    const sentDeviceIds: string[] = []
-    for (const device of devices) {
-      // Check if device is still authorized
-      const deviceOwner = this.resolveToOwner(device.deviceId)
-      if (deviceOwner !== device.deviceId && !this.isDeviceAuthorized(deviceOwner, device.deviceId)) {
-        continue
-      }
+    await this.commitOutbound(
+      ({ hasIntent }) => {
+        const publishes: PreparedPublishInput[] = []
+        for (const device of devices) {
+          const deviceOwner = this.resolveToOwner(device.deviceId)
+          if (
+            deviceOwner !== device.deviceId &&
+            !this.isDeviceAuthorized(deviceOwner, device.deviceId)
+          ) {
+            continue
+          }
 
-      const verifiedEvent = device.prepareOutboundEvent(completeEvent)
-      if (!verifiedEvent) {
-        continue
-      }
-      toPublish.push(verifiedEvent)
-      sentDeviceIds.push(device.deviceId)
-    }
+          const intentId = `${completeEvent.id}/${device.deviceId}`
+          if (!hasIntent(intentId)) continue
 
-    try {
-      await this.preparePublishes(
-        toPublish.map((prepared, index) => ({
-          event: prepared,
-          innerEventId: completeEvent.id,
-          intentId: `${completeEvent.id}/${sentDeviceIds[index]}`,
-        })),
-        !deferLegacyPublish,
-      )
-    } catch (error) {
-      this.hydrateUserRecords(recordsBefore)
-      throw error
-    }
+          const prepared = device.prepareOutboundEvent(completeEvent)
+          if (!prepared) continue
+          publishes.push({
+            event: prepared,
+            innerEventId: completeEvent.id,
+            intentId,
+          })
+        }
+        return { result: undefined, publishes }
+      },
+      () => {
+        const recordsBefore = serializeUserRecords(this.userRecords)
+        return () => this.hydrateUserRecords(recordsBefore)
+      },
+    )
 
     await Promise.allSettled(
       Array.from(queuedDeviceIds).map((deviceId) => this.flushMessageQueue(deviceId))
@@ -1342,12 +1381,6 @@ export class SessionManager {
 
     // Return the event with computed ID (same as library would compute)
     return completeEvent
-  }
-
-  private serializeOutboundTransition<T>(operation: () => Promise<T>): Promise<T> {
-    const next = this.outboundTransitionTail.then(operation, operation)
-    this.outboundTransitionTail = next.then(() => {}, () => {})
-    return next
   }
 
   async sendMessage(
@@ -1385,9 +1418,7 @@ export class SessionManager {
       ensureMsTag: false,
     })
 
-    await this.serializeOutboundTransition(() =>
-      this.sendEventTransition(recipientPublicKey, rumor, true)
-    )
+    await this.sendEventTransition(recipientPublicKey, rumor)
 
     return rumor
   }
@@ -1466,9 +1497,7 @@ export class SessionManager {
   }
 
   private storeUserRecord(_publicKey: string) {
-    return this.runtimeState.persistRecords(
-      () => serializeUserRecords(this.userRecords)
-    )
+    return this.runtimeState.persistRecords(serializeUserRecords(this.userRecords))
   }
 
   private hydrateUserRecords(records: ReturnType<typeof serializeUserRecords>): void {

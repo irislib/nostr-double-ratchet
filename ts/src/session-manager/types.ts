@@ -1,6 +1,10 @@
 import type { AppKeys } from "../AppKeys"
 import type { Filter, VerifiedEvent } from "nostr-tools"
-import type { OutboundIntentQueue } from "../RuntimeState"
+import type {
+  OutboundIntentQueue,
+  PreparedPublishInput,
+  PreparedTransitionContext,
+} from "../RuntimeState"
 import type { Session } from "../Session"
 import type {
   IdentityKey,
@@ -66,6 +70,7 @@ export interface StoredUserRecord {
   publicKey: string
   devices: StoredDeviceRecord[]
   appKeys?: string
+  appKeysCreatedAt?: number
 }
 
 export type UserSetupState =
@@ -106,17 +111,16 @@ export type SessionManagerEventCallback = (
 ) => void | Promise<void>
 
 export interface NostrFacade {
-  ready?(): Promise<void>
   subscribe(
     subid: string,
     filter: Filter,
     onEvent?: (event: VerifiedEvent) => void,
   ): Unsubscribe
-  publish(
-    event: VerifiedEvent,
-    innerEventId?: string,
-    intentId?: string,
-  ): Promise<void>
+}
+
+export interface OutboundMutation<T> {
+  result: T
+  publishes: PreparedPublishInput[]
 }
 
 export interface DeviceRecordUserHooks {
@@ -133,6 +137,10 @@ export interface DeviceRecordDeps {
   ourDeviceId: string
   ourOwnerPubkey: string
   identityKey: IdentityKey
+  commitOutbound<T>(
+    mutate: (context: PreparedTransitionContext) => OutboundMutation<T>,
+    checkpoint: () => () => void,
+  ): Promise<T>
   createdAt?: number
 }
 
@@ -146,6 +154,10 @@ export interface UserRecordManagerHooks {
     outerEvent?: VerifiedEvent,
   ): void
   persistUserRecord(ownerPubkey: string): void
+  commitOutbound<T>(
+    mutate: (context: PreparedTransitionContext) => OutboundMutation<T>,
+    checkpoint: () => () => void,
+  ): Promise<T>
 }
 
 export interface UserRecordDeps {

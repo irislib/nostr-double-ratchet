@@ -12,6 +12,8 @@ import { SessionManager } from "../src/SessionManager"
 import { MESSAGE_EVENT_KIND } from "../src/types"
 import { AppKeys } from "../src/AppKeys"
 import { serializeSessionState } from "../src/utils"
+import type { RuntimeSnapshotV2 } from "../src/RuntimeState"
+import type { UserRecordActor } from "../src/session-manager/UserRecordActor"
 
 class FailPreparedSnapshotStorage extends InMemoryStorageAdapter {
   failPreparedInnerId: string | null = null
@@ -98,15 +100,14 @@ describe("SessionManager", () => {
     )
 
     const chatMessage = "Hello Bob from Alice!"
-
-    await managerAlice.sendMessage(bobPubkey, chatMessage)
-
-    expect(publishAlice).toHaveBeenCalled()
     const bobReceivedMessage = await new Promise((resolve) => {
       managerBob.onEvent((event) => {
         if (event.content === chatMessage) resolve(true)
       })
+      void managerAlice.sendMessage(bobPubkey, chatMessage)
     })
+
+    expect(publishAlice).toHaveBeenCalled()
     expect(bobReceivedMessage).toBe(true)
   })
 
@@ -209,6 +210,70 @@ describe("SessionManager", () => {
     )
   })
 
+  it("keeps the committed ratchet and exact outbox entry when legacy publish rejects", async () => {
+    const relay = new MockRelay()
+    const storage = new InMemoryStorageAdapter()
+    const alice = await createMockSessionManager("alice", relay, undefined, storage)
+    const bob = await createMockSessionManager("bob", relay)
+
+    const bobEstablished = new Promise<void>((resolve) => {
+      bob.manager.onEvent((event) => {
+        if (event.content === "establish-offline-test") resolve()
+      })
+    })
+    await alice.manager.sendMessage(bob.publicKey, "establish-offline-test")
+    await bobEstablished
+    const aliceEstablished = new Promise<void>((resolve) => {
+      alice.manager.onEvent((event) => {
+        if (event.content === "answer-offline-test") resolve()
+      })
+    })
+    await bob.manager.sendMessage(alice.publicKey, "answer-offline-test")
+    await aliceEstablished
+    await vi.waitFor(() => expect(alice.manager.pendingPublishes()).toEqual([]))
+
+    const states = () =>
+      Array.from(alice.manager.getUserRecords().values())
+        .flatMap((record) => Array.from(record.devices.values()))
+        .flatMap((device) => [
+          ...(device.activeSession ? [device.activeSession] : []),
+          ...device.inactiveSessions,
+        ])
+        .map((session) => `${session.name}:${serializeSessionState(session.state)}`)
+        .sort()
+    const before = states()
+    const rejectPublish = vi.fn(async () => {
+      throw new Error("relay offline")
+    })
+    ;(alice.manager as unknown as { legacyNostrPublish: typeof rejectPublish })
+      .legacyNostrPublish = rejectPublish
+
+    await alice.manager.sendMessage(bob.publicKey, "committed while offline")
+    await vi.waitFor(() => {
+      expect(alice.manager.pendingPublishes()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ attempts: 1, lastError: "relay offline" }),
+        ]),
+      )
+    })
+
+    const after = states()
+    expect(after).not.toEqual(before)
+    const durable = await storage.get<RuntimeSnapshotV2>("v2/runtime-snapshot")
+    const durableStates = durable?.userRecords
+      .flatMap((record) => record.devices)
+      .flatMap((device) => [
+        ...(device.activeSession ? [device.activeSession] : []),
+        ...device.inactiveSessions,
+      ])
+      .map((session) => `${session.name}:${session.state}`)
+      .sort()
+    expect(durableStates).toEqual(after)
+    expect(durable?.outbound).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "prepared" })]),
+    )
+  })
+
   it("delegates outbound publishing to device records without requiring an active session", async () => {
     const ownerSecretKey = generateSecretKey()
     const ownerPublicKey = getPublicKey(ownerSecretKey)
@@ -267,7 +332,70 @@ describe("SessionManager", () => {
     await manager.sendEvent(peerPublicKey, rumor)
 
     expect(prepareOutboundEvent).toHaveBeenCalledWith(rumor)
-    expect(publish).toHaveBeenCalledWith(preparedEvent)
+    expect(publish).toHaveBeenCalledWith(preparedEvent, rumor.id)
+  })
+
+  it("claims one queued intent once when a device flush races aggregate send", async () => {
+    const ourSecretKey = generateSecretKey()
+    const ourPublicKey = getPublicKey(ourSecretKey)
+    const peerSecretKey = generateSecretKey()
+    const peerPublicKey = getPublicKey(peerSecretKey)
+    const manager = SessionManager.createForRuntime(
+      ourPublicKey,
+      ourSecretKey,
+      ourPublicKey,
+      ourPublicKey,
+      {
+        ephemeralKeypair: generateEphemeralKeypair(),
+        sharedSecret: generateSharedSecret(),
+      },
+      new InMemoryStorageAdapter(),
+    )
+    await manager.init()
+
+    const { session } = await Invite.createNew(peerPublicKey, peerPublicKey, 1)
+      .accept(ourPublicKey, ourSecretKey, ourPublicKey)
+    const userRecord = (manager as unknown as {
+      getOrCreateUserRecord(publicKey: string): UserRecordActor
+    }).getOrCreateUserRecord(peerPublicKey)
+    const device = userRecord.ensureDevice(peerPublicKey)
+    device.installSession(session, false, { persist: false })
+
+    const queue = (manager as unknown as {
+      messageQueue: {
+        add(targetKey: string, event: unknown): Promise<string>
+      }
+    }).messageQueue
+    const originalAdd = queue.add.bind(queue)
+    let markQueued!: () => void
+    let releaseAggregate!: () => void
+    const queued = new Promise<void>((resolve) => {
+      markQueued = resolve
+    })
+    const aggregateReleased = new Promise<void>((resolve) => {
+      releaseAggregate = resolve
+    })
+    queue.add = async (targetKey, event) => {
+      const id = await originalAdd(targetKey, event)
+      if (targetKey === peerPublicKey) {
+        markQueued()
+        await aggregateReleased
+      }
+      return id
+    }
+    const prepare = vi.spyOn(device, "prepareOutboundEvent")
+
+    const sending = manager.sendMessage(peerPublicKey, "one transition")
+    await queued
+    await device.flushMessageQueue()
+    releaseAggregate()
+    const rumor = await sending
+
+    expect(prepare).toHaveBeenCalledTimes(1)
+    expect(
+      manager.pendingPublishes().filter(({ innerEventId }) => innerEventId === rumor.id)
+    ).toHaveLength(1)
+    manager.close()
   })
 
   it("should bootstrap a linked device session to a single-device peer via that peer's public invite", async () => {
@@ -782,8 +910,10 @@ describe("SessionManager", () => {
       }
     )
 
-    const fetched = await (manager as any).fetchAppKeys(ownerPublicKey, 20)
-    const devicePubkeys = fetched?.getAllDevices().map((device: {identityPubkey: string}) => device.identityPubkey) ?? []
+    const fetched = await (manager as any).fetchAppKeysSnapshot(ownerPublicKey, 20)
+    const devicePubkeys = fetched?.appKeys
+      .getAllDevices()
+      .map((device: {identityPubkey: string}) => device.identityPubkey) ?? []
 
     expect(devicePubkeys).toContain(baseDevicePubkey)
     expect(devicePubkeys).toContain(linkedDevicePubkey)
@@ -824,12 +954,85 @@ describe("SessionManager", () => {
       }
     )
 
-    const fetched = await (manager as any).fetchAppKeys(ownerPublicKey, 20)
-    const devicePubkeys =
-      fetched?.getAllDevices().map((device: { identityPubkey: string }) => device.identityPubkey) ?? []
+    const fetched = await (manager as any).fetchAppKeysSnapshot(ownerPublicKey, 20)
+    const devicePubkeys = fetched?.appKeys
+      .getAllDevices()
+      .map((device: { identityPubkey: string }) => device.identityPubkey) ?? []
 
     expect(devicePubkeys).toContain(baseDevicePubkey)
     expect(devicePubkeys).toContain(linkedDevicePubkey)
+  })
+
+  it("rejects a stale relay AppKeys fetch after restoring its ordering timestamp", async () => {
+    const storage = new InMemoryStorageAdapter()
+    const localSecret = generateSecretKey()
+    const localPubkey = getPublicKey(localSecret)
+    const remoteOwnerSecret = generateSecretKey()
+    const remoteOwnerPubkey = getPublicKey(remoteOwnerSecret)
+    const currentDevice = getPublicKey(generateSecretKey())
+    const revokedDevice = getPublicKey(generateSecretKey())
+    const credentials = () => ({
+      ephemeralKeypair: generateEphemeralKeypair(),
+      sharedSecret: generateSharedSecret(),
+    })
+    const create = () => SessionManager.createForRuntime(
+      localPubkey,
+      localSecret,
+      localPubkey,
+      localPubkey,
+      credentials(),
+      storage,
+    )
+    const current = signedAppKeysEvent(
+      remoteOwnerSecret,
+      [currentDevice],
+      200,
+    )
+    const stale = signedAppKeysEvent(
+      remoteOwnerSecret,
+      [revokedDevice],
+      100,
+    )
+
+    const first = create()
+    await first.init()
+    expect(first.feedEvent(current)).toBe(true)
+    await vi.waitFor(async () => {
+      const snapshot = await storage.get<RuntimeSnapshotV2>("v2/runtime-snapshot")
+      expect(
+        snapshot?.userRecords.find(({ publicKey }) => publicKey === remoteOwnerPubkey)
+          ?.appKeysCreatedAt,
+      ).toBe(200)
+    })
+    first.close()
+
+    const staleSubscribe = (
+      filter: { authors?: string[] },
+      onEvent?: (event: VerifiedEvent) => void,
+    ) => {
+      if (filter.authors?.includes(remoteOwnerPubkey) && onEvent) {
+        queueMicrotask(() => onEvent(stale))
+      }
+      return () => {}
+    }
+    const restarted = new SessionManager(
+      localPubkey,
+      localSecret,
+      localPubkey,
+      staleSubscribe as never,
+      async (event) => event as never,
+      localPubkey,
+      credentials(),
+      storage,
+    )
+    await restarted.init()
+    await restarted.setupUser(remoteOwnerPubkey)
+    const devices = restarted.getUserRecords()
+      .get(remoteOwnerPubkey)
+      ?.appKeys?.getAllDevices()
+      .map(({ identityPubkey }) => identityPubkey)
+    expect(devices).toEqual([currentDevice])
+    restarted.close()
   })
 
   it("should deliver self-sent messages to other online devices", async () => {

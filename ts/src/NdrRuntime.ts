@@ -161,7 +161,6 @@ export class NdrRuntime {
   private messagePushAuthorCleanup: Unsubscribe | null = null;
   private sessionManagerRuntimeEventCleanup: Unsubscribe | null = null;
   private preparedPublishCleanup: Unsubscribe | null = null;
-  private preparedPublishFlushPromise: Promise<void> | null = null;
   private readonly sessionManagerEmittedSubscriptions = new Map<
     string,
     Unsubscribe
@@ -1121,32 +1120,7 @@ export class NdrRuntime {
   }
 
   private async flushPreparedPublishes(): Promise<void> {
-    if (this.preparedPublishFlushPromise) {
-      return this.preparedPublishFlushPromise;
-    }
-
-    this.preparedPublishFlushPromise = (async () => {
-      const attempted = new Set<string>();
-      while (true) {
-        const prepared = (this.sessionManager?.pendingPublishes?.() ?? [])
-          .filter((publish) => !attempted.has(publish.id));
-        if (prepared.length === 0) return;
-
-        for (const publish of prepared) {
-          attempted.add(publish.id);
-          try {
-            await this.nostrPublish(publish.event, publish.innerEventId);
-            await this.sessionManager?.acknowledgePublish(publish.id);
-          } catch (error) {
-            await this.sessionManager?.publishFailed(publish.id, error).catch(() => {});
-          }
-        }
-      }
-    })().finally(() => {
-      this.preparedPublishFlushPromise = null;
-    });
-
-    return this.preparedPublishFlushPromise;
+    await this.sessionManager?.drainPendingPublishes(this.nostrPublish);
   }
 
   private async handleSessionManagerEvent(

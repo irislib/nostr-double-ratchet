@@ -36,12 +36,47 @@ class FailableStorage extends InMemoryStorageAdapter {
   }
 }
 
+class BlockingPreparedStorage extends InMemoryStorageAdapter {
+  captured?: RuntimeSnapshotV2
+  private armed = false
+  private releasePut!: () => void
+  private markEntered!: () => void
+  readonly entered = new Promise<void>((resolve) => {
+    this.markEntered = resolve
+  })
+  private readonly released = new Promise<void>((resolve) => {
+    this.releasePut = resolve
+  })
+
+  arm(): void {
+    this.armed = true
+  }
+
+  release(): void {
+    this.releasePut()
+  }
+
+  override async put<T>(key: string, value: T): Promise<void> {
+    const snapshot = value as RuntimeSnapshotV2
+    if (
+      this.armed &&
+      key === "v2/runtime-snapshot" &&
+      snapshot.outbound.some((entry) => entry.type === "prepared")
+    ) {
+      this.armed = false
+      this.captured = snapshot
+      this.markEntered()
+      await this.released
+    }
+    await super.put(key, value)
+  }
+}
+
 describe("RuntimeState", () => {
   it("serializes concurrent intent transitions without losing entries", async () => {
     const state = new RuntimeState(new InMemoryStorageAdapter())
     await state.init()
-    const records = () => []
-    const queue = new OutboundIntentQueue(state, "device", records)
+    const queue = new OutboundIntentQueue(state, "device")
 
     await Promise.all(
       Array.from({ length: 20 }, (_, index) =>
@@ -56,15 +91,19 @@ describe("RuntimeState", () => {
     const storage = new InMemoryStorageAdapter()
     const state = new RuntimeState(storage)
     await state.init()
-    const records = () => []
-    const queue = new OutboundIntentQueue(state, "device", records)
+    const queue = new OutboundIntentQueue(state, "device")
     const inner = rumor("inner")
     const event = signed("ciphertext")
     const intentId = await queue.add("device", inner)
 
-    await state.preparePublishes(records, [
-      { event, innerEventId: inner.id, intentId },
-    ])
+    await state.commitPreparedTransition(
+      () => ({
+        result: undefined,
+        userRecords: [],
+        publishes: [{ event, innerEventId: inner.id, intentId }],
+      }),
+      () => () => {},
+    )
 
     expect(await queue.entries()).toEqual([])
     expect(state.preparedPublishes()).toEqual([
@@ -81,7 +120,7 @@ describe("RuntimeState", () => {
     storage.failNextPut = true
 
     await expect(
-      state.addIntent(() => [], "device", "device", rumor("inner"))
+      state.addIntent("device", "device", rumor("inner"))
     ).rejects.toThrow("injected snapshot failure")
     expect(state.intents()).toEqual([])
   })
@@ -91,18 +130,114 @@ describe("RuntimeState", () => {
     const first = new RuntimeState(storage)
     await first.init()
     const event = signed("exact")
-    await first.preparePublishes(() => [], [{ event, innerEventId: "inner" }])
-    await first.publishFailed(() => [], event.id, "offline")
+    await first.commitPreparedTransition(
+      () => ({
+        result: undefined,
+        userRecords: [],
+        publishes: [{ event, innerEventId: "inner" }],
+      }),
+      () => () => {},
+    )
+    await first.publishFailed(event.id, "offline")
 
     const restarted = new RuntimeState(storage)
     await restarted.init()
     expect(restarted.preparedPublishes()[0]?.event).toEqual(event)
     expect(restarted.preparedPublishes()[0]?.attempts).toBe(1)
 
-    await restarted.acknowledgePublish(() => [], event.id)
+    await restarted.acknowledgePublish(event.id)
     const afterAck = new RuntimeState(storage)
     await afterAck.init()
     expect(afterAck.preparedPublishes()).toEqual([])
+  })
+
+  it("serializes ratchet mutation before capturing each prepared snapshot", async () => {
+    const storage = new BlockingPreparedStorage()
+    const state = new RuntimeState(storage)
+    await state.init()
+    storage.arm()
+    let secondMutated = false
+    const firstEvent = signed("first")
+    const secondEvent = signed("second")
+
+    const first = state.commitPreparedTransition(
+      () => ({
+        result: undefined,
+        userRecords: [{ publicKey: "after-first", devices: [] }],
+        publishes: [{ event: firstEvent }],
+      }),
+      () => () => {},
+    )
+    await storage.entered
+    const second = state.commitPreparedTransition(
+      () => {
+        secondMutated = true
+        return {
+          result: undefined,
+          userRecords: [{ publicKey: "after-second", devices: [] }],
+          publishes: [{ event: secondEvent }],
+        }
+      },
+      () => () => {},
+    )
+
+    await Promise.resolve()
+    expect(secondMutated).toBe(false)
+    expect(storage.captured?.userRecords).toEqual([
+      { publicKey: "after-first", devices: [] },
+    ])
+    expect(storage.captured?.outbound).toEqual([
+      expect.objectContaining({ id: firstEvent.id }),
+    ])
+
+    storage.release()
+    await Promise.all([first, second])
+    expect(secondMutated).toBe(true)
+    expect(state.preparedPublishes().map(({ id }) => id)).toEqual([
+      firstEvent.id,
+      secondEvent.id,
+    ])
+  })
+
+  it("captures rollback state inside the transition queue", async () => {
+    const storage = new BlockingPreparedStorage()
+    const state = new RuntimeState(storage)
+    await state.init()
+    storage.arm()
+    let ratchet = "initial"
+
+    const first = state.commitPreparedTransition(
+      () => {
+        ratchet = "after-first"
+        return {
+          result: undefined,
+          userRecords: [],
+          publishes: [{ event: signed("first") }],
+        }
+      },
+      () => () => {
+        ratchet = "initial"
+      },
+    )
+    await storage.entered
+
+    const second = state.commitPreparedTransition(
+      () => {
+        ratchet = "after-second"
+        throw new Error("injected mutation failure")
+      },
+      () => {
+        const before = ratchet
+        return () => {
+          ratchet = before
+        }
+      },
+    )
+
+    storage.release()
+    await first
+    await expect(second).rejects.toThrow("injected mutation failure")
+    expect(ratchet).toBe("after-first")
   })
 
   it("migrates v1 records and both intent queues before deleting legacy keys", async () => {
