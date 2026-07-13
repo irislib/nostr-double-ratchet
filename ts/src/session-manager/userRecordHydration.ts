@@ -29,7 +29,7 @@ export function hydrateUserRecord(input: HydrateUserRecordInput): void {
   userRecord.devices.clear()
 
   const appKeys = deserializeAppKeys(data.appKeys)
-  userRecord.setAppKeys(appKeys)
+  userRecord.setAppKeys(appKeys, validTimestamp(data.appKeysCreatedAt))
   rebuildDelegateMapping(publicKey, appKeys, rememberDelegate)
 
   for (const deviceData of data.devices) {
@@ -54,6 +54,10 @@ export function hydrateUserRecord(input: HydrateUserRecordInput): void {
       // Ignore corrupted session entries while keeping the rest of the user record.
     }
   }
+}
+
+function validTimestamp(value: unknown): number {
+  return Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : 0
 }
 
 function deserializeAppKeys(serialized?: string): AppKeys | undefined {

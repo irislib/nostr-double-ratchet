@@ -17,10 +17,18 @@ import {
 } from "./types"
 import { StorageAdapter, InMemoryStorageAdapter } from "./StorageAdapter"
 import { MessageQueue } from "./MessageQueue"
-import { AppKeys, isAppKeysEvent } from "./AppKeys"
+import {
+  AppKeys,
+  applyAppKeysSnapshotPreservingLabels,
+  isAppKeysEvent,
+} from "./AppKeys"
 import { Invite } from "./Invite"
 import { Session } from "./Session"
-import { resolveInviteOwnerRouting } from "./multiDevice"
+import {
+  resolveInviteOwnerRouting,
+  type AppKeysSnapshotDecision,
+  type KnownAppKeysSnapshot,
+} from "./multiDevice"
 import { decryptInviteResponse, createSessionFromAccept } from "./inviteUtils"
 import { type VerifiedEvent } from "nostr-tools"
 import {
@@ -348,10 +356,19 @@ export class SessionManager {
   }
 
   private fetchAppKeys(pubkey: string, timeoutMs = 2000): Promise<AppKeys | null> {
+    return this.fetchAppKeysSnapshot(pubkey, timeoutMs).then(
+      (snapshot) => snapshot?.appKeys ?? null
+    )
+  }
+
+  private fetchAppKeysSnapshot(
+    pubkey: string,
+    timeoutMs = 2000,
+  ): Promise<{ appKeys: AppKeys; createdAt: number } | null> {
     if (!this.legacyNostrSubscribe) {
       return Promise.resolve(null)
     }
-    return AppKeys.waitFor(pubkey, this.legacyNostrSubscribe, timeoutMs)
+    return AppKeys.waitForSnapshot(pubkey, this.legacyNostrSubscribe, timeoutMs)
   }
 
   // -------------------
@@ -611,9 +628,13 @@ export class SessionManager {
     const userRecord = this.getOrCreateUserRecord(userPubkey)
     await userRecord.ensureSetup().catch(() => {})
 
-    const latestAppKeys = await this.fetchAppKeys(userPubkey, 50).catch(() => null)
+    const latestAppKeys = await this.fetchAppKeysSnapshot(userPubkey, 50)
+      .catch(() => null)
     if (latestAppKeys) {
-      await userRecord.onAppKeys(latestAppKeys).catch(() => {})
+      await this.applyTrustedAppKeysSnapshot({
+        ownerPubkey: userPubkey,
+        ...latestAppKeys,
+      }).catch(() => {})
       return
     }
 
@@ -696,6 +717,43 @@ export class SessionManager {
 
   getUserRecords(): Map<string, UserRecord> {
     return this.userRecords as unknown as Map<string, UserRecord>
+  }
+
+  getKnownAppKeysSnapshots(): KnownAppKeysSnapshot[] {
+    return Array.from(this.userRecords.values())
+      .filter((record): record is UserRecordActor & { appKeys: AppKeys } =>
+        record.appKeys !== undefined
+      )
+      .map((record) => ({
+        ownerPubkey: record.publicKey,
+        appKeys: new AppKeys(
+          record.appKeys.getAllDevices().map((device) => ({ ...device })),
+        ),
+        createdAt: record.appKeysCreatedAt,
+      }))
+      .sort((left, right) => left.ownerPubkey.localeCompare(right.ownerPubkey))
+  }
+
+  async applyTrustedAppKeysSnapshot(
+    snapshot: KnownAppKeysSnapshot,
+  ): Promise<AppKeysSnapshotDecision> {
+    const record = this.getOrCreateUserRecord(snapshot.ownerPubkey)
+    await record.ensureSetup().catch(() => {})
+    const incoming = new AppKeys(
+      snapshot.appKeys.getAllDevices().map((device) => ({ ...device })),
+      snapshot.appKeys.getAllDeviceLabels().map((labels) => ({ ...labels })),
+    )
+    const update = applyAppKeysSnapshotPreservingLabels({
+      currentAppKeys: record.appKeys,
+      currentCreatedAt: record.appKeysCreatedAt,
+      incomingAppKeys: incoming,
+      incomingCreatedAt: snapshot.createdAt,
+    })
+    if (update.decision !== "stale") {
+      await record.onAppKeys(update.appKeys, update.createdAt)
+      this.syncLegacyDirectMessageSubscription()
+    }
+    return update.decision
   }
 
   getMessagePushAuthorPubkeys(peerPubkey: string): string[] {

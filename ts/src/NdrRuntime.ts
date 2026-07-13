@@ -1,5 +1,6 @@
 import {
   AppKeys,
+  applyAppKeysSnapshotPreservingLabels,
   buildAppKeysFilter,
   createAppKeysProfileId,
   type DeviceEntry,
@@ -16,10 +17,11 @@ import {
   type GroupDecryptedEvent,
 } from "./Group";
 import {
-  applyAppKeysSnapshot,
   evaluateDeviceRegistrationState,
   shouldRequireRelayRegistrationConfirmation,
+  type AppKeysSnapshotDecision,
   type DeviceRegistrationState,
+  type KnownAppKeysSnapshot,
   type SessionUserRecordsLike,
 } from "./multiDevice";
 import {
@@ -125,7 +127,10 @@ const DEFAULT_APP_KEYS_FETCH_TIMEOUT_MS = 10_000;
 const DEFAULT_APP_KEYS_FAST_TIMEOUT_MS = 2_000;
 
 const cloneAppKeys = (appKeys: AppKeys): AppKeys =>
-  new AppKeys(appKeys.getAllDevices(), appKeys.getAllDeviceLabels());
+  new AppKeys(
+    appKeys.getAllDevices().map((device) => ({ ...device })),
+    appKeys.getAllDeviceLabels().map((labels) => ({ ...labels })),
+  );
 
 const now = () => Math.floor(Date.now() / 1000);
 
@@ -263,6 +268,59 @@ export class NdrRuntime {
       (this.sessionManager?.getUserRecords() as unknown as SessionUserRecordsLike | undefined) ??
       new Map()
     );
+  }
+
+  getKnownAppKeysSnapshots(): KnownAppKeysSnapshot[] {
+    const snapshots = new Map(
+      (this.sessionManager?.getKnownAppKeysSnapshots() ?? [])
+        .map((snapshot) => [snapshot.ownerPubkey, snapshot]),
+    );
+    const ownerPubkey = this.state.ownerPubkey;
+    const ownAppKeys = this.appKeysManager?.getAppKeys();
+    if (ownerPubkey && ownAppKeys) {
+      snapshots.set(ownerPubkey, {
+        ownerPubkey,
+        appKeys: new AppKeys(
+          ownAppKeys.getAllDevices().map((device) => ({ ...device })),
+        ),
+        createdAt: this.state.lastAppKeysCreatedAt,
+      });
+    }
+    return Array.from(snapshots.values())
+      .sort((left, right) => left.ownerPubkey.localeCompare(right.ownerPubkey));
+  }
+
+  async applyTrustedAppKeysSnapshot(
+    snapshot: KnownAppKeysSnapshot,
+  ): Promise<AppKeysSnapshotDecision> {
+    const ownerPubkey = this.state.ownerPubkey;
+    if (!ownerPubkey) {
+      throw new Error("Owner pubkey required to apply AppKeys snapshot");
+    }
+    const incoming = cloneAppKeys(snapshot.appKeys);
+    const manager = await this.waitForSessionManager(ownerPubkey);
+    let decision: AppKeysSnapshotDecision;
+
+    if (snapshot.ownerPubkey === ownerPubkey) {
+      decision = await this.applyIncomingAppKeys(incoming, snapshot.createdAt);
+      const effective = this.appKeysManager?.getAppKeys();
+      if (effective) {
+        await manager.applyTrustedAppKeysSnapshot({
+          ownerPubkey,
+          appKeys: cloneAppKeys(effective),
+          createdAt: this.state.lastAppKeysCreatedAt,
+        });
+      }
+    } else {
+      decision = await manager.applyTrustedAppKeysSnapshot({
+        ...snapshot,
+        appKeys: incoming,
+      });
+    }
+
+    await this.flushSessionManagerEvents();
+    this.syncDirectMessageSubscription();
+    return decision;
   }
 
   getSessionMessagePushAuthorPubkeys(peerPubkey: string): string[] {
@@ -1241,7 +1299,7 @@ export class NdrRuntime {
     incomingCreatedAt: number,
   ): Promise<"advanced" | "stale" | "merged_equal_timestamp"> {
     await this.initAppKeysManager();
-    const update = applyAppKeysSnapshot({
+    const update = applyAppKeysSnapshotPreservingLabels({
       currentAppKeys: this.appKeysManager?.getAppKeys(),
       currentCreatedAt: this.state.lastAppKeysCreatedAt,
       incomingAppKeys,

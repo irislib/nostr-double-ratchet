@@ -1,4 +1,4 @@
-import type { DeviceEntry } from "./AppKeys"
+import type { AppKeys, DeviceEntry } from "./AppKeys"
 import type { InvitePurpose } from "./Invite"
 
 export type AppKeysSnapshotDecision =
@@ -13,6 +13,12 @@ type MergeableAppKeys<T> = {
 export interface AppKeysSnapshotUpdate<T> {
   decision: AppKeysSnapshotDecision
   appKeys: T
+  createdAt: number
+}
+
+export interface KnownAppKeysSnapshot {
+  ownerPubkey: string
+  appKeys: AppKeys
   createdAt: number
 }
 

@@ -1,5 +1,8 @@
-import { AppKeys, buildAppKeysFilter } from "../AppKeys"
-import { applyAppKeysSnapshot } from "../multiDevice"
+import {
+  AppKeys,
+  applyAppKeysSnapshotPreservingLabels,
+  buildAppKeysFilter,
+} from "../AppKeys"
 import type { Rumor } from "../types"
 import type { VerifiedEvent } from "nostr-tools"
 import { DeviceRecordActor } from "./DeviceRecordActor"
@@ -52,8 +55,16 @@ export class UserRecordActor implements UserRecordShape {
     return device
   }
 
-  setAppKeys(appKeys: AppKeys | undefined): void {
+  get appKeysCreatedAt(): number {
+    return this.latestAppKeysCreatedAt
+  }
+
+  setAppKeys(
+    appKeys: AppKeys | undefined,
+    createdAt = this.latestAppKeysCreatedAt,
+  ): void {
     this.appKeys = appKeys
+    this.latestAppKeysCreatedAt = createdAt
   }
 
   async queueOutboundMessage(rumor: Rumor): Promise<void> {
@@ -111,6 +122,7 @@ export class UserRecordActor implements UserRecordShape {
 
   async onAppKeys(appKeys: AppKeys, createdAt = 0): Promise<void> {
     this.appKeys = appKeys
+    this.latestAppKeysCreatedAt = Math.max(this.latestAppKeysCreatedAt, createdAt)
     this.setState("appkeys-known")
     this.deps.manager.updateDelegateMapping(this.publicKey, appKeys)
 
@@ -201,7 +213,7 @@ export class UserRecordActor implements UserRecordShape {
     if (event.pubkey !== this.publicKey) return false
     try {
       const appKeys = AppKeys.fromEvent(event)
-      const next = applyAppKeysSnapshot({
+      const next = applyAppKeysSnapshotPreservingLabels({
         currentAppKeys: this.appKeys,
         currentCreatedAt: this.latestAppKeysCreatedAt,
         incomingAppKeys: appKeys,
@@ -210,7 +222,6 @@ export class UserRecordActor implements UserRecordShape {
       if (next.decision === "stale") {
         return false
       }
-      this.latestAppKeysCreatedAt = next.createdAt
       await this.onAppKeys(next.appKeys, next.createdAt)
       return true
     } catch {

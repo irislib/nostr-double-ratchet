@@ -1,6 +1,10 @@
 import { Filter, VerifiedEvent, UnsignedEvent, getPublicKey, verifyEvent } from "nostr-tools"
 import * as nip44 from "nostr-tools/nip44"
-import { applyAppKeysSnapshot } from "./multiDevice"
+import {
+  applyAppKeysSnapshot,
+  type AppKeysSnapshotUpdate,
+  type ApplyAppKeysSnapshotOptions,
+} from "./multiDevice"
 import { APP_KEYS_EVENT_KIND, NostrSubscribe, Unsubscribe } from "./types"
 
 const now = () => Math.round(Date.now() / 1000)
@@ -670,4 +674,23 @@ export class AppKeys {
       )
     })
   }
+}
+
+export function applyAppKeysSnapshotPreservingLabels(
+  options: ApplyAppKeysSnapshotOptions<AppKeys>
+): AppKeysSnapshotUpdate<AppKeys> {
+  const update = applyAppKeysSnapshot(options)
+  if (update.decision !== "advanced" || !options.currentAppKeys) {
+    return update
+  }
+
+  const labels = options.currentAppKeys.merge(options.incomingAppKeys)
+  const appKeys = new AppKeys(update.appKeys.getAllDevices())
+  for (const device of appKeys.getAllDevices()) {
+    const entry = labels.getDeviceLabels(device.identityPubkey)
+    if (entry) {
+      appKeys.setDeviceLabels(device.identityPubkey, entry, entry.updatedAt)
+    }
+  }
+  return { ...update, appKeys }
 }

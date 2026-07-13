@@ -38,6 +38,7 @@ export interface UserRecord {
   publicKey: string
   devices: Map<string, DeviceRecord>
   appKeys?: AppKeys
+  appKeysCreatedAt: number
 }
 
 export interface AcceptInviteOptions {
@@ -66,6 +67,7 @@ export interface StoredUserRecord {
   publicKey: string
   devices: StoredDeviceRecord[]
   appKeys?: string
+  appKeysCreatedAt?: number
 }
 
 export type UserSetupState =
