@@ -1,6 +1,6 @@
 mod support;
 
-use nostr_double_ratchet::{DomainError, Error, RelayGap, Result, UnixSeconds};
+use nostr_double_ratchet::{DomainError, Error, RelayGap, Result, Session, UnixSeconds};
 use support::{
     context, manager_device, manager_device_snapshot, manager_observe_invite_response,
     manager_public_device_invite, manager_receive_delivery, manager_user_snapshot, mutate_text,
@@ -388,5 +388,114 @@ fn tampered_delivery_does_not_corrupt_receiver_state() -> Result<()> {
     );
     assert!(result.is_err());
     assert_eq!(snapshot(&bob_manager.snapshot()), before);
+    Ok(())
+}
+
+#[test]
+fn aggregate_remote_send_failure_does_not_advance_an_earlier_target() -> Result<()> {
+    let alice = manager_device(51, 151);
+    let bob1 = manager_device(52, 152);
+    let bob2 = manager_device(52, 153);
+    let mut manager = session_manager(&alice);
+    manager.observe_peer_roster(bob1.owner_pubkey, roster_for(&[&bob1, &bob2], 100));
+
+    for (index, bob) in [&bob1, &bob2].into_iter().enumerate() {
+        let mut session_ctx = context(30 + index as u64, 1_810_001_000);
+        let session = Session::new_initiator(
+            &mut session_ctx,
+            bob.device_pubkey,
+            [201 + index as u8; 32],
+            [77 + index as u8; 32],
+        )?;
+        manager.import_session_state(
+            bob.owner_pubkey,
+            bob.device_pubkey,
+            session.state,
+            UnixSeconds(1_810_001_000),
+        );
+    }
+
+    let mut corrupted = manager.snapshot();
+    let bob_user = corrupted
+        .users
+        .iter_mut()
+        .find(|user| user.owner_pubkey == bob1.owner_pubkey)
+        .expect("bob owner must exist");
+    let later_device = bob_user
+        .devices
+        .iter_mut()
+        .max_by_key(|device| device.device_pubkey)
+        .expect("bob device must exist");
+    later_device
+        .active_session
+        .as_mut()
+        .expect("active session must exist")
+        .our_current_nostr_key
+        .as_mut()
+        .expect("initiator send key must exist")
+        .private_key = [0; 32];
+
+    let mut manager = restore_manager(&corrupted, alice.secret_key)?;
+    let before = manager.snapshot();
+    let mut send_ctx = context(32, 1_810_001_001);
+    assert!(manager
+        .prepare_remote_send(&mut send_ctx, bob1.owner_pubkey, b"atomic".to_vec())
+        .is_err());
+    assert_eq!(manager.snapshot(), before);
+    Ok(())
+}
+
+#[test]
+fn aggregate_all_session_send_failure_does_not_advance_an_earlier_sibling() -> Result<()> {
+    let alice1 = manager_device(53, 154);
+    let alice2 = manager_device(53, 155);
+    let alice3 = manager_device(53, 156);
+    let mut manager = session_manager(&alice1);
+    manager.apply_local_roster(roster_for(&[&alice1, &alice2, &alice3], 101));
+
+    for (index, sibling) in [&alice2, &alice3].into_iter().enumerate() {
+        let mut session_ctx = context(33 + index as u64, 1_810_001_010);
+        let session = Session::new_initiator(
+            &mut session_ctx,
+            sibling.device_pubkey,
+            [203 + index as u8; 32],
+            [79 + index as u8; 32],
+        )?;
+        manager.import_session_state(
+            alice1.owner_pubkey,
+            sibling.device_pubkey,
+            session.state,
+            UnixSeconds(1_810_001_010),
+        );
+    }
+
+    let mut corrupted = manager.snapshot();
+    let local_user = corrupted
+        .users
+        .iter_mut()
+        .find(|user| user.owner_pubkey == alice1.owner_pubkey)
+        .expect("local owner must exist");
+    let later_sibling = local_user
+        .devices
+        .iter_mut()
+        .filter(|device| device.device_pubkey != alice1.device_pubkey)
+        .max_by_key(|device| device.device_pubkey)
+        .expect("local sibling must exist");
+    later_sibling
+        .active_session
+        .as_mut()
+        .expect("active session must exist")
+        .our_current_nostr_key
+        .as_mut()
+        .expect("initiator send key must exist")
+        .private_key = [0; 32];
+
+    let mut manager = restore_manager(&corrupted, alice1.secret_key)?;
+    let before = manager.snapshot();
+    let mut send_ctx = context(35, 1_810_001_011);
+    assert!(manager
+        .prepare_local_sibling_send_reusing_all_sessions(&mut send_ctx, b"atomic-sibling".to_vec(),)
+        .is_err());
+    assert_eq!(manager.snapshot(), before);
     Ok(())
 }

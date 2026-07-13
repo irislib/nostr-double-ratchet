@@ -308,7 +308,9 @@ impl SessionManager {
     where
         R: RngCore + CryptoRng,
     {
-        self.prepare_send_inner(ctx, recipient_owner, payload, true)
+        self.commit_prepared_send(|staged| {
+            staged.prepare_send_inner(ctx, recipient_owner, payload, true)
+        })
     }
 
     /// Prepare a send to the recipient owner's authorized devices without also
@@ -326,7 +328,9 @@ impl SessionManager {
     where
         R: RngCore + CryptoRng,
     {
-        self.prepare_send_inner(ctx, recipient_owner, payload, false)
+        self.commit_prepared_send(|staged| {
+            staged.prepare_send_inner(ctx, recipient_owner, payload, false)
+        })
     }
 
     pub fn prepare_remote_send_to_devices<R>(
@@ -346,7 +350,9 @@ impl SessionManager {
                 device_pubkey,
             })
             .collect();
-        self.prepare_explicit_send(ctx, recipient_owner, targets, payload, false)
+        self.commit_prepared_send(|staged| {
+            staged.prepare_explicit_send(ctx, recipient_owner, targets, payload, false)
+        })
     }
 
     pub fn prepare_local_sibling_send<R>(
@@ -357,7 +363,9 @@ impl SessionManager {
     where
         R: RngCore + CryptoRng,
     {
-        self.prepare_local_sibling_send_inner(ctx, payload, false)
+        self.commit_prepared_send(|staged| {
+            staged.prepare_local_sibling_send_inner(ctx, payload, false)
+        })
     }
 
     pub fn prepare_local_sibling_send_to_devices<R>(
@@ -376,7 +384,10 @@ impl SessionManager {
                 device_pubkey,
             })
             .collect();
-        self.prepare_explicit_send(ctx, self.local_owner_pubkey, targets, payload, false)
+        let local_owner_pubkey = self.local_owner_pubkey;
+        self.commit_prepared_send(|staged| {
+            staged.prepare_explicit_send(ctx, local_owner_pubkey, targets, payload, false)
+        })
     }
 
     pub fn prepare_local_sibling_send_reusing_sessions<R>(
@@ -387,7 +398,9 @@ impl SessionManager {
     where
         R: RngCore + CryptoRng,
     {
-        self.prepare_local_sibling_send_inner(ctx, payload, false)
+        self.commit_prepared_send(|staged| {
+            staged.prepare_local_sibling_send_inner(ctx, payload, false)
+        })
     }
 
     pub fn prepare_local_sibling_send_refreshing_one_way_sessions<R>(
@@ -398,10 +411,25 @@ impl SessionManager {
     where
         R: RngCore + CryptoRng,
     {
-        self.prepare_local_sibling_send_inner(ctx, payload, true)
+        self.commit_prepared_send(|staged| {
+            staged.prepare_local_sibling_send_inner(ctx, payload, true)
+        })
     }
 
     pub fn prepare_local_sibling_send_reusing_all_sessions<R>(
+        &mut self,
+        ctx: &mut ProtocolContext<'_, R>,
+        payload: Vec<u8>,
+    ) -> Result<PreparedSend>
+    where
+        R: RngCore + CryptoRng,
+    {
+        self.commit_prepared_send(|staged| {
+            staged.prepare_local_sibling_send_reusing_all_sessions_inner(ctx, payload)
+        })
+    }
+
+    fn prepare_local_sibling_send_reusing_all_sessions_inner<R>(
         &mut self,
         ctx: &mut ProtocolContext<'_, R>,
         payload: Vec<u8>,
@@ -457,6 +485,16 @@ impl SessionManager {
             invite_responses,
             relay_gaps,
         })
+    }
+
+    fn commit_prepared_send(
+        &mut self,
+        prepare: impl FnOnce(&mut Self) -> Result<PreparedSend>,
+    ) -> Result<PreparedSend> {
+        let mut staged = self.clone();
+        let prepared = prepare(&mut staged)?;
+        *self = staged;
+        Ok(prepared)
     }
 
     fn prepare_local_sibling_send_inner<R>(
