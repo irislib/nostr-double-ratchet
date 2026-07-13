@@ -1,8 +1,8 @@
 use nostr::{Keys, SecretKey};
 use nostr_double_ratchet::{
-    invite_url, owner_roster_proof_from_app_keys_event, parse_invite_url, AppKeys, DeviceEntry,
-    DevicePubkey, DomainError, Error, OwnerPubkey, OwnerRosterProof, ProtocolContext, Result,
-    RosterSnapshotDecision, SessionManager, UnixSeconds,
+    invite_url, owner_roster_proof_from_app_keys_event, parse_invite_url, parse_owner_roster_proof,
+    AppKeys, DeviceEntry, DevicePubkey, DomainError, Error, OwnerPubkey, OwnerRosterProof,
+    ProtocolContext, Result, RosterSnapshotDecision, SessionManager, UnixSeconds,
 };
 use rand::{rngs::StdRng, SeedableRng};
 
@@ -52,12 +52,34 @@ fn signed_app_keys_proof_binds_owner_and_device() -> Result<()> {
     let owner = keys(1);
     let device = keys(2);
     let proof = proof(&owner, &[(&device, 100)], 200)?;
+    let mut manager = new_manager(&keys(31), &keys(32));
 
     assert_eq!(
         proof.owner_pubkey(),
         OwnerPubkey::from_bytes(owner.public_key().to_bytes())
     );
     proof.ensure_authorizes_device(DevicePubkey::from_bytes(device.public_key().to_bytes()))?;
+    manager.observe_owner_roster_proof(proof)?;
+    let identity = manager
+        .verified_identity_for_device(DevicePubkey::from_bytes(device.public_key().to_bytes()))
+        .expect("signed roster must make the owner/device binding queryable");
+    assert_eq!(
+        identity.owner_pubkey,
+        OwnerPubkey::from_bytes(owner.public_key().to_bytes())
+    );
+    Ok(())
+}
+
+#[test]
+fn tampered_app_keys_event_cannot_cross_proof_boundary() -> Result<()> {
+    let owner = keys(33);
+    let device = keys(34);
+    let signed = proof(&owner, &[(&device, 100)], 200)?;
+    let mut tampered: serde_json::Value = serde_json::from_str(signed.raw_event()).unwrap();
+    tampered["created_at"] = serde_json::json!(201);
+
+    let result = parse_owner_roster_proof(&serde_json::to_string(&tampered).unwrap());
+    assert!(matches!(result, Err(Error::InvalidEvent(_))));
     Ok(())
 }
 
@@ -134,14 +156,69 @@ fn invite_response_uses_embedded_signed_roster_proof() -> Result<()> {
 fn restore_requires_runtime_to_reingest_local_signed_proof() -> Result<()> {
     let owner = keys(11);
     let device = keys(12);
+    let remote_owner = keys(13);
+    let remote_device = keys(14);
     let local_proof = proof(&owner, &[(&device, 500)], 500)?;
+    let remote_proof = proof(&remote_owner, &[(&remote_device, 500)], 500)?;
     let mut original = new_manager(&owner, &device);
     original.set_local_owner_roster_proof(local_proof.clone())?;
+    let mut remote = new_manager(&remote_owner, &remote_device);
+    let remote_invite = public_invite(&mut remote, 5, 501)?;
+    original.observe_verified_device_invite(remote_proof, remote_invite)?;
 
     let mut restored =
         SessionManager::from_snapshot(original.snapshot(), device.secret_key().to_secret_bytes())?;
     assert!(restored.local_owner_roster_proof().is_none());
+
+    let mut blocked_ctx = context(6, 502);
+    let before = restored.snapshot();
+    let blocked = restored.prepare_remote_send(
+        &mut blocked_ctx,
+        OwnerPubkey::from_bytes(remote_owner.public_key().to_bytes()),
+        b"blocked".to_vec(),
+    );
+    assert!(matches!(
+        blocked,
+        Err(Error::Domain(DomainError::CannotSendYet))
+    ));
+    assert_eq!(restored.snapshot(), before);
+
     restored.set_local_owner_roster_proof(local_proof)?;
-    assert!(restored.local_owner_roster_proof().is_some());
+    let mut ready_ctx = context(7, 503);
+    let prepared = restored.prepare_remote_send(
+        &mut ready_ctx,
+        OwnerPubkey::from_bytes(remote_owner.public_key().to_bytes()),
+        b"ready".to_vec(),
+    )?;
+    assert_eq!(prepared.deliveries.len(), 1);
+    assert_eq!(prepared.invite_responses.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn legacy_snapshot_without_proof_provenance_quarantines_authorization() -> Result<()> {
+    let owner = keys(15);
+    let device = keys(16);
+    let remote_owner = keys(17);
+    let remote_device = keys(18);
+    let mut original = new_manager(&owner, &device);
+    original.observe_owner_roster_proof(proof(&remote_owner, &[(&remote_device, 600)], 600)?)?;
+
+    let mut legacy = original.snapshot();
+    let remote_user = legacy
+        .users
+        .iter_mut()
+        .find(|user| {
+            user.owner_pubkey == OwnerPubkey::from_bytes(remote_owner.public_key().to_bytes())
+        })
+        .expect("remote roster must be persisted");
+    remote_user.roster_verified = false;
+
+    let restored = SessionManager::from_snapshot(legacy, device.secret_key().to_secret_bytes())?;
+    assert!(restored
+        .verified_identity_for_device(DevicePubkey::from_bytes(
+            remote_device.public_key().to_bytes()
+        ))
+        .is_none());
     Ok(())
 }
