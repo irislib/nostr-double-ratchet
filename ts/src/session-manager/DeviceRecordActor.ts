@@ -3,6 +3,7 @@ import { Session } from "../Session"
 import type { VerifiedEvent } from "nostr-tools"
 import { buildTypingRumor } from "../messageBuilders"
 import { INVITE_EVENT_KIND, type Rumor } from "../types"
+import { deepCopyState } from "../utils"
 import {
   compareSessionPriority,
   sessionCanReceive,
@@ -163,6 +164,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
   }
 
   private async doAcceptInvite(invite: Invite): Promise<Session> {
+    const checkpoint = this.checkpoint()
     this.state = "accepting-invite"
 
     try {
@@ -174,19 +176,25 @@ export class DeviceRecordActor implements DeviceRecordShape {
         encryptor,
         this.deps.ourOwnerPubkey
       )
-      this.installSession(session, false, { preferActive: true })
+      await this.deps.nostr.ready?.()
+      this.installSession(session, false, {
+        persist: false,
+        preferActive: true,
+      })
       await this.deps.nostr.publish(event)
       await this.publishInviteBootstrap(session)
       this.state = "session-ready"
       await this.flushMessageQueue()
       return session
     } catch (error) {
-      this.state = "waiting-for-invite"
+      this.restore(checkpoint)
       throw error
     }
   }
 
   private async publishInviteBootstrap(session: Session): Promise<void> {
+    await this.deps.nostr.ready?.()
+    const checkpoint = this.checkpoint()
     try {
       const { event } = session.sendEvent(
         buildTypingRumor({
@@ -194,10 +202,9 @@ export class DeviceRecordActor implements DeviceRecordShape {
         }),
         [["p", this.deviceId]],
       )
-      await this.deps.nostr.publish(event)
+      await this.deps.nostr.publish(event, undefined, undefined, true)
     } catch {
-      // Invite acceptance itself already established the session. If the bootstrap
-      // cannot be published, queued messages will still flush on the next inbound event.
+      this.restore(checkpoint)
     }
   }
 
@@ -385,19 +392,48 @@ export class DeviceRecordActor implements DeviceRecordShape {
     }
 
     for (const entry of entries) {
+      await this.deps.nostr.ready?.()
+      const checkpoint = this.checkpoint()
       const event = this.prepareOutboundEvent(entry.event)
       if (!event) {
         continue
       }
       try {
-        await this.deps.nostr.publish(event)
-        await this.deps.messageQueue.removeByTargetAndEventId(this.deviceId, entry.event.id)
+        await this.deps.nostr.publish(event, entry.event.id, entry.id)
+        await this.deps.messageQueue.removeByTargetAndEventId(
+          this.deviceId,
+          entry.event.id,
+        )
       } catch {
-        // Keep entry for future retry.
+        this.restore(checkpoint)
       }
     }
 
     this.deps.user.onDeviceDirty()
+  }
+
+  private checkpoint() {
+    const sessions = new Set([
+      ...(this.activeSession ? [this.activeSession] : []),
+      ...this.inactiveSessions,
+    ])
+    return {
+      activeSession: this.activeSession,
+      inactiveSessions: [...this.inactiveSessions],
+      state: this.state,
+      sessionStates: new Map(
+        Array.from(sessions, (session) => [session, deepCopyState(session.state)])
+      ),
+    }
+  }
+
+  private restore(checkpoint: ReturnType<DeviceRecordActor["checkpoint"]>): void {
+    this.activeSession = checkpoint.activeSession
+    this.inactiveSessions = checkpoint.inactiveSessions
+    this.state = checkpoint.state
+    for (const [session, state] of checkpoint.sessionStates) {
+      session.state = state
+    }
   }
 
   deactivateCurrentSession(): void {

@@ -16,7 +16,12 @@ import {
   INVITE_RESPONSE_KIND,
 } from "./types"
 import { StorageAdapter, InMemoryStorageAdapter } from "./StorageAdapter"
-import { MessageQueue } from "./MessageQueue"
+import {
+  OutboundIntentQueue,
+  RuntimeState,
+  serializeUserRecords,
+  type PreparedPublish,
+} from "./RuntimeState"
 import { AppKeys, isAppKeysEvent } from "./AppKeys"
 import { Invite } from "./Invite"
 import { Session } from "./Session"
@@ -35,10 +40,7 @@ import {
 } from "./MessageOrigin"
 import { DeviceRecordActor } from "./session-manager/DeviceRecordActor"
 import { ExpirationSettings } from "./session-manager/expirationSettings"
-import {
-  planInviteBootstrapEvents,
-  scheduleInviteBootstrapRetryEvents,
-} from "./session-manager/inviteBootstrap"
+import { planInviteBootstrapEvent } from "./session-manager/inviteBootstrap"
 import {
   collectAllMessagePushAuthorPubkeys,
   collectMessagePushAuthorPubkeys,
@@ -59,7 +61,6 @@ import {
 } from "./session-manager/sessionSelection"
 import { UserRecordActor } from "./session-manager/UserRecordActor"
 import { hydrateUserRecord } from "./session-manager/userRecordHydration"
-import { UserRecordStorage } from "./session-manager/userRecordStorage"
 import type {
   AcceptInviteOptions,
   AcceptInviteResult,
@@ -69,7 +70,7 @@ import type {
   OnEventCallback,
   OnEventMeta,
   SessionManagerEvent,
-  SessionManagerEventsAvailableCallback,
+  SessionManagerEventCallback,
   UserRecord,
 } from "./session-manager/types"
 
@@ -81,7 +82,7 @@ export type {
   OnEventCallback,
   OnEventMeta,
   SessionManagerEvent,
-  SessionManagerEventsAvailableCallback,
+  SessionManagerEventCallback,
   UserRecord,
 } from "./session-manager/types"
 
@@ -108,10 +109,6 @@ type PendingInviteResponse = {
 const MAX_PENDING_DIRECT_MESSAGES = 1000
 
 export class SessionManager {
-  // Versioning
-  private readonly storageVersion = "1"
-  private readonly versionPrefix: string
-
   // Params
   private deviceId: string
   private storage: StorageAdapter
@@ -128,8 +125,9 @@ export class SessionManager {
 
   // Data
   private userRecords: Map<string, UserRecordActor> = new Map()
-  private messageQueue!: MessageQueue
-  private discoveryQueue!: MessageQueue
+  private runtimeState: RuntimeState
+  private messageQueue: OutboundIntentQueue
+  private discoveryQueue: OutboundIntentQueue
   // Map delegate device pubkeys to their owner's pubkey
   private delegateToOwner: Map<string, string> = new Map()
   // Track processed InviteResponse event IDs to prevent replay
@@ -138,11 +136,9 @@ export class SessionManager {
   private pendingDirectMessages: Map<string, VerifiedEvent> = new Map()
   private inviteAcceptPromises: Map<string, Promise<AcceptInviteResult>> = new Map()
   private expirationSettings!: ExpirationSettings
-  private userRecordStorage!: UserRecordStorage
   private autoAdoptChatSettings: boolean = true
 
   private userSetupPromises: Map<string, Promise<void>> = new Map()
-  private bootstrapRetryTimeouts: Set<ReturnType<typeof setTimeout>> = new Set()
 
   // Subscriptions
   private ourInviteResponseSubscription: Unsubscribe | null = null
@@ -153,8 +149,11 @@ export class SessionManager {
   // Callbacks
   private internalSubscriptions: Set<OnEventCallback> = new Set()
   private messagePushAuthorCallbacks: Set<() => void> = new Set()
-  private eventsAvailableCallbacks: Set<SessionManagerEventsAvailableCallback> = new Set()
-  private emittedEvents: SessionManagerEvent[] = []
+  private runtimeEventCallbacks: Set<SessionManagerEventCallback> = new Set()
+  private preparedPublishCallbacks: Set<() => void> = new Set()
+  private outboundTransitionTail: Promise<void> = Promise.resolve()
+  private legacyBootstrapRetryTimeouts = new Set<ReturnType<typeof setTimeout>>()
+  private legacyBootstrapRetries = new Map<string, VerifiedEvent>()
 
   // Initialization flag
   private initialized: boolean = false
@@ -178,14 +177,21 @@ export class SessionManager {
     this.ownerPublicKey = ownerPublicKey
     this.inviteKeys = inviteKeys
     this.storage = storage || new InMemoryStorageAdapter()
-    this.versionPrefix = `v${this.storageVersion}`
-    this.messageQueue = new MessageQueue(this.storage, "v1/message-queue/")
-    this.discoveryQueue = new MessageQueue(this.storage, "v1/discovery-queue/")
-    this.expirationSettings = new ExpirationSettings(this.storage, this.versionPrefix)
-    this.userRecordStorage = new UserRecordStorage(this.storage, this.versionPrefix)
+    this.runtimeState = new RuntimeState(this.storage)
+    const records = () => serializeUserRecords(this.userRecords)
+    this.messageQueue = new OutboundIntentQueue(this.runtimeState, "device", records)
+    this.discoveryQueue = new OutboundIntentQueue(this.runtimeState, "discovery", records)
+    this.expirationSettings = new ExpirationSettings(this.storage, "v1")
     this.nostrFacade = {
+      ready: () => this.runtimeState.barrier(),
       subscribe: (subid, filter, onEvent) => this.emitSubscribe(subid, filter, onEvent),
-      publish: (event, innerEventId) => this.emitPublish(event, innerEventId),
+      publish: (event, innerEventId, intentId, retryExactForLegacyBootstrap) =>
+        this.emitPublish(
+          event,
+          innerEventId,
+          intentId,
+          retryExactForLegacyBootstrap,
+        ),
     }
   }
 
@@ -214,37 +220,47 @@ export class SessionManager {
     return manager
   }
 
-  onEventsAvailable(callback: SessionManagerEventsAvailableCallback): Unsubscribe {
-    this.eventsAvailableCallbacks.add(callback)
+  onRuntimeEvent(callback: SessionManagerEventCallback): Unsubscribe {
+    this.runtimeEventCallbacks.add(callback)
     return () => {
-      this.eventsAvailableCallbacks.delete(callback)
+      this.runtimeEventCallbacks.delete(callback)
     }
   }
 
-  drainEvents(): SessionManagerEvent[] {
-    const events = this.emittedEvents
-    this.emittedEvents = []
-    return events
+  onPreparedPublishesAvailable(callback: () => void): Unsubscribe {
+    this.preparedPublishCallbacks.add(callback)
+    return () => {
+      this.preparedPublishCallbacks.delete(callback)
+    }
   }
 
-  hasPendingEvents(): boolean {
-    return this.emittedEvents.length > 0
+  pendingPublishes(): PreparedPublish[] {
+    return this.runtimeState.preparedPublishes()
+  }
+
+  acknowledgePublish(id: string): Promise<void> {
+    return this.runtimeState.acknowledgePublish(
+      () => serializeUserRecords(this.userRecords),
+      id,
+    )
+  }
+
+  publishFailed(id: string, error: unknown): Promise<void> {
+    return this.runtimeState.publishFailed(
+      () => serializeUserRecords(this.userRecords),
+      id,
+      error instanceof Error ? error.message : String(error),
+    )
   }
 
   private async emitEvent(event: SessionManagerEvent): Promise<void> {
-    this.emittedEvents.push(event)
-    const legacy = this.handleLegacyEmittedEvent(event)
-    for (const callback of this.eventsAvailableCallbacks) {
-      try {
-        void callback()
-      } catch {
-        // Event-availability observers should not break core state changes.
-      }
-    }
-    if (legacy) await legacy
+    this.handleLegacyRuntimeEvent(event)
+    await Promise.allSettled(
+      Array.from(this.runtimeEventCallbacks, (callback) => callback(event))
+    )
   }
 
-  private handleLegacyEmittedEvent(event: SessionManagerEvent): Promise<void> | void {
+  private handleLegacyRuntimeEvent(event: SessionManagerEvent): void {
     if (event.type === "decryptedMessage") {
       for (const cb of this.internalSubscriptions) {
         cb(event.event, event.sender, event.meta)
@@ -265,11 +281,7 @@ export class SessionManager {
     if (event.type === "unsubscribe") {
       this.legacyRuntimeSubscriptions.get(event.subid)?.()
       this.legacyRuntimeSubscriptions.delete(event.subid)
-      return
     }
-
-    if (!this.legacyNostrPublish) return
-    return this.legacyNostrPublish(event.event).then(() => {})
   }
 
   private emitSubscribe(
@@ -278,12 +290,10 @@ export class SessionManager {
     onEvent?: Parameters<NostrFacade["subscribe"]>[2],
   ): Unsubscribe {
     if (this.legacyNostrSubscribe && onEvent) {
-      this.emittedEvents.push({ type: "subscribe", subid, filter })
       this.legacyRuntimeSubscriptions.get(subid)?.()
       const cleanup = this.legacyNostrSubscribe(filter, onEvent)
       this.legacyRuntimeSubscriptions.set(subid, cleanup)
       return () => {
-        this.emittedEvents.push({ type: "unsubscribe", subid })
         this.legacyRuntimeSubscriptions.get(subid)?.()
         this.legacyRuntimeSubscriptions.delete(subid)
       }
@@ -298,21 +308,60 @@ export class SessionManager {
   private emitPublish(
     event: Parameters<NostrFacade["publish"]>[0],
     innerEventId?: string,
+    intentId?: string,
+    retryExactForLegacyBootstrap?: boolean,
   ): Promise<void> {
-    return this.emitEvent({ type: "publish", event, innerEventId })
+    return this.preparePublishes([
+      { event, innerEventId, intentId, retryExactForLegacyBootstrap },
+    ])
+  }
+
+  private async preparePublishes(
+    publishes: Array<{
+      event: VerifiedEvent
+      innerEventId?: string
+      intentId?: string
+      retryExactForLegacyBootstrap?: boolean
+    }>,
+  ): Promise<void> {
+    await this.runtimeState.preparePublishes(
+      () => serializeUserRecords(this.userRecords),
+      publishes,
+    )
+    for (const callback of this.preparedPublishCallbacks) callback()
+
+    if (!this.legacyNostrPublish) return
+    for (const publish of publishes) {
+      try {
+        await this.legacyNostrPublish(publish.event)
+        await this.acknowledgePublish(publish.event.id)
+        if (publish.retryExactForLegacyBootstrap) {
+          this.scheduleExactLegacyBootstrapRetries(publish.event)
+        }
+      } catch (error) {
+        await this.publishFailed(publish.event.id, error).catch(() => {})
+        throw error
+      }
+    }
+  }
+
+  private scheduleExactLegacyBootstrapRetries(event: VerifiedEvent): void {
+    this.legacyBootstrapRetries.set(event.id, event)
+    for (const delay of [500, 1500]) {
+      const timeout = setTimeout(() => {
+        this.legacyBootstrapRetryTimeouts.delete(timeout)
+        void this.legacyNostrPublish?.(event).catch(() => {})
+      }, delay)
+      this.legacyBootstrapRetryTimeouts.add(timeout)
+    }
   }
 
   async init() {
     if (this.initialized) return
     this.initialized = true
 
-    await this.userRecordStorage.runMigrations().catch(() => {
-      // Failed to run migrations
-    })
-
-    await this.loadAllUserRecords().catch(() => {
-      // Failed to load user records
-    })
+    await this.runtimeState.init()
+    this.hydrateUserRecords(this.runtimeState.userRecords())
 
     await this.expirationSettings.load().catch(() => {
       // Failed to load expiration settings
@@ -329,6 +378,10 @@ export class SessionManager {
 
     // Setup sessions with our own devices and resume discovery for all known users
     Array.from(this.userRecords.keys()).forEach(pubkey => this.setupUser(pubkey))
+
+    if (this.pendingPublishes().length > 0) {
+      for (const callback of this.preparedPublishCallbacks) callback()
+    }
   }
 
   /**
@@ -870,10 +923,9 @@ export class SessionManager {
   }
 
   close() {
-    for (const timeout of this.bootstrapRetryTimeouts) {
-      clearTimeout(timeout)
-    }
-    this.bootstrapRetryTimeouts.clear()
+    for (const timeout of this.legacyBootstrapRetryTimeouts) clearTimeout(timeout)
+    this.legacyBootstrapRetryTimeouts.clear()
+    this.legacyBootstrapRetries.clear()
 
     for (const userRecord of this.userRecords.values()) {
       userRecord.close()
@@ -927,7 +979,10 @@ export class SessionManager {
       }
     }
 
-    await this.userRecordStorage.deleteUserData(ownerPubkey)
+    await this.runtimeState.deleteUser(
+      () => serializeUserRecords(this.userRecords),
+      ownerPubkey,
+    )
   }
 
   async queuedMessageDiagnostics(innerEventId?: string): Promise<QueuedMessageDiagnostic[]> {
@@ -963,18 +1018,12 @@ export class SessionManager {
     }
 
     try {
-      const bootstrapEvents = planInviteBootstrapEvents(session, deviceId)
-      const [initialBootstrap] = bootstrapEvents
-      if (!initialBootstrap) {
-        return
-      }
-      await this.emitPublish(initialBootstrap)
-      scheduleInviteBootstrapRetryEvents(
-        bootstrapEvents,
-        (event) => this.emitPublish(event),
-        this.bootstrapRetryTimeouts,
+      await this.emitPublish(
+        planInviteBootstrapEvent(session, deviceId),
+        undefined,
+        undefined,
+        true,
       )
-      await this.storeUserRecord(ownerPublicKey).catch(() => {})
     } catch {
       // Ignore bootstrap send failures; the next valid inbound event will retry queue flush.
     }
@@ -985,16 +1034,11 @@ export class SessionManager {
     recipientDevicePubkey: string,
   ): Promise<void> {
     try {
-      const bootstrapEvents = planInviteBootstrapEvents(session, recipientDevicePubkey)
-      const [initialBootstrap] = bootstrapEvents
-      if (!initialBootstrap) {
-        return
-      }
-      await this.emitPublish(initialBootstrap)
-      scheduleInviteBootstrapRetryEvents(
-        bootstrapEvents,
-        (event) => this.emitPublish(event),
-        this.bootstrapRetryTimeouts,
+      await this.emitPublish(
+        planInviteBootstrapEvent(session, recipientDevicePubkey),
+        undefined,
+        undefined,
+        true,
       )
     } catch {
       // The session is still established even if the bootstrap publish fails.
@@ -1162,7 +1206,11 @@ export class SessionManager {
 
     const deviceRecord = this.upsertDeviceRecord(userRecord, deviceId)
     this.delegateToOwner.set(deviceId, ownerPublicKey)
-    deviceRecord.installSession(session, false, { preferActive: true })
+    await this.runtimeState.barrier()
+    deviceRecord.installSession(session, false, {
+      persist: false,
+      preferActive: true,
+    })
     await this.emitPublish(event)
     await this.sendInviteBootstrap(session, deviceId)
     if (invite.purpose === "link" && ownerPublicKey === this.ownerPublicKey) {
@@ -1197,7 +1245,25 @@ export class SessionManager {
     recipientIdentityKey: string,
     event: Partial<Rumor>
   ): Promise<Rumor | undefined> {
+    return this.serializeOutboundTransition(() =>
+      this.sendEventTransition(recipientIdentityKey, event)
+    )
+  }
+
+  private async sendEventTransition(
+    recipientIdentityKey: string,
+    event: Partial<Rumor>,
+  ): Promise<Rumor | undefined> {
     await this.init()
+
+    if (this.legacyNostrPublish && this.legacyBootstrapRetries.size > 0) {
+      await Promise.allSettled(
+        Array.from(this.legacyBootstrapRetries.values(), (bootstrap) =>
+          this.legacyNostrPublish!(bootstrap)
+        )
+      )
+      this.legacyBootstrapRetries.clear()
+    }
 
     await Promise.allSettled([
       this.setupUser(recipientIdentityKey),
@@ -1258,7 +1324,9 @@ export class SessionManager {
     // This is important for apps that "fire and forget" sendEvent() (e.g. UI click handlers):
     // if the page reloads/crashes while publishes are still in-flight, we still want the
     // updated session keys to be on disk so the next incoming message can be decrypted.
-    const toPublish: Parameters<NostrPublish>[0][] = []
+    await this.runtimeState.barrier()
+    const recordsBefore = serializeUserRecords(this.userRecords)
+    const toPublish: VerifiedEvent[] = []
     const sentDeviceIds: string[] = []
     for (const device of devices) {
       // Check if device is still authorized
@@ -1275,21 +1343,18 @@ export class SessionManager {
       sentDeviceIds.push(device.deviceId)
     }
 
-    // Persist recipient + owner records before publishing (best-effort).
-    await this.storeUserRecord(recipientIdentityKey).catch(() => {})
-    if (this.ownerPublicKey !== recipientIdentityKey) {
-      await this.storeUserRecord(this.ownerPublicKey).catch(() => {})
-    }
-
-    await Promise.allSettled(
-      toPublish.map((evt, i) =>
-        this.emitPublish(evt, (event as Rumor).id).then(() => {
-          const deviceId = sentDeviceIds[i]
-          this.messageQueue.removeByTargetAndEventId(deviceId, (event as Rumor).id).catch(() => {})
-          this.flushMessageQueue(deviceId).catch(() => {})
-        })
+    try {
+      await this.preparePublishes(
+        toPublish.map((prepared, index) => ({
+          event: prepared,
+          innerEventId: completeEvent.id,
+          intentId: `${completeEvent.id}/${sentDeviceIds[index]}`,
+        }))
       )
-    )
+    } catch (error) {
+      this.hydrateUserRecords(recordsBefore)
+      throw error
+    }
 
     await Promise.allSettled(
       Array.from(queuedDeviceIds).map((deviceId) => this.flushMessageQueue(deviceId))
@@ -1297,6 +1362,12 @@ export class SessionManager {
 
     // Return the event with computed ID (same as library would compute)
     return completeEvent
+  }
+
+  private serializeOutboundTransition<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.outboundTransitionTail.then(operation, operation)
+    this.outboundTransitionTail = next.then(() => {}, () => {})
+    return next
   }
 
   async sendMessage(
@@ -1414,38 +1485,28 @@ export class SessionManager {
     this.setExpirationForPeer(adoption.peerPubkey, adoption.options).catch(() => {})
   }
 
-  private storeUserRecord(publicKey: string) {
-    const userRecord = this.userRecords.get(publicKey)
-    return this.userRecordStorage.storeUserRecord(publicKey, userRecord)
+  private storeUserRecord(_publicKey: string) {
+    return this.runtimeState.persistRecords(
+      () => serializeUserRecords(this.userRecords)
+    )
   }
 
-  private loadUserRecord(publicKey: string) {
-    return this.userRecordStorage
-      .loadUserRecord(publicKey)
-      .then((data) => {
-        if (!data) return
-        hydrateUserRecord({
-          data,
-          publicKey,
-          getOrCreateUserRecord: (ownerPubkey) => this.getOrCreateUserRecord(ownerPubkey),
-          rememberDelegate: (deviceId, ownerPubkey) => {
-            this.delegateToOwner.set(deviceId, ownerPubkey)
-          },
-          rememberProcessedInviteResponse: (eventId) => {
-            this.processedInviteResponses.add(eventId)
-          },
-        })
+  private hydrateUserRecords(records: ReturnType<typeof serializeUserRecords>): void {
+    for (const record of this.userRecords.values()) record.close()
+    this.userRecords.clear()
+    this.delegateToOwner.clear()
+    for (const data of records) {
+      hydrateUserRecord({
+        data,
+        publicKey: data.publicKey,
+        getOrCreateUserRecord: (ownerPubkey) => this.getOrCreateUserRecord(ownerPubkey),
+        rememberDelegate: (deviceId, ownerPubkey) => {
+          this.delegateToOwner.set(deviceId, ownerPubkey)
+        },
+        rememberProcessedInviteResponse: (eventId) => {
+          this.processedInviteResponses.add(eventId)
+        },
       })
-      .catch(() => {
-        // Failed to load user record
-      })
-  }
-
-  private loadAllUserRecords() {
-    return this.userRecordStorage
-      .loadAllUserRecordPubkeys()
-      .then((publicKeys) => Promise.all(
-        publicKeys.map((publicKey) => this.loadUserRecord(publicKey))
-      ))
+    }
   }
 }

@@ -249,7 +249,7 @@ describe("SessionManager.acceptInvite", () => {
     expect(decrypted.ownerPublicKey).toBe(ownerPublicKey)
   })
 
-  it("retries bootstrap publishes with a short future expiration window", async () => {
+  it("does not pre-ratchet fresh bootstrap events for scheduled retries", async () => {
     const relay = new MockRelay()
 
     const bob = await createMockSessionManager("bob-device-1", relay)
@@ -264,14 +264,18 @@ describe("SessionManager.acceptInvite", () => {
     const initialBootstrapEvents = relay
       .getAllEvents()
       .filter((event) => event.kind === 1060)
-    expect(initialBootstrapEvents).toHaveLength(1)
+    expect(initialBootstrapEvents.length).toBeGreaterThan(0)
+    const initialIds = initialBootstrapEvents.map((event) => event.id).sort()
 
     await new Promise((resolve) => setTimeout(resolve, 2_100))
 
     const retriedBootstrapEvents = relay
       .getAllEvents()
       .filter((event) => event.kind === 1060)
-    expect(retriedBootstrapEvents.length).toBeGreaterThanOrEqual(3)
+    expect(
+      [...new Set(retriedBootstrapEvents.map((event) => event.id))].sort()
+    ).toEqual([...new Set(initialIds)].sort())
+    expect(retriedBootstrapEvents.length).toBeGreaterThan(initialBootstrapEvents.length)
   }, 10_000)
 
   it("lets an unregistered same-owner device receive the inviter reply after sending first", async () => {
@@ -448,7 +452,8 @@ describe("SessionManager.acceptInvite", () => {
       .get(alice.publicKey)
       ?.devices
       .get(firstAccepted.deviceId)
-    expect(deviceRecord?.activeSession).toBe(firstAccepted.session)
+    const activeBeforeReplay = deviceRecord?.activeSession
+    expect(activeBeforeReplay).toBeDefined()
 
     const inviteResponsesBeforeReplay = relay
       .getAllEvents()
@@ -462,8 +467,8 @@ describe("SessionManager.acceptInvite", () => {
       .getAllEvents()
       .filter((event) => event.kind === 1059).length
     expect(inviteResponsesAfterReplay).toBe(inviteResponsesBeforeReplay)
-    expect(replayedAccepted.session).toBe(firstAccepted.session)
-    expect(deviceRecord?.activeSession).toBe(firstAccepted.session)
+    expect(replayedAccepted.session).toBe(activeBeforeReplay)
+    expect(deviceRecord?.activeSession).toBe(activeBeforeReplay)
   })
 
   it("ignores a replayed invite after the send-only session has been used", async () => {
@@ -498,6 +503,13 @@ describe("SessionManager.acceptInvite", () => {
     const inviteResponsesBeforeReplay = relay
       .getAllEvents()
       .filter((event) => event.kind === 1059).length
+    const activeBeforeReplay = bob.manager
+      .getUserRecords()
+      .get(alice.publicKey)
+      ?.devices
+      .get(firstAccepted.deviceId)
+      ?.activeSession
+    expect(activeBeforeReplay).toBeDefined()
 
     const replayedAccepted = await bob.manager.acceptInvite(invite, {
       ownerPublicKey: alice.publicKey,
@@ -507,7 +519,7 @@ describe("SessionManager.acceptInvite", () => {
       .getAllEvents()
       .filter((event) => event.kind === 1059).length
     expect(inviteResponsesAfterReplay).toBe(inviteResponsesBeforeReplay)
-    expect(replayedAccepted.session).toBe(firstAccepted.session)
+    expect(replayedAccepted.session).toBe(activeBeforeReplay)
   })
 
   it("reuses a same-device response-only import instead of forking on a mutual chat invite", async () => {

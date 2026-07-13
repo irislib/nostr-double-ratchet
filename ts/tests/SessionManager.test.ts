@@ -11,6 +11,30 @@ import { InMemoryStorageAdapter } from "../src/StorageAdapter"
 import { SessionManager } from "../src/SessionManager"
 import { MESSAGE_EVENT_KIND } from "../src/types"
 import { AppKeys } from "../src/AppKeys"
+import { serializeSessionState } from "../src/utils"
+
+class FailPreparedSnapshotStorage extends InMemoryStorageAdapter {
+  failPreparedInnerId: string | null = null
+
+  override async put<T>(key: string, value: T): Promise<void> {
+    const snapshot = value as {
+      outbound?: Array<{ type?: string }>
+    }
+    if (
+      this.failPreparedInnerId &&
+      key === "v2/runtime-snapshot" &&
+      snapshot.outbound?.some(
+        (entry) =>
+          entry.type === "prepared" &&
+          (entry as { innerEventId?: string }).innerEventId === this.failPreparedInnerId
+      )
+    ) {
+      this.failPreparedInnerId = null
+      throw new Error("injected prepared snapshot failure")
+    }
+    await super.put(key, value)
+  }
+}
 
 type DeviceRecordSnapshot = { inactiveSessions: unknown[] }
 
@@ -127,6 +151,62 @@ describe("SessionManager", () => {
         innerEventId: rumor.id,
       })
     })
+  })
+
+  it("rolls back ratchet state when the atomic prepared snapshot fails", async () => {
+    const relay = new MockRelay()
+    const storage = new FailPreparedSnapshotStorage()
+    const alice = await createMockSessionManager("alice", relay, undefined, storage)
+    const bob = await createMockSessionManager("bob", relay)
+
+    const bobReceived = new Promise<void>((resolve) => {
+      bob.manager.onEvent((event) => {
+        if (event.content === "establish") resolve()
+      })
+    })
+    await alice.manager.sendMessage(bob.publicKey, "establish")
+    await bobReceived
+    const aliceReceived = new Promise<void>((resolve) => {
+      alice.manager.onEvent((event) => {
+        if (event.content === "answer") resolve()
+      })
+    })
+    await bob.manager.sendMessage(alice.publicKey, "answer")
+    await aliceReceived
+
+    const sessionStates = () =>
+      Array.from(alice.manager.getUserRecords().values())
+        .flatMap((record) => Array.from(record.devices.values()))
+        .flatMap((device) => [
+          ...(device.activeSession ? [device.activeSession] : []),
+          ...device.inactiveSessions,
+        ])
+        .map((session) => `${session.name}:${serializeSessionState(session.state)}`)
+        .sort()
+    const stateBefore = sessionStates()
+    expect(stateBefore.length).toBeGreaterThan(0)
+    const now = Date.now()
+    const failedRumor = {
+      content: "must remain an intent",
+      kind: 14,
+      created_at: Math.floor(now / 1000),
+      tags: [["p", bob.publicKey], ["ms", String(now)]],
+      pubkey: alice.publicKey,
+      id: "",
+    }
+    failedRumor.id = getEventHash(failedRumor)
+    storage.failPreparedInnerId = failedRumor.id
+
+    await expect(
+      alice.manager.sendEvent(bob.publicKey, failedRumor)
+    ).rejects.toThrow("injected prepared snapshot failure")
+
+    expect(sessionStates()).toEqual(stateBefore)
+    expect(await alice.manager.queuedMessageDiagnostics()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ stage: "device" }),
+      ])
+    )
   })
 
   it("delegates outbound publishing to device records without requiring an active session", async () => {

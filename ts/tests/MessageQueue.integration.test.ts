@@ -7,15 +7,26 @@ import { AppKeys } from "../src/AppKeys"
 import { InMemoryStorageAdapter, StorageAdapter } from "../src/StorageAdapter"
 
 type StoredQueueEntry = {
+  type: "intent"
+  stage: "discovery" | "device"
   targetKey: string
   event: { id?: string }
 }
+
+type StoredRuntimeSnapshot = { outbound: StoredQueueEntry[] }
 
 class FailFirstMessageQueuePutStorage extends InMemoryStorageAdapter {
   private failed = false
 
   async put<T = unknown>(key: string, value: T): Promise<void> {
-    if (!this.failed && key.startsWith("v1/message-queue/")) {
+    const snapshot = value as StoredRuntimeSnapshot
+    if (
+      !this.failed &&
+      key === "v2/runtime-snapshot" &&
+      snapshot.outbound?.some(
+        (entry) => entry.type === "intent" && entry.stage === "device"
+      )
+    ) {
       this.failed = true
       throw new Error("injected message-queue put failure")
     }
@@ -29,15 +40,15 @@ const countQueueEntries = async (
   targetKey: string,
   eventId: string
 ): Promise<number> => {
-  const keys = await storage.list(prefix)
-  let count = 0
-  for (const key of keys) {
-    const entry = await storage.get<StoredQueueEntry>(key)
-    if (entry?.targetKey === targetKey && entry.event?.id === eventId) {
-      count += 1
-    }
-  }
-  return count
+  const snapshot = await storage.get<StoredRuntimeSnapshot>("v2/runtime-snapshot")
+  const stage = prefix.includes("discovery") ? "discovery" : "device"
+  return snapshot?.outbound.filter(
+    (entry) =>
+      entry.type === "intent" &&
+      entry.stage === stage &&
+      entry.targetKey === targetKey &&
+      entry.event.id === eventId
+  ).length ?? 0
 }
 
 const publishAppKeys = (

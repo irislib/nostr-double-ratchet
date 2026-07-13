@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import { finalizeEvent, generateSecretKey, getPublicKey, type UnsignedEvent, type VerifiedEvent } from "nostr-tools"
 import { Invite } from "../src/Invite"
-import { MessageQueue } from "../src/MessageQueue"
 import { Session } from "../src/Session"
 import { buildTextRumor, buildTypingRumor } from "../src/messageBuilders"
 import { InMemoryStorageAdapter } from "../src/StorageAdapter"
@@ -10,6 +9,38 @@ import { createSessionFromAccept, decryptInviteResponse } from "../src/inviteUti
 import type { NostrFacade, DeviceRecordUserHooks } from "../src/session-manager/types"
 import type { NostrSubscribe, Rumor, SessionState } from "../src/types"
 import { MockRelay } from "./helpers/mockRelay"
+
+class MessageQueue {
+  private entriesById = new Map<string, {
+    id: string
+    targetKey: string
+    event: Rumor
+    createdAt: number
+  }>()
+
+  constructor(..._unused: unknown[]) {}
+
+  async add(targetKey: string, event: Rumor): Promise<string> {
+    const id = `${event.id}/${targetKey}`
+    this.entriesById.set(id, { id, targetKey, event, createdAt: Date.now() })
+    return id
+  }
+
+  async getForTarget(targetKey: string) {
+    return Array.from(this.entriesById.values())
+      .filter((entry) => entry.targetKey === targetKey)
+  }
+
+  async removeByTargetAndEventId(targetKey: string, eventId: string) {
+    this.entriesById.delete(`${eventId}/${targetKey}`)
+  }
+
+  async removeForTarget(targetKey: string) {
+    for (const entry of this.entriesById.values()) {
+      if (entry.targetKey === targetKey) this.entriesById.delete(entry.id)
+    }
+  }
+}
 
 function createSubscribe(relay: MockRelay): NostrSubscribe {
   return (filter, onEvent) => {
