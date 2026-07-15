@@ -74,6 +74,17 @@ impl VerifiedAppKeysIndex {
             current.created_at_secs = created_at_secs;
             current.candidates.clear();
         }
+        // AppKeys publishers may re-encrypt labels or rotate non-authoritative
+        // tags without advancing the roster timestamp. Keep only one exact
+        // event for an equivalent authorization roster, while retaining
+        // genuinely different equal-time rosters so membership fails closed.
+        if current.candidates.values().any(|candidate| {
+            candidate
+                .app_keys
+                .has_equivalent_authorization_roster(&app_keys)
+        }) {
+            return Ok(false);
+        }
         Ok(current
             .candidates
             .insert(event.id, AppKeysAuthorizationCandidate { event, app_keys })
@@ -227,6 +238,16 @@ impl AppKeys {
 
     pub fn get_all_devices(&self) -> Vec<DeviceEntry> {
         self.devices.values().cloned().collect()
+    }
+
+    fn has_equivalent_authorization_roster(&self, other: &Self) -> bool {
+        self.devices.len() == other.devices.len()
+            && self.devices.iter().all(|(pubkey, device)| {
+                other
+                    .devices
+                    .get(pubkey)
+                    .is_some_and(|other_device| other_device.created_at == device.created_at)
+            })
     }
 
     pub fn set_device_labels(

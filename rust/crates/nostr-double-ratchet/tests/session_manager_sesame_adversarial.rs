@@ -690,6 +690,33 @@ fn equal_time_signed_conflict_suspends_owner_attribution_across_restore() -> Res
 }
 
 #[test]
+fn equivalent_equal_time_signed_app_keys_is_idempotent_across_restore() -> Result<()> {
+    let local = manager_device(61, 161);
+    let peer = manager_device(62, 162);
+    let peer_linked = manager_device(63, 163);
+    let mut manager = session_manager(&local);
+    let first = signed_app_keys_for(&peer, &[&peer, &peer_linked], 141);
+    let equivalent = signed_app_keys_for(&peer, &[&peer, &peer_linked], 141);
+
+    assert_ne!(first.id, equivalent.id);
+    assert!(manager.observe_peer_app_keys_event(first, UnixSeconds(141))?);
+    assert!(!manager.observe_peer_app_keys_event(equivalent, UnixSeconds(141))?);
+
+    let snapshot = manager.snapshot();
+    assert_eq!(snapshot.verified_peer_app_keys_events.len(), 1);
+    let restored = restore_manager(&snapshot, local.secret_key)?;
+    assert_eq!(restored.snapshot().verified_peer_app_keys_events.len(), 1);
+    assert!(
+        manager_device_snapshot(
+            manager_user_snapshot(&restored.snapshot(), peer.owner_pubkey),
+            peer_linked.device_pubkey,
+        )
+        .authorized
+    );
+    Ok(())
+}
+
+#[test]
 fn tampered_delivery_does_not_corrupt_receiver_state() -> Result<()> {
     let alice = manager_device(15, 151);
     let bob = manager_device(16, 161);
