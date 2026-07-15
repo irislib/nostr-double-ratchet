@@ -3,7 +3,7 @@ mod support;
 use nostr_double_ratchet::{DevicePubkey, Result, RosterEditor, UnixSeconds};
 use support::{
     context, manager_device, manager_device_snapshot, manager_public_device_invite,
-    manager_user_snapshot, prepared_targets, roster_for, session_manager,
+    manager_user_snapshot, observe_signed_peer_app_keys, prepared_targets, session_manager,
 };
 
 #[test]
@@ -79,7 +79,7 @@ fn roster_editor_can_drive_local_sibling_fanout_without_session_manager_crud() -
         manager_public_device_invite(&mut alice2_manager, &alice2, 42, 1_850_000_042)?,
     )?;
 
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 43));
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[&bob], 43)?;
     alice_manager.observe_device_invite(
         bob.owner_pubkey,
         manager_public_device_invite(&mut bob_manager, &bob, 43, 1_850_000_043)?,

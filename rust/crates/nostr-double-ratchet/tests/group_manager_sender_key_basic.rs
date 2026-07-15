@@ -10,7 +10,7 @@ use nostr_double_ratchet::{
 };
 use support::{
     context, manager_device, manager_observe_invite_response, manager_public_device_invite,
-    manager_receive_delivery, roster_for, session_manager, snapshot,
+    manager_receive_delivery, observe_signed_peer_app_keys, roster_for, session_manager, snapshot,
 };
 
 struct SenderKeyFixture {
@@ -169,8 +169,8 @@ fn established_sender_key_fixture(owner_fill: u8, base_secs: u64) -> Result<Send
     let mut alice_groups = GroupManager::new(alice.owner_pubkey);
     let mut bob_groups = GroupManager::new(bob.owner_pubkey);
 
-    bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], base_secs));
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], base_secs + 1));
+    observe_signed_peer_app_keys(&mut bob_manager, &alice, &[&alice], base_secs)?;
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[&bob], base_secs + 1)?;
     alice_manager.observe_device_invite(
         bob.owner_pubkey,
         manager_public_device_invite(&mut bob_manager, &bob, base_secs + 2, base_secs + 2)?,
@@ -224,12 +224,12 @@ fn late_member_repair_fixture(
     let mut bob_groups = GroupManager::new(bob.owner_pubkey);
     let mut carol_groups = GroupManager::new(carol.owner_pubkey);
 
-    bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], base_secs));
-    carol_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], base_secs + 1));
-    carol_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], base_secs + 2));
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], base_secs + 3));
-    alice_manager.observe_peer_roster(carol.owner_pubkey, roster_for(&[&carol], base_secs + 4));
-    bob_manager.observe_peer_roster(carol.owner_pubkey, roster_for(&[&carol], base_secs + 5));
+    observe_signed_peer_app_keys(&mut bob_manager, &alice, &[&alice], base_secs)?;
+    observe_signed_peer_app_keys(&mut carol_manager, &alice, &[&alice], base_secs + 1)?;
+    observe_signed_peer_app_keys(&mut carol_manager, &bob, &[&bob], base_secs + 2)?;
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[&bob], base_secs + 3)?;
+    observe_signed_peer_app_keys(&mut alice_manager, &carol, &[&carol], base_secs + 4)?;
+    observe_signed_peer_app_keys(&mut bob_manager, &carol, &[&carol], base_secs + 5)?;
     alice_manager.observe_device_invite(
         bob.owner_pubkey,
         manager_public_device_invite(&mut bob_manager, &bob, base_secs + 6, base_secs + 6)?,
@@ -384,8 +384,8 @@ fn sender_key_group_create_distributes_key_and_shared_message_decrypts() -> Resu
     let mut alice_groups = GroupManager::new(alice.owner_pubkey);
     let mut bob_groups = GroupManager::new(bob.owner_pubkey);
 
-    bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 10));
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 11));
+    observe_signed_peer_app_keys(&mut bob_manager, &alice, &[&alice], 10)?;
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[&bob], 11)?;
     alice_manager.observe_device_invite(
         bob.owner_pubkey,
         manager_public_device_invite(&mut bob_manager, &bob, 12, 1_900_010_000)?,
@@ -469,7 +469,7 @@ fn sender_key_group_create_syncs_to_local_sibling() -> Result<()> {
         alice1.owner_pubkey,
         manager_public_device_invite(&mut alice2_manager, &alice2, 41, 1_900_030_100)?,
     )?;
-    alice1_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 42));
+    observe_signed_peer_app_keys(&mut alice1_manager, &bob, &[&bob], 42)?;
     alice1_manager.observe_device_invite(
         bob.owner_pubkey,
         manager_public_device_invite(&mut bob_manager, &bob, 43, 1_900_030_101)?,
@@ -552,8 +552,8 @@ fn sender_key_local_sibling_can_repair_missed_rotated_distribution() -> Result<(
         alice1.owner_pubkey,
         manager_public_device_invite(&mut alice2_manager, &alice2, 1_900_077_001, 1_900_077_001)?,
     )?;
-    alice1_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 1_900_077_002));
-    alice1_manager.observe_peer_roster(carol.owner_pubkey, roster_for(&[&carol], 1_900_077_003));
+    observe_signed_peer_app_keys(&mut alice1_manager, &bob, &[&bob], 1_900_077_002)?;
+    observe_signed_peer_app_keys(&mut alice1_manager, &carol, &[&carol], 1_900_077_003)?;
     alice1_manager.observe_device_invite(
         bob.owner_pubkey,
         manager_public_device_invite(&mut bob_manager, &bob, 1_900_077_004, 1_900_077_004)?,
@@ -755,8 +755,8 @@ fn sender_key_outer_message_waits_for_distribution() -> Result<()> {
     let mut alice_groups = GroupManager::new(alice.owner_pubkey);
     let mut bob_groups = GroupManager::new(bob.owner_pubkey);
 
-    bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 20));
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 21));
+    observe_signed_peer_app_keys(&mut bob_manager, &alice, &[&alice], 20)?;
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[&bob], 21)?;
     alice_manager.observe_device_invite(
         bob.owner_pubkey,
         manager_public_device_invite(&mut bob_manager, &bob, 22, 1_900_020_000)?,
@@ -824,8 +824,8 @@ fn sender_key_repair_request_restores_original_distribution_after_sender_chain_a
     let mut alice_groups = GroupManager::new(alice.owner_pubkey);
     let mut bob_groups = GroupManager::new(bob.owner_pubkey);
 
-    bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 1_900_070_000));
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 1_900_070_001));
+    observe_signed_peer_app_keys(&mut bob_manager, &alice, &[&alice], 1_900_070_000)?;
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[&bob], 1_900_070_001)?;
     alice_manager.observe_device_invite(
         bob.owner_pubkey,
         manager_public_device_invite(&mut bob_manager, &bob, 1_900_070_002, 1_900_070_002)?,
@@ -1134,8 +1134,8 @@ fn sender_key_distribution_requires_authenticated_device_provenance() -> Result<
     let mut alice_groups = GroupManager::new(alice.owner_pubkey);
     let mut bob_groups = GroupManager::new(bob.owner_pubkey);
 
-    bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 30));
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 31));
+    observe_signed_peer_app_keys(&mut bob_manager, &alice, &[&alice], 30)?;
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[&bob], 31)?;
     alice_manager.observe_device_invite(
         bob.owner_pubkey,
         manager_public_device_invite(&mut bob_manager, &bob, 32, 1_900_030_000)?,
@@ -1453,13 +1453,13 @@ fn sender_key_added_member_receives_distribution_at_current_iteration() -> Resul
     let mut carol_manager = session_manager(&carol);
     let mut carol_groups = GroupManager::new(carol.owner_pubkey);
 
-    carol_manager.observe_peer_roster(
-        fixture.alice.owner_pubkey,
-        roster_for(&[&fixture.alice], 1_900_045_010),
-    );
-    fixture
-        .alice_manager
-        .observe_peer_roster(carol.owner_pubkey, roster_for(&[&carol], 1_900_045_011));
+    observe_signed_peer_app_keys(
+        &mut carol_manager,
+        &fixture.alice,
+        &[&fixture.alice],
+        1_900_045_010,
+    )?;
+    observe_signed_peer_app_keys(&mut fixture.alice_manager, &carol, &[&carol], 1_900_045_011)?;
     fixture.alice_manager.observe_device_invite(
         carol.owner_pubkey,
         manager_public_device_invite(&mut carol_manager, &carol, 1_900_045_012, 1_900_045_012)?,
@@ -1538,12 +1538,12 @@ fn sender_key_existing_member_distributes_current_key_to_late_member_on_next_sen
     let mut bob_groups = GroupManager::new(bob.owner_pubkey);
     let mut carol_groups = GroupManager::new(carol.owner_pubkey);
 
-    bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 1_900_045_100));
-    carol_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 1_900_045_101));
-    carol_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 1_900_045_102));
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 1_900_045_103));
-    alice_manager.observe_peer_roster(carol.owner_pubkey, roster_for(&[&carol], 1_900_045_104));
-    bob_manager.observe_peer_roster(carol.owner_pubkey, roster_for(&[&carol], 1_900_045_105));
+    observe_signed_peer_app_keys(&mut bob_manager, &alice, &[&alice], 1_900_045_100)?;
+    observe_signed_peer_app_keys(&mut carol_manager, &alice, &[&alice], 1_900_045_101)?;
+    observe_signed_peer_app_keys(&mut carol_manager, &bob, &[&bob], 1_900_045_102)?;
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[&bob], 1_900_045_103)?;
+    observe_signed_peer_app_keys(&mut alice_manager, &carol, &[&carol], 1_900_045_104)?;
+    observe_signed_peer_app_keys(&mut bob_manager, &carol, &[&carol], 1_900_045_105)?;
     alice_manager.observe_device_invite(
         bob.owner_pubkey,
         manager_public_device_invite(&mut bob_manager, &bob, 1_900_045_106, 1_900_045_106)?,
@@ -1693,10 +1693,10 @@ fn sender_key_removed_member_does_not_receive_rotated_future_key() -> Result<()>
     let mut bob_groups = GroupManager::new(bob.owner_pubkey);
     let mut carol_groups = GroupManager::new(carol.owner_pubkey);
 
-    bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 1_900_046_000));
-    carol_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 1_900_046_001));
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 1_900_046_002));
-    alice_manager.observe_peer_roster(carol.owner_pubkey, roster_for(&[&carol], 1_900_046_003));
+    observe_signed_peer_app_keys(&mut bob_manager, &alice, &[&alice], 1_900_046_000)?;
+    observe_signed_peer_app_keys(&mut carol_manager, &alice, &[&alice], 1_900_046_001)?;
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[&bob], 1_900_046_002)?;
+    observe_signed_peer_app_keys(&mut alice_manager, &carol, &[&carol], 1_900_046_003)?;
     alice_manager.observe_device_invite(
         bob.owner_pubkey,
         manager_public_device_invite(&mut bob_manager, &bob, 1_900_046_004, 1_900_046_004)?,
@@ -1820,11 +1820,11 @@ fn sender_key_existing_member_rotates_after_another_admin_removes_prior_recipien
     let mut bob_groups = GroupManager::new(bob.owner_pubkey);
     let mut carol_groups = GroupManager::new(carol.owner_pubkey);
 
-    bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 1_900_046_100));
-    carol_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 1_900_046_101));
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 1_900_046_102));
-    alice_manager.observe_peer_roster(carol.owner_pubkey, roster_for(&[&carol], 1_900_046_103));
-    bob_manager.observe_peer_roster(carol.owner_pubkey, roster_for(&[&carol], 1_900_046_104));
+    observe_signed_peer_app_keys(&mut bob_manager, &alice, &[&alice], 1_900_046_100)?;
+    observe_signed_peer_app_keys(&mut carol_manager, &alice, &[&alice], 1_900_046_101)?;
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[&bob], 1_900_046_102)?;
+    observe_signed_peer_app_keys(&mut alice_manager, &carol, &[&carol], 1_900_046_103)?;
+    observe_signed_peer_app_keys(&mut bob_manager, &carol, &[&carol], 1_900_046_104)?;
     alice_manager.observe_device_invite(
         bob.owner_pubkey,
         manager_public_device_invite(&mut bob_manager, &bob, 1_900_046_105, 1_900_046_105)?,

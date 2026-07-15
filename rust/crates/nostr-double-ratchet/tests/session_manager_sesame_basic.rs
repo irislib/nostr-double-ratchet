@@ -5,8 +5,9 @@ use nostr_double_ratchet::{
 };
 use support::{
     context, manager_device, manager_device_snapshot, manager_observe_invite_response,
-    manager_public_device_invite, manager_receive_delivery, manager_user_snapshot, payload_text,
-    prepared_targets, provisional_owner_pubkey, restore_manager, roster_for, session_manager,
+    manager_public_device_invite, manager_receive_delivery, manager_user_snapshot,
+    observe_signed_peer_app_keys, payload_text, prepared_targets, provisional_owner_pubkey,
+    restore_manager, roster_for, session_manager, signed_app_keys_for,
 };
 
 fn assert_gap(prepared: &nostr_double_ratchet::PreparedSend, expected: RelayGap) {
@@ -94,7 +95,7 @@ fn invite_observed_before_roster_becomes_usable_after_authorization() -> Result<
         },
     );
 
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 12));
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[&bob], 12)?;
     let mut send_ctx = context(12, 1_800_000_102);
     let after_auth =
         alice_manager.prepare_send(&mut send_ctx, bob.owner_pubkey, b"usable".to_vec())?;
@@ -123,7 +124,7 @@ fn prepare_send_fans_out_to_recipient_devices_and_local_siblings() -> Result<()>
         manager_public_device_invite(&mut alice2_manager, &alice2, 20, 1_800_000_200)?,
     )?;
 
-    alice_manager.observe_peer_roster(bob1.owner_pubkey, roster_for(&[&bob1, &bob2], 21));
+    observe_signed_peer_app_keys(&mut alice_manager, &bob1, &[&bob1, &bob2], 21)?;
     alice_manager.observe_device_invite(
         bob1.owner_pubkey,
         manager_public_device_invite(&mut bob1_manager, &bob1, 21, 1_800_000_201)?,
@@ -156,7 +157,7 @@ fn prepare_send_bootstraps_from_public_invite_and_returns_invite_response() -> R
     let mut alice_manager = session_manager(&alice);
     let mut bob_manager = session_manager(&bob);
 
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 30));
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[&bob], 30)?;
     alice_manager.observe_device_invite(
         bob.owner_pubkey,
         manager_public_device_invite(&mut bob_manager, &bob, 30, 1_800_000_300)?,
@@ -168,7 +169,7 @@ fn prepare_send_bootstraps_from_public_invite_and_returns_invite_response() -> R
     assert_eq!(prepared.deliveries.len(), 1);
     assert_eq!(prepared.invite_responses.len(), 1);
 
-    bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 29));
+    observe_signed_peer_app_keys(&mut bob_manager, &alice, &[&alice], 29)?;
     let mut observe_ctx = context(32, 1_800_000_302);
     let observed = manager_observe_invite_response(
         &mut bob_manager,
@@ -190,15 +191,15 @@ fn prepare_send_bootstraps_from_public_invite_and_returns_invite_response() -> R
 }
 
 #[test]
-fn removed_device_is_excluded_from_send_but_can_still_decrypt_while_stale() -> Result<()> {
+fn removed_device_is_excluded_from_send_and_receive_immediately() -> Result<()> {
     let alice = manager_device(9, 91);
     let bob = manager_device(10, 101);
 
     let mut alice_manager = session_manager(&alice);
     let mut bob_manager = session_manager(&bob);
 
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 40));
-    bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 40));
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[&bob], 40)?;
+    observe_signed_peer_app_keys(&mut bob_manager, &alice, &[&alice], 40)?;
     alice_manager.observe_device_invite(
         bob.owner_pubkey,
         manager_public_device_invite(&mut bob_manager, &bob, 41, 1_800_000_401)?,
@@ -229,7 +230,7 @@ fn removed_device_is_excluded_from_send_but_can_still_decrypt_while_stale() -> R
     let delayed =
         bob_manager.prepare_send(&mut bob_send_ctx, alice.owner_pubkey, b"late".to_vec())?;
 
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[], 50));
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[], 50)?;
     let mut after_removal_ctx = context(47, 1_800_000_407);
     let after_removal =
         alice_manager.prepare_send(&mut after_removal_ctx, bob.owner_pubkey, b"after".to_vec())?;
@@ -241,9 +242,8 @@ fn removed_device_is_excluded_from_send_but_can_still_decrypt_while_stale() -> R
         &mut receive_ctx,
         bob.owner_pubkey,
         &delayed.deliveries[0],
-    )?
-    .expect("stale device should still decrypt before prune");
-    assert_eq!(payload_text(&received.payload), "late");
+    )?;
+    assert!(received.is_none());
     Ok(())
 }
 
@@ -255,8 +255,8 @@ fn snapshot_roundtrip_preserves_established_active_sessions_without_new_bootstra
     let mut alice_manager = session_manager(&alice);
     let mut bob_manager = session_manager(&bob);
 
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 60));
-    bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 60));
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[&bob], 60)?;
+    observe_signed_peer_app_keys(&mut bob_manager, &alice, &[&alice], 60)?;
     alice_manager.observe_device_invite(
         bob.owner_pubkey,
         manager_public_device_invite(&mut bob_manager, &bob, 60, 1_800_000_500)?,
@@ -315,7 +315,7 @@ fn peer_device_added_after_conversation_bootstraps_only_new_device() -> Result<(
     let mut bob1_manager = session_manager(&bob1);
     let mut bob2_manager = session_manager(&bob2);
 
-    alice_manager.observe_peer_roster(bob1.owner_pubkey, roster_for(&[&bob1], 70));
+    observe_signed_peer_app_keys(&mut alice_manager, &bob1, &[&bob1], 70)?;
     alice_manager.observe_device_invite(
         bob1.owner_pubkey,
         manager_public_device_invite(&mut bob1_manager, &bob1, 70, 1_800_000_600)?,
@@ -325,7 +325,7 @@ fn peer_device_added_after_conversation_bootstraps_only_new_device() -> Result<(
     let first = alice_manager.prepare_send(&mut boot_ctx, bob1.owner_pubkey, b"first".to_vec())?;
     assert_eq!(first.invite_responses.len(), 1);
 
-    alice_manager.observe_peer_roster(bob1.owner_pubkey, roster_for(&[&bob1, &bob2], 72));
+    observe_signed_peer_app_keys(&mut alice_manager, &bob1, &[&bob1, &bob2], 72)?;
     alice_manager.observe_device_invite(
         bob2.owner_pubkey,
         manager_public_device_invite(&mut bob2_manager, &bob2, 72, 1_800_000_602)?,
@@ -345,7 +345,7 @@ fn newer_public_invite_supersedes_older_one() -> Result<()> {
     let bob = manager_device(16, 161);
     let mut manager = session_manager(&alice);
 
-    manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 80));
+    observe_signed_peer_app_keys(&mut manager, &bob, &[&bob], 80)?;
 
     let newer = support::custom_public_device_invite(&bob, 80, 1_800_000_700)?;
     let older = support::custom_public_device_invite(&bob, 81, 1_800_000_699)?;
@@ -375,7 +375,7 @@ fn verified_owner_claim_migrates_session_to_claimed_owner() -> Result<()> {
     let mut alice_manager = session_manager(&alice);
     let mut bob_manager = session_manager(&bob);
 
-    bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 82));
+    observe_signed_peer_app_keys(&mut bob_manager, &alice, &[&alice], 82)?;
     bob_manager.observe_device_invite(
         alice.owner_pubkey,
         manager_public_device_invite(&mut alice_manager, &alice, 82, 1_800_000_820)?,
@@ -397,7 +397,7 @@ fn verified_owner_claim_migrates_session_to_claimed_owner() -> Result<()> {
         provisional_owner_pubkey(bob.device_pubkey)
     );
 
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 83));
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[&bob], 83)?;
 
     let snapshot = alice_manager.snapshot();
     let verified_user = manager_user_snapshot(&snapshot, bob.owner_pubkey);
@@ -436,7 +436,7 @@ fn verified_roster_migrates_ownerless_provisional_invite_record() -> Result<()> 
     let provisional_device = manager_device_snapshot(provisional_user, bob.device_pubkey);
     assert!(provisional_device.public_invite.is_some());
 
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 86));
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[&bob], 86)?;
 
     let snapshot = alice_manager.snapshot();
     let verified_user = manager_user_snapshot(&snapshot, bob.owner_pubkey);
@@ -459,10 +459,11 @@ fn snapshot_is_deterministic_for_users_devices_and_sessions() -> Result<()> {
     let mut right = session_manager(&alice1);
     let mut alice2_manager = session_manager(&alice2);
     let mut bob1_manager = session_manager(&bob1);
+    let bob_app_keys = signed_app_keys_for(&bob1, &[&bob1], 91);
 
     for manager in [&mut left, &mut right] {
         manager.apply_local_roster(roster_for(&[&alice1, &alice2], 90));
-        manager.observe_peer_roster(bob1.owner_pubkey, roster_for(&[&bob1], 91));
+        manager.observe_peer_app_keys_event(bob_app_keys.clone(), UnixSeconds(91))?;
         manager.observe_device_invite(
             alice1.owner_pubkey,
             manager_public_device_invite(&mut alice2_manager, &alice2, 90, 1_800_000_800)?,

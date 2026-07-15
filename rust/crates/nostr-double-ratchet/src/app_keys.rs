@@ -6,7 +6,7 @@ use nostr::{
     UnsignedEvent,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use uuid::Uuid;
 
 pub const APP_KEYS_SNAPSHOT_KIND: u32 = 37368;
@@ -15,6 +15,131 @@ pub const APP_KEYS_FACT_TYPE: &str = "app_keys_roster_snapshot";
 pub const APP_KEYS_ENCRYPTED_DEVICE_LABELS_FACT: &str = "encrypted_device_labels";
 pub const APP_KEYS_ENCRYPTED_DEVICE_LABELS_SCHEMA: u64 = 1;
 pub const APP_KEYS_OWNER_PUBKEY_FACT: &str = "owner_pubkey";
+const APP_KEYS_AUTHORIZATION_MAX_EVENT_BYTES: usize = 64 * 1024;
+const APP_KEYS_AUTHORIZATION_MAX_DEVICES: usize = 64;
+const APP_KEYS_AUTHORIZATION_MAX_FUTURE_SKEW_SECS: u64 = 5 * 60;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceMembership {
+    Authorized,
+    Excluded,
+    Missing,
+    Ambiguous,
+}
+
+#[derive(Debug, Clone)]
+struct AppKeysAuthorizationCandidate {
+    event: Event,
+    app_keys: AppKeys,
+}
+
+#[derive(Debug, Clone)]
+struct VerifiedAppKeysHead {
+    created_at_secs: u64,
+    candidates: BTreeMap<nostr::EventId, AppKeysAuthorizationCandidate>,
+}
+
+/// Canonical owner-signed AppKeys heads observed through normal event ingestion.
+///
+/// Newer snapshots replace older ones. Conflicting snapshots at the same second
+/// remain visible so security-sensitive membership checks can fail closed.
+#[derive(Debug, Clone, Default)]
+pub struct VerifiedAppKeysIndex {
+    heads: BTreeMap<PublicKey, VerifiedAppKeysHead>,
+}
+
+impl VerifiedAppKeysIndex {
+    pub fn ingest(&mut self, event: Event, now_secs: u64) -> Result<bool> {
+        let owner = event.pubkey;
+        let app_keys = app_keys_authorization_candidate(owner, &event, now_secs)?;
+        let created_at_secs = event.created_at.as_secs();
+        let Some(current) = self.heads.get_mut(&owner) else {
+            self.heads.insert(
+                owner,
+                VerifiedAppKeysHead {
+                    created_at_secs,
+                    candidates: BTreeMap::from([(
+                        event.id,
+                        AppKeysAuthorizationCandidate { event, app_keys },
+                    )]),
+                },
+            );
+            return Ok(true);
+        };
+
+        if created_at_secs < current.created_at_secs {
+            return Ok(false);
+        }
+        if created_at_secs > current.created_at_secs {
+            current.created_at_secs = created_at_secs;
+            current.candidates.clear();
+        }
+        Ok(current
+            .candidates
+            .insert(event.id, AppKeysAuthorizationCandidate { event, app_keys })
+            .is_none())
+    }
+
+    pub fn membership(&self, owner: PublicKey, device: PublicKey) -> DeviceMembership {
+        let Some(head) = self.heads.get(&owner) else {
+            return DeviceMembership::Missing;
+        };
+        let membership = head
+            .candidates
+            .values()
+            .map(|candidate| candidate.app_keys.get_device(&device).is_some())
+            .collect::<BTreeSet<_>>();
+        if membership.len() != 1 {
+            DeviceMembership::Ambiguous
+        } else if membership.contains(&true) {
+            DeviceMembership::Authorized
+        } else {
+            DeviceMembership::Excluded
+        }
+    }
+
+    pub fn events_for_owner(&self, owner: PublicKey) -> Vec<Event> {
+        self.heads
+            .get(&owner)
+            .map(|head| {
+                head.candidates
+                    .values()
+                    .map(|candidate| candidate.event.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn events(&self) -> Vec<Event> {
+        self.heads
+            .values()
+            .flat_map(|head| {
+                head.candidates
+                    .values()
+                    .map(|candidate| candidate.event.clone())
+            })
+            .collect()
+    }
+
+    pub(crate) fn owners(&self) -> Vec<PublicKey> {
+        self.heads.keys().copied().collect()
+    }
+
+    pub(crate) fn head_created_at(&self, owner: PublicKey) -> Option<u64> {
+        self.heads.get(&owner).map(|head| head.created_at_secs)
+    }
+
+    pub(crate) fn app_keys_for_event(
+        &self,
+        owner: PublicKey,
+        event_id: nostr::EventId,
+    ) -> Option<AppKeys> {
+        self.heads
+            .get(&owner)
+            .and_then(|head| head.candidates.get(&event_id))
+            .map(|candidate| candidate.app_keys.clone())
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct DeviceEntry {
@@ -486,6 +611,49 @@ pub fn resolve_app_keys_owner_for_device(
 ) -> Result<Option<PublicKey>> {
     let app_keys = AppKeys::from_event(event)?;
     Ok(app_keys.get_device(&device_pubkey).map(|_| event.pubkey))
+}
+
+fn app_keys_authorization_candidate(
+    owner: PublicKey,
+    event: &Event,
+    now_secs: u64,
+) -> Result<AppKeys> {
+    if event.pubkey != owner {
+        return Err(Error::InvalidEvent(
+            "AppKeys authorization owner mismatch".to_string(),
+        ));
+    }
+    if event.created_at.as_secs()
+        > now_secs.saturating_add(APP_KEYS_AUTHORIZATION_MAX_FUTURE_SKEW_SECS)
+    {
+        return Err(Error::InvalidEvent(
+            "AppKeys authorization event is too far in the future".to_string(),
+        ));
+    }
+    if serde_json::to_vec(event)?.len() > APP_KEYS_AUTHORIZATION_MAX_EVENT_BYTES {
+        return Err(Error::InvalidEvent(
+            "AppKeys authorization event is too large".to_string(),
+        ));
+    }
+    let device_tags = event
+        .tags
+        .iter()
+        .filter(|tag| tag.as_slice().first().map(|value| value.as_str()) == Some("device"))
+        .collect::<Vec<_>>();
+    if device_tags.len() > APP_KEYS_AUTHORIZATION_MAX_DEVICES {
+        return Err(Error::InvalidEvent(
+            "AppKeys authorization roster has too many devices".to_string(),
+        ));
+    }
+    if device_tags.iter().any(|tag| {
+        let values = tag.as_slice();
+        values.len() < 3 || values[2].parse::<u64>().is_err()
+    }) {
+        return Err(Error::InvalidEvent(
+            "AppKeys authorization device tag is malformed".to_string(),
+        ));
+    }
+    AppKeys::from_event(event)
 }
 
 fn tag_values(event: &Event, name: &str) -> Vec<String> {

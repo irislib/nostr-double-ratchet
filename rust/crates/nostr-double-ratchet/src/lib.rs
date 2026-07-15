@@ -24,9 +24,10 @@ pub mod wire;
 pub use app_keys::{
     build_app_keys_device_authorization_filter,
     encrypted_device_label_payloads_from_app_keys_event, is_app_keys_event,
-    resolve_app_keys_owner_for_device, AppKeys, DeviceEntry, DeviceLabels,
-    APP_KEYS_ENCRYPTED_DEVICE_LABELS_FACT, APP_KEYS_ENCRYPTED_DEVICE_LABELS_SCHEMA,
-    APP_KEYS_FACT_TYPE, APP_KEYS_OWNER_PUBKEY_FACT, APP_KEYS_SCHEMA, APP_KEYS_SNAPSHOT_KIND,
+    resolve_app_keys_owner_for_device, AppKeys, DeviceEntry, DeviceLabels, DeviceMembership,
+    VerifiedAppKeysIndex, APP_KEYS_ENCRYPTED_DEVICE_LABELS_FACT,
+    APP_KEYS_ENCRYPTED_DEVICE_LABELS_SCHEMA, APP_KEYS_FACT_TYPE, APP_KEYS_OWNER_PUBKEY_FACT,
+    APP_KEYS_SCHEMA, APP_KEYS_SNAPSHOT_KIND,
 };
 pub use device_link::{
     deterministic_link_invite_for_device, deterministic_link_invite_for_device_link_request,
