@@ -7,10 +7,11 @@ use nostr::{
 };
 use nostr_double_ratchet::wire as codec;
 use nostr_double_ratchet::{
-    AuthorizedDevice, Delivery, DevicePubkey, DeviceRecordSnapshot, DeviceRoster, Invite,
-    InviteResponse, InviteResponseEnvelope, MessageEnvelope, OwnerPubkey, PreparedSend,
-    ProcessedInviteResponse, ProtocolContext, ReceivedMessage, Result, RosterSnapshotDecision,
-    Session, SessionManager, SessionManagerSnapshot, SessionState, UnixSeconds, UserRecordSnapshot,
+    AppKeys, AuthorizedDevice, Delivery, DeviceEntry, DevicePubkey, DeviceRecordSnapshot,
+    DeviceRoster, Invite, InviteResponse, InviteResponseEnvelope, MessageEnvelope, OwnerPubkey,
+    PreparedSend, ProcessedInviteResponse, ProtocolContext, ReceivedMessage, Result,
+    RosterSnapshotDecision, Session, SessionManager, SessionManagerSnapshot, SessionState,
+    UnixSeconds, UserRecordSnapshot,
 };
 use rand::{rngs::StdRng, CryptoRng, RngCore, SeedableRng};
 use serde::Serialize;
@@ -131,6 +132,34 @@ pub fn roster_for(devices: &[&ManagerDevice], created_at: u64) -> DeviceRoster {
             .iter()
             .map(|device| AuthorizedDevice::new(device.device_pubkey, UnixSeconds(created_at)))
             .collect(),
+    )
+}
+
+pub fn signed_app_keys_for(
+    owner: &ManagerDevice,
+    devices: &[&ManagerDevice],
+    created_at: u64,
+) -> Event {
+    AppKeys::new(
+        devices
+            .iter()
+            .map(|device| DeviceEntry::new(device.device_pubkey.to_nostr().unwrap(), created_at))
+            .collect(),
+    )
+    .get_event_at(owner.owner_keys.public_key(), created_at)
+    .sign_with_keys(&owner.owner_keys)
+    .expect("signed AppKeys")
+}
+
+pub fn observe_signed_peer_app_keys(
+    manager: &mut SessionManager,
+    owner: &ManagerDevice,
+    devices: &[&ManagerDevice],
+    created_at: u64,
+) -> Result<bool> {
+    manager.observe_peer_app_keys_event(
+        signed_app_keys_for(owner, devices, created_at),
+        UnixSeconds(created_at),
     )
 }
 
@@ -583,13 +612,6 @@ pub trait SessionManagerCompatExt {
         observed_at: UnixSeconds,
     ) -> RosterSnapshotDecision;
 
-    fn observe_peer_app_keys(
-        &mut self,
-        owner_pubkey: OwnerPubkey,
-        roster: DeviceRoster,
-        observed_at: UnixSeconds,
-    ) -> RosterSnapshotDecision;
-
     fn prepare_send_text<R>(
         &mut self,
         ctx: &mut ProtocolContext<'_, R>,
@@ -618,15 +640,6 @@ impl SessionManagerCompatExt for SessionManager {
         _observed_at: UnixSeconds,
     ) -> RosterSnapshotDecision {
         self.apply_local_roster(roster)
-    }
-
-    fn observe_peer_app_keys(
-        &mut self,
-        owner_pubkey: OwnerPubkey,
-        roster: DeviceRoster,
-        _observed_at: UnixSeconds,
-    ) -> RosterSnapshotDecision {
-        self.observe_peer_roster(owner_pubkey, roster)
     }
 
     fn prepare_send_text<R>(

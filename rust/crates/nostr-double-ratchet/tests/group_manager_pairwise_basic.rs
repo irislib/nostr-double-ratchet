@@ -6,7 +6,7 @@ use nostr_double_ratchet::{
 };
 use support::{
     context, manager_device, manager_observe_invite_response, manager_public_device_invite,
-    manager_receive_delivery, roster_for, session_manager, snapshot,
+    manager_receive_delivery, observe_signed_peer_app_keys, roster_for, session_manager, snapshot,
 };
 
 fn observe_matching_invite_responses(
@@ -140,8 +140,8 @@ fn retry_create_group_reuses_existing_group_id_without_remutating_state() -> Res
     assert_eq!(created.prepared.remote.deliveries.len(), 0);
     assert_eq!(alice_groups.groups().len(), 1);
 
-    bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 60));
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 61));
+    observe_signed_peer_app_keys(&mut bob_manager, &alice, &[&alice], 60)?;
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[&bob], 61)?;
     alice_manager.observe_device_invite(
         bob.owner_pubkey,
         manager_public_device_invite(&mut bob_manager, &bob, 18, 1_900_001_101)?,
@@ -200,8 +200,8 @@ fn add_members_bootstraps_new_member_with_current_group_state() -> Result<()> {
         vec![],
     )?;
 
-    bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 10));
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 11));
+    observe_signed_peer_app_keys(&mut bob_manager, &alice, &[&alice], 10)?;
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[&bob], 11)?;
     alice_manager.observe_device_invite(
         bob.owner_pubkey,
         manager_public_device_invite(&mut bob_manager, &bob, 3, 1_900_000_101)?,
@@ -286,8 +286,8 @@ fn retry_add_members_reuses_applied_group_state() -> Result<()> {
         }]
     );
 
-    bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 62));
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 63));
+    observe_signed_peer_app_keys(&mut bob_manager, &alice, &[&alice], 62)?;
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[&bob], 63)?;
     alice_manager.observe_device_invite(
         bob.owner_pubkey,
         manager_public_device_invite(&mut bob_manager, &bob, 23, 1_900_001_201)?,
@@ -342,12 +342,12 @@ fn create_and_send_message_fan_out_to_remote_member_and_local_sibling() -> Resul
 
     alice1_manager.apply_local_roster(roster_for(&[&alice1, &alice2], 20));
     alice2_manager.apply_local_roster(roster_for(&[&alice1, &alice2], 20));
-    bob_manager.observe_peer_roster(alice1.owner_pubkey, roster_for(&[&alice1], 20));
+    observe_signed_peer_app_keys(&mut bob_manager, &alice1, &[&alice1], 20)?;
     alice1_manager.observe_device_invite(
         alice1.owner_pubkey,
         manager_public_device_invite(&mut alice2_manager, &alice2, 20, 1_900_000_200)?,
     )?;
-    alice1_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 21));
+    observe_signed_peer_app_keys(&mut alice1_manager, &bob, &[&bob], 21)?;
     alice1_manager.observe_device_invite(
         bob.owner_pubkey,
         manager_public_device_invite(&mut bob_manager, &bob, 21, 1_900_000_201)?,
@@ -477,7 +477,7 @@ fn send_message_bootstraps_existing_group_to_new_local_sibling() -> Result<()> {
     let _bob_groups = GroupManager::new(bob.owner_pubkey);
 
     alice1_manager.apply_local_roster(roster_for(&[&alice1], 70));
-    alice1_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 71));
+    observe_signed_peer_app_keys(&mut alice1_manager, &bob, &[&bob], 71)?;
     alice1_manager.observe_device_invite(
         bob.owner_pubkey,
         manager_public_device_invite(&mut bob_manager, &bob, 72, 1_900_001_300)?,
@@ -554,7 +554,7 @@ fn send_message_merges_relay_gaps_from_members_without_transport_state() -> Resu
     )?;
     assert_eq!(created.prepared.remote.relay_gaps.len(), 2);
 
-    manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 31));
+    observe_signed_peer_app_keys(&mut manager, &bob, &[&bob], 31)?;
     let mut send_ctx = context(16, 1_900_000_301);
     let prepared = groups.send_message(
         &mut manager,

@@ -7,7 +7,7 @@ use nostr_double_ratchet::{
     DevicePubkey, DomainError, Error, GroupIncomingEvent, GroupPairwiseCommand, GroupPayloadCodec,
     GroupPayloadEncodeContext, GroupProtocol, GroupSnapshot, OwnerPubkey, Result, UnixSeconds,
 };
-use support::{context, manager_device, roster_for, session_manager};
+use support::{context, manager_device, observe_signed_peer_app_keys, session_manager};
 
 fn create_remote_owned_group(
     local_owner: OwnerPubkey,
@@ -346,8 +346,8 @@ fn removed_member_cannot_send_after_processing_removal() -> Result<()> {
     let mut alice_groups = GroupManager::new(alice.owner_pubkey);
     let mut bob_groups = GroupManager::new(bob.owner_pubkey);
 
-    bob_manager.observe_peer_roster(alice.owner_pubkey, roster_for(&[&alice], 49));
-    alice_manager.observe_peer_roster(bob.owner_pubkey, roster_for(&[&bob], 50));
+    observe_signed_peer_app_keys(&mut bob_manager, &alice, &[&alice], 49)?;
+    observe_signed_peer_app_keys(&mut alice_manager, &bob, &[&bob], 50)?;
     alice_manager.observe_device_invite(
         bob.owner_pubkey,
         support::manager_public_device_invite(&mut bob_manager, &bob, 8, 1_900_001_040)?,

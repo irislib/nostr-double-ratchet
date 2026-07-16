@@ -2,8 +2,21 @@ use nostr::Keys;
 use nostr_double_ratchet::Result;
 use nostr_double_ratchet::{
     build_app_keys_device_authorization_filter, resolve_app_keys_owner_for_device, AppKeys,
-    DeviceEntry, APP_KEYS_ENCRYPTED_DEVICE_LABELS_FACT,
+    DeviceEntry, DeviceMembership, VerifiedAppKeysIndex, APP_KEYS_ENCRYPTED_DEVICE_LABELS_FACT,
 };
+
+fn signed_app_keys(owner: &Keys, devices: &[nostr::PublicKey], created_at: u64) -> nostr::Event {
+    AppKeys::new(
+        devices
+            .iter()
+            .copied()
+            .map(|device| DeviceEntry::new(device, created_at))
+            .collect(),
+    )
+    .get_event_at(owner.public_key(), created_at)
+    .sign_with_keys(owner)
+    .expect("signed AppKeys")
+}
 
 #[test]
 fn test_app_keys_roundtrip_and_merge() -> Result<()> {
@@ -124,4 +137,96 @@ fn test_app_keys_device_authorization_filter_and_owner_resolution() -> Result<()
     );
 
     Ok(())
+}
+
+#[test]
+fn ordinary_signed_app_keys_authorizes_exact_owner_device_binding() {
+    let owner = Keys::generate();
+    let device = Keys::generate().public_key();
+    let event = signed_app_keys(&owner, &[device], 100);
+
+    let mut index = VerifiedAppKeysIndex::default();
+    assert!(index.ingest(event, 100).unwrap());
+    assert_eq!(
+        index.membership(owner.public_key(), device),
+        DeviceMembership::Authorized
+    );
+}
+
+#[test]
+fn missing_app_keys_does_not_authorize() {
+    let owner = Keys::generate();
+    let device = Keys::generate().public_key();
+    let index = VerifiedAppKeysIndex::default();
+
+    assert_eq!(
+        index.membership(owner.public_key(), device),
+        DeviceMembership::Missing
+    );
+}
+
+#[test]
+fn newer_signed_exclusion_replaces_stale_inclusion() {
+    let owner = Keys::generate();
+    let device = Keys::generate().public_key();
+    let included = signed_app_keys(&owner, &[device], 100);
+    let excluded = signed_app_keys(&owner, &[], 101);
+
+    let mut index = VerifiedAppKeysIndex::default();
+    assert!(index.ingest(included, 101).unwrap());
+    assert!(index.ingest(excluded, 101).unwrap());
+    assert_eq!(
+        index.membership(owner.public_key(), device),
+        DeviceMembership::Excluded
+    );
+}
+
+#[test]
+fn equal_time_membership_conflict_is_ambiguous_in_both_orders() {
+    let owner = Keys::generate();
+    let device = Keys::generate().public_key();
+    let included = signed_app_keys(&owner, &[device], 100);
+    let excluded = signed_app_keys(&owner, &[], 100);
+
+    for events in [
+        vec![included.clone(), excluded.clone()],
+        vec![excluded.clone(), included.clone()],
+    ] {
+        let mut index = VerifiedAppKeysIndex::default();
+        for event in events {
+            index.ingest(event, 100).unwrap();
+        }
+        assert_eq!(
+            index.membership(owner.public_key(), device),
+            DeviceMembership::Ambiguous
+        );
+    }
+}
+
+#[test]
+fn wrong_owner_and_future_app_keys_do_not_authorize() {
+    let owner = Keys::generate();
+    let attacker = Keys::generate();
+    let device = Keys::generate().public_key();
+    let wrong_owner = signed_app_keys(&attacker, &[device], 100);
+    let future = signed_app_keys(&owner, &[device], 401);
+
+    let mut index = VerifiedAppKeysIndex::default();
+    assert!(index.ingest(wrong_owner, 100).is_ok());
+    assert!(index.ingest(future, 100).is_err());
+    assert_eq!(
+        index.membership(owner.public_key(), device),
+        DeviceMembership::Missing
+    );
+}
+
+#[test]
+fn exact_heads_round_trip_for_restart_recovery() {
+    let owner = Keys::generate();
+    let device = Keys::generate().public_key();
+    let event = signed_app_keys(&owner, &[device], 100);
+    let mut index = VerifiedAppKeysIndex::default();
+    index.ingest(event.clone(), 100).unwrap();
+
+    assert_eq!(index.events_for_owner(owner.public_key()), vec![event]);
 }

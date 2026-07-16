@@ -311,18 +311,6 @@ pub fn resolve_invite_owner_routing(
         };
     }
 
-    // A private invite is a bearer-capability link. Its owner claim is carried
-    // out-of-band in the link rather than discovered from relay AppKeys first.
-    if invite_purpose == Some("private") {
-        return InviteOwnerRoutingResolution {
-            owner_pubkey: claimed_owner_pubkey,
-            claimed_owner_pubkey,
-            verified_with_app_keys: false,
-            used_link_bootstrap_exception: false,
-            fell_back_to_device_identity: false,
-        };
-    }
-
     InviteOwnerRoutingResolution {
         owner_pubkey: device_pubkey,
         claimed_owner_pubkey,
@@ -473,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn trusts_private_invite_owner_claim_without_appkeys() {
+    fn private_invite_owner_claim_falls_back_to_device_without_appkeys() {
         let device = Keys::generate().public_key();
         let owner = Keys::generate().public_key();
         let current_owner = Keys::generate().public_key();
@@ -481,9 +469,9 @@ mod tests {
         let resolved =
             resolve_invite_owner_routing(device, owner, Some("private"), current_owner, None);
 
-        assert_eq!(resolved.owner_pubkey, owner);
+        assert_eq!(resolved.owner_pubkey, device);
         assert!(!resolved.verified_with_app_keys);
-        assert!(!resolved.fell_back_to_device_identity);
+        assert!(resolved.fell_back_to_device_identity);
     }
 
     #[test]
