@@ -5,7 +5,7 @@ import {
   type GroupDecryptedEvent,
   type PairwiseSend,
   type PublishOuter,
-} from "./GroupChannel";
+} from "./GroupChannel.js";
 import {
   applyMetadataUpdate,
   buildGroupRosterFactEvent,
@@ -20,26 +20,26 @@ import {
   parseGroupRosterFactRumor,
   validateMetadataCreation,
   validateMetadataUpdate,
-} from "./GroupMeta";
+} from "./GroupMeta.js";
 import {
   classifyMessageOrigin,
   isCrossDeviceSelfOrigin,
   isSelfOrigin,
-} from "./MessageOrigin";
-import { OneToManyChannel } from "./OneToManyChannel";
+} from "./MessageOrigin.js";
+import { OneToManyChannel } from "./OneToManyChannel.js";
 import {
   parseSenderKeyRepairRequestRumor,
   type SenderKeyRepairRequest,
-} from "./SenderKeyRepair";
-import type { SenderKeyDistribution } from "./SenderKey";
-import { InMemoryStorageAdapter, type StorageAdapter } from "./StorageAdapter";
+} from "./SenderKeyRepair.js";
+import type { SenderKeyDistribution } from "./SenderKey.js";
+import { InMemoryStorageAdapter, type StorageAdapter } from "./StorageAdapter.js";
 import {
   CHAT_MESSAGE_KIND,
   type NostrFetch,
   type NostrSubscribe,
   type Rumor,
   type Unsubscribe,
-} from "./types";
+} from "./types.js";
 
 export interface GroupManagerErrorContext {
   operation:

@@ -9,8 +9,8 @@ import {
   type ExpirationOptions,
   type ReceiptType,
   type Rumor,
-} from "./types"
-import { resolveExpirationSeconds, upsertExpirationTag } from "./utils"
+} from "./types.js"
+import { resolveExpirationSeconds, upsertExpirationTag } from "./utils.js"
 
 export const DUMMY_INNER_PUBKEY =
   "0000000000000000000000000000000000000000000000000000000000000000"

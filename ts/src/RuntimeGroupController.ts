@@ -5,14 +5,14 @@ import {
   type GroupDecryptedEvent,
   GROUP_ROSTER_FACT_KIND,
   GROUP_SENDER_KEY_DISTRIBUTION_KIND,
-} from "./Group";
+} from "./Group.js";
 import {
   classifyMessageOrigin,
   isCrossDeviceSelfOrigin,
   isSelfOrigin,
-} from "./MessageOrigin";
-import type { SessionManager } from "./SessionManager";
-import { InMemoryStorageAdapter, type StorageAdapter } from "./StorageAdapter";
+} from "./MessageOrigin.js";
+import type { SessionManager } from "./SessionManager.js";
+import { InMemoryStorageAdapter, type StorageAdapter } from "./StorageAdapter.js";
 import {
   CHAT_MESSAGE_KIND,
   type NostrFetch,
@@ -20,8 +20,8 @@ import {
   type NostrSubscribe,
   type Rumor,
   type Unsubscribe,
-} from "./types";
-import type { OnEventMeta } from "./session-manager/types";
+} from "./types.js";
+import type { OnEventMeta } from "./session-manager/types.js";
 import type { VerifiedEvent } from "nostr-tools";
 
 export interface SendGroupEventOptions {

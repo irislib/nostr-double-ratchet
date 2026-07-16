@@ -1,11 +1,11 @@
-import { GROUP_ROSTER_FACT_KIND } from "../GroupMeta"
+import { GROUP_ROSTER_FACT_KIND } from "../GroupMeta.js"
 import {
   CHAT_SETTINGS_KIND,
   type ChatSettingsPayloadV1,
   type ExpirationOptions,
   type Rumor,
-} from "../types"
-import { resolveExpirationSeconds, upsertExpirationTag } from "../utils"
+} from "../types.js"
+import { resolveExpirationSeconds, upsertExpirationTag } from "../utils.js"
 
 export type ExpirationOverride = ExpirationOptions | null | undefined
 

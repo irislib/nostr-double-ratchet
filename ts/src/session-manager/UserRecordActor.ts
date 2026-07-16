@@ -2,16 +2,16 @@ import {
   AppKeys,
   applyAppKeysSnapshotPreservingLabels,
   buildAppKeysFilter,
-} from "../AppKeys"
-import type { Rumor } from "../types"
+} from "../AppKeys.js"
+import type { Rumor } from "../types.js"
 import type { VerifiedEvent } from "nostr-tools"
-import { DeviceRecordActor } from "./DeviceRecordActor"
+import { DeviceRecordActor } from "./DeviceRecordActor.js"
 import type {
   Unsubscribe,
   UserRecord as UserRecordShape,
   UserRecordDeps,
   UserSetupState,
-} from "./types"
+} from "./types.js"
 
 export class UserRecordActor implements UserRecordShape {
   private static readonly RECENT_OWN_DEVICE_SESSION_GRACE_MS = 5 * 60 * 1000

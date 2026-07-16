@@ -1,6 +1,6 @@
 import { getPublicKey, generateSecretKey } from "nostr-tools";
 
-import { Invite } from "./Invite";
+import { Invite } from "./Invite.js";
 
 export interface DeviceLinkRequest {
   requestPubkey: string;

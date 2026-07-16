@@ -1,5 +1,5 @@
-import type { Session } from "../Session"
-import type { UserRecordActor } from "./UserRecordActor"
+import type { Session } from "../Session.js"
+import type { UserRecordActor } from "./UserRecordActor.js"
 
 export function sessionMessageAuthorPubkeys(session: Session): string[] {
   const authors = new Set<string>()

@@ -10,8 +10,8 @@ import {
   TYPING_KIND,
   EXPIRATION_TAG,
   ExpirationOptions,
-} from "./types";
-import type { Session } from "./Session.ts";
+} from "./types.js";
+import type { Session } from "./Session.js";
 import { extract as hkdf_extract, expand as hkdf_expand } from '@noble/hashes/hkdf';
 import { sha256 } from '@noble/hashes/sha256';
 

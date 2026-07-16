@@ -11,26 +11,26 @@ import {
   GROUP_SENDER_KEY_DISTRIBUTION_KIND,
   GROUP_SENDER_KEY_REPAIR_REQUEST_KIND,
   type GroupData,
-} from "./GroupMeta";
+} from "./GroupMeta.js";
 import {
   classifyMessageOrigin,
   isCrossDeviceSelfOrigin,
   isSelfOrigin,
   type MessageOrigin,
-} from "./MessageOrigin";
-import { OneToManyChannel } from "./OneToManyChannel";
+} from "./MessageOrigin.js";
+import { OneToManyChannel } from "./OneToManyChannel.js";
 import {
   buildSenderKeyRepairRequestRumor,
   parseSenderKeyRepairRequestRumor,
   type SenderKeyRepairRequest,
-} from "./SenderKeyRepair";
+} from "./SenderKeyRepair.js";
 import type {
   SenderKeyDistribution,
   SenderKeyStateSerialized,
-} from "./SenderKey";
-import { SenderKeyState } from "./SenderKey";
-import { InMemoryStorageAdapter, type StorageAdapter } from "./StorageAdapter";
-import { CHAT_MESSAGE_KIND, MESSAGE_EVENT_KIND, type Rumor } from "./types";
+} from "./SenderKey.js";
+import { SenderKeyState } from "./SenderKey.js";
+import { InMemoryStorageAdapter, type StorageAdapter } from "./StorageAdapter.js";
+import { CHAT_MESSAGE_KIND, MESSAGE_EVENT_KIND, type Rumor } from "./types.js";
 
 export type PairwiseSend = (
   recipientOwnerPubkey: string,

@@ -1,5 +1,5 @@
-import { StorageAdapter } from "./StorageAdapter"
-import { Rumor } from "./types"
+import { StorageAdapter } from "./StorageAdapter.js"
+import { Rumor } from "./types.js"
 
 export interface QueueEntry {
   id: string

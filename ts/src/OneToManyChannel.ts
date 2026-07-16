@@ -7,9 +7,9 @@ import {
 } from "nostr-tools";
 import * as nip44 from "nostr-tools/nip44";
 
-import { MESSAGE_EVENT_KIND } from "./types";
-import { base64Decode, base64Encode } from "./base64";
-import { SenderKeyState } from "./SenderKey";
+import { MESSAGE_EVENT_KIND } from "./types.js";
+import { base64Decode, base64Encode } from "./base64.js";
+import { SenderKeyState } from "./SenderKey.js";
 
 /**
  * Parsed one-to-many outer payload.

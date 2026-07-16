@@ -14,60 +14,60 @@ import {
   MESSAGE_EVENT_KIND,
   INVITE_EVENT_KIND,
   INVITE_RESPONSE_KIND,
-} from "./types"
-import { StorageAdapter, InMemoryStorageAdapter } from "./StorageAdapter"
-import { MessageQueue } from "./MessageQueue"
+} from "./types.js"
+import { StorageAdapter, InMemoryStorageAdapter } from "./StorageAdapter.js"
+import { MessageQueue } from "./MessageQueue.js"
 import {
   AppKeys,
   applyAppKeysSnapshotPreservingLabels,
   isAppKeysEvent,
-} from "./AppKeys"
-import { Invite } from "./Invite"
-import { Session } from "./Session"
+} from "./AppKeys.js"
+import { Invite } from "./Invite.js"
+import { Session } from "./Session.js"
 import {
   resolveInviteOwnerRouting,
   type AppKeysSnapshotDecision,
   type KnownAppKeysSnapshot,
-} from "./multiDevice"
-import { decryptInviteResponse, createSessionFromAccept } from "./inviteUtils"
+} from "./multiDevice.js"
+import { decryptInviteResponse, createSessionFromAccept } from "./inviteUtils.js"
 import { type VerifiedEvent } from "nostr-tools"
 import {
   buildRumorEvent,
   ensureMsTag,
   ensureRecipientTag,
-} from "./messageBuilders"
+} from "./messageBuilders.js"
 import {
   classifyMessageOrigin,
   isCrossDeviceSelfOrigin,
   isSelfOrigin,
-} from "./MessageOrigin"
-import { DeviceRecordActor } from "./session-manager/DeviceRecordActor"
-import { ExpirationSettings } from "./session-manager/expirationSettings"
+} from "./MessageOrigin.js"
+import { DeviceRecordActor } from "./session-manager/DeviceRecordActor.js"
+import { ExpirationSettings } from "./session-manager/expirationSettings.js"
 import {
   planInviteBootstrapEvents,
   scheduleInviteBootstrapRetryEvents,
-} from "./session-manager/inviteBootstrap"
+} from "./session-manager/inviteBootstrap.js"
 import {
   collectAllMessagePushAuthorPubkeys,
   collectMessagePushAuthorPubkeys,
-} from "./session-manager/messageAuthors"
+} from "./session-manager/messageAuthors.js"
 import {
   applyExpirationPolicy,
   chatSettingsAdoptionForRumor,
   expirationOverrideFromSendOptions,
-} from "./session-manager/messagePolicy"
+} from "./session-manager/messagePolicy.js"
 import {
   queuedMessageDiagnostics,
   type QueuedMessageDiagnostic,
-} from "./session-manager/queueDiagnostics"
+} from "./session-manager/queueDiagnostics.js"
 import {
   sessionCanReceive,
   sessionCanSend,
   sessionHasActivity,
-} from "./session-manager/sessionSelection"
-import { UserRecordActor } from "./session-manager/UserRecordActor"
-import { hydrateUserRecord } from "./session-manager/userRecordHydration"
-import { UserRecordStorage } from "./session-manager/userRecordStorage"
+} from "./session-manager/sessionSelection.js"
+import { UserRecordActor } from "./session-manager/UserRecordActor.js"
+import { hydrateUserRecord } from "./session-manager/userRecordHydration.js"
+import { UserRecordStorage } from "./session-manager/userRecordStorage.js"
 import type {
   AcceptInviteOptions,
   AcceptInviteResult,
@@ -79,7 +79,7 @@ import type {
   SessionManagerEvent,
   SessionManagerEventsAvailableCallback,
   UserRecord,
-} from "./session-manager/types"
+} from "./session-manager/types.js"
 
 export type {
   AcceptInviteOptions,
@@ -91,12 +91,12 @@ export type {
   SessionManagerEvent,
   SessionManagerEventsAvailableCallback,
   UserRecord,
-} from "./session-manager/types"
+} from "./session-manager/types.js"
 
 export type {
   QueuedMessageDiagnostic,
   QueuedMessageStage,
-} from "./session-manager/queueDiagnostics"
+} from "./session-manager/queueDiagnostics.js"
 
 export interface SendMessageOptions extends ExpirationOptions {
   kind?: number

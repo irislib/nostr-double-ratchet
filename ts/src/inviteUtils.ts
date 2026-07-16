@@ -1,8 +1,8 @@
 import { generateSecretKey, getEventHash, getPublicKey, nip44 } from 'nostr-tools'
 import { getConversationKey } from 'nostr-tools/nip44'
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils'
-import { Session } from './Session'
-import { INVITE_RESPONSE_KIND, MESSAGE_EVENT_KIND, EncryptFunction, DecryptFunction, KeyPair, Rumor } from './types'
+import { Session } from './Session.js'
+import { INVITE_RESPONSE_KIND, MESSAGE_EVENT_KIND, EncryptFunction, DecryptFunction, KeyPair, Rumor } from './types.js'
 
 /**
  * Device payload for QR code / text code sharing.

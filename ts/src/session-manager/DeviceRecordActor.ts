@@ -1,8 +1,8 @@
-import { Invite } from "../Invite"
-import { Session } from "../Session"
+import { Invite } from "../Invite.js"
+import { Session } from "../Session.js"
 import type { VerifiedEvent } from "nostr-tools"
-import { buildTypingRumor } from "../messageBuilders"
-import { INVITE_EVENT_KIND, type Rumor } from "../types"
+import { buildTypingRumor } from "../messageBuilders.js"
+import { INVITE_EVENT_KIND, type Rumor } from "../types.js"
 import {
   compareSessionPriority,
   sessionCanReceive,
@@ -10,13 +10,13 @@ import {
   sessionHasActivity,
   sessionPriority,
   sortedSendableSessionCandidates,
-} from "./sessionSelection"
+} from "./sessionSelection.js"
 import type {
   DeviceRecord as DeviceRecordShape,
   DeviceRecordDeps,
   DeviceSetupState,
   Unsubscribe,
-} from "./types"
+} from "./types.js"
 
 export class DeviceRecordActor implements DeviceRecordShape {
   private static readonly MAX_INACTIVE_SESSIONS = 10

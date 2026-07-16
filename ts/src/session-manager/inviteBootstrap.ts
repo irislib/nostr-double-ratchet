@@ -1,6 +1,6 @@
 import type { VerifiedEvent } from "nostr-tools"
-import type { Session } from "../Session"
-import { buildTypingRumor } from "../messageBuilders"
+import type { Session } from "../Session.js"
+import { buildTypingRumor } from "../messageBuilders.js"
 
 // The invite bootstrap is a typing rumor sent only to install the session
 // on the inviter's side. It is not a "real" typing event, so we tag it

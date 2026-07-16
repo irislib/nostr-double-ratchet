@@ -5,11 +5,11 @@ import {
   createAppKeysProfileId,
   DeviceEntry,
   DeviceLabels,
-} from "./AppKeys"
-import { Invite } from "./Invite"
-import { NostrSubscribe, NostrPublish, Unsubscribe } from "./types"
-import { StorageAdapter, InMemoryStorageAdapter } from "./StorageAdapter"
-import { SessionManager } from "./SessionManager"
+} from "./AppKeys.js"
+import { Invite } from "./Invite.js"
+import { NostrSubscribe, NostrPublish, Unsubscribe } from "./types.js"
+import { StorageAdapter, InMemoryStorageAdapter } from "./StorageAdapter.js"
+import { SessionManager } from "./SessionManager.js"
 
 export interface DelegatePayload {
   identityPubkey: string

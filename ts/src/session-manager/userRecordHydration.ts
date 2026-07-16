@@ -1,11 +1,11 @@
-import { AppKeys } from "../AppKeys"
-import { Session } from "../Session"
-import { deserializeSessionState } from "../utils"
+import { AppKeys } from "../AppKeys.js"
+import { Session } from "../Session.js"
+import { deserializeSessionState } from "../utils.js"
 import type {
   StoredSessionEntry,
   StoredUserRecord,
-} from "./types"
-import type { UserRecordActor } from "./UserRecordActor"
+} from "./types.js"
+import type { UserRecordActor } from "./UserRecordActor.js"
 
 export type HydrateUserRecordInput = {
   publicKey: string

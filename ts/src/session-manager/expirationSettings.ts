@@ -1,6 +1,6 @@
-import type { StorageAdapter } from "../StorageAdapter"
-import type { ExpirationOptions } from "../types"
-import { resolveExpirationSeconds } from "../utils"
+import type { StorageAdapter } from "../StorageAdapter.js"
+import type { ExpirationOptions } from "../types.js"
+import { resolveExpirationSeconds } from "../utils.js"
 
 export class ExpirationSettings {
   private defaultExpiration: ExpirationOptions | undefined

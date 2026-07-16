@@ -1,11 +1,11 @@
-import type { StorageAdapter } from "../StorageAdapter"
-import type { Session } from "../Session"
-import { serializeSessionState } from "../utils"
+import type { StorageAdapter } from "../StorageAdapter.js"
+import type { Session } from "../Session.js"
+import { serializeSessionState } from "../utils.js"
 import type {
   StoredSessionEntry,
   StoredUserRecord,
-} from "./types"
-import type { UserRecordActor } from "./UserRecordActor"
+} from "./types.js"
+import type { UserRecordActor } from "./UserRecordActor.js"
 
 export class UserRecordStorage {
   private writeChain: Map<string, Promise<void>> = new Map()

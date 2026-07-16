@@ -1,8 +1,8 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
 import * as nip44 from "nostr-tools/nip44";
 
-import { kdf } from "./utils";
-import { base64Decode, base64Encode } from "./base64";
+import { kdf } from "./utils.js";
+import { base64Decode, base64Encode } from "./base64.js";
 
 /**
  * Maximum number of message keys we will derive-and-cache to support out-of-order delivery.

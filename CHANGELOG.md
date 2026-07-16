@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.164 - 2026-07-16
+
+- Add trusted AppKeys snapshot import and export APIs for transferring verified device rosters between runtimes without introducing another wire format.
+- Preserve roster timestamps and local device labels across transfer, persistence, restart, and direct-message subscription updates while rejecting stale snapshots.
+- Emit Node-compatible `.js` specifiers in TypeScript declarations so cold ESM consumers can type-check the package with NodeNext resolution.
+
 ## 0.0.163 - 2026-07-02
 
 - Encode invite-response inner payloads as unsigned kind `1060` rumors with valid event ids, matching the NIP-118-style wrapper while keeping the deeper session payload unchanged.

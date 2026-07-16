@@ -7,9 +7,9 @@ import {
   EventCallback,
   MESSAGE_EVENT_KIND,
   Rumor,
-} from "./types";
-import { DUMMY_INNER_PUBKEY } from "./messageBuilders";
-import { kdf, deepCopyState } from "./utils";
+} from "./types.js";
+import { DUMMY_INNER_PUBKEY } from "./messageBuilders.js";
+import { kdf, deepCopyState } from "./utils.js";
 
 const MAX_SKIP = 1000;
 

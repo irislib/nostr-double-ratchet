@@ -1,5 +1,5 @@
-import type { AppKeys, DeviceEntry } from "./AppKeys"
-import type { InvitePurpose } from "./Invite"
+import type { AppKeys, DeviceEntry } from "./AppKeys.js"
+import type { InvitePurpose } from "./Invite.js"
 
 export type AppKeysSnapshotDecision =
   | "advanced"

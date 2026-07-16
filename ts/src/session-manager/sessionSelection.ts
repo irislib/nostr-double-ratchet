@@ -1,4 +1,4 @@
-import type { Session } from "../Session"
+import type { Session } from "../Session.js"
 
 export type SessionPriority = [number, number, number, number]
 export type SendSessionPriority = [number, number, number, number, number]

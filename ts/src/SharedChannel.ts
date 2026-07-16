@@ -1,6 +1,6 @@
 import { getPublicKey, finalizeEvent } from "nostr-tools";
 import * as nip44 from "nostr-tools/nip44";
-import { Rumor, NostrEvent, SHARED_CHANNEL_KIND } from "./types";
+import { Rumor, NostrEvent, SHARED_CHANNEL_KIND } from "./types.js";
 
 export { SHARED_CHANNEL_KIND };
 

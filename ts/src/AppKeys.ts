@@ -4,8 +4,8 @@ import {
   applyAppKeysSnapshot,
   type AppKeysSnapshotUpdate,
   type ApplyAppKeysSnapshotOptions,
-} from "./multiDevice"
-import { APP_KEYS_EVENT_KIND, NostrSubscribe, Unsubscribe } from "./types"
+} from "./multiDevice.js"
+import { APP_KEYS_EVENT_KIND, NostrSubscribe, Unsubscribe } from "./types.js"
 
 const now = () => Math.round(Date.now() / 1000)
 export const APP_KEYS_SNAPSHOT_KIND = 37368

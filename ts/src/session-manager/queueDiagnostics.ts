@@ -1,5 +1,5 @@
-import type { MessageQueue } from "../MessageQueue"
-import type { UserRecordActor } from "./UserRecordActor"
+import type { MessageQueue } from "../MessageQueue.js"
+import type { UserRecordActor } from "./UserRecordActor.js"
 
 export type QueuedMessageStage = "discovery" | "device"
 

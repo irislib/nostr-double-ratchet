@@ -1,7 +1,7 @@
 import { getEventHash } from "nostr-tools";
 
-import { GROUP_SENDER_KEY_REPAIR_REQUEST_KIND } from "./GroupMeta";
-import type { Rumor } from "./types";
+import { GROUP_SENDER_KEY_REPAIR_REQUEST_KIND } from "./GroupMeta.js";
+import type { Rumor } from "./types.js";
 
 export const SENDER_KEY_REPAIR_DEFAULT_RETRY_DELAYS_SECS = [
   30, 120, 600, 3_600, 21_600,

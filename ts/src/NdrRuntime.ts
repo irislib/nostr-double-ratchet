@@ -4,18 +4,18 @@ import {
   buildAppKeysFilter,
   createAppKeysProfileId,
   type DeviceEntry,
-} from "./AppKeys";
+} from "./AppKeys.js";
 import {
   AppKeysManager,
   DelegateManager,
   type DelegatePayload,
-} from "./AppKeysManager";
-import { Invite } from "./Invite";
+} from "./AppKeysManager.js";
+import { Invite } from "./Invite.js";
 import {
   GroupManager,
   type GroupData,
   type GroupDecryptedEvent,
-} from "./Group";
+} from "./Group.js";
 import {
   evaluateDeviceRegistrationState,
   shouldRequireRelayRegistrationConfirmation,
@@ -23,7 +23,7 @@ import {
   type DeviceRegistrationState,
   type KnownAppKeysSnapshot,
   type SessionUserRecordsLike,
-} from "./multiDevice";
+} from "./multiDevice.js";
 import {
   SessionManager,
   type AcceptInviteOptions,
@@ -32,8 +32,8 @@ import {
   type QueuedMessageDiagnostic,
   type SendMessageOptions,
   type SessionManagerEvent,
-} from "./SessionManager";
-import { InMemoryStorageAdapter, type StorageAdapter } from "./StorageAdapter";
+} from "./SessionManager.js";
+import { InMemoryStorageAdapter, type StorageAdapter } from "./StorageAdapter.js";
 import {
   type ChatSettingsPayloadV1,
   type ExpirationOptions,
@@ -44,16 +44,16 @@ import {
   type ReceiptType,
   type Rumor,
   type Unsubscribe,
-} from "./types";
+} from "./types.js";
 import { finalizeEvent, type VerifiedEvent } from "nostr-tools";
 import {
   SessionGroupRuntime,
   type RuntimeGroupEvent,
   type SendGroupEventOptions,
-} from "./RuntimeGroupController";
+} from "./RuntimeGroupController.js";
 
-export type { QueuedMessageDiagnostic } from "./SessionManager";
-export type { RuntimeGroupEvent, SendGroupEventOptions } from "./RuntimeGroupController";
+export type { QueuedMessageDiagnostic } from "./SessionManager.js";
+export type { RuntimeGroupEvent, SendGroupEventOptions } from "./RuntimeGroupController.js";
 
 export interface NdrRuntimeOptions {
   nostrSubscribe: NostrSubscribe;

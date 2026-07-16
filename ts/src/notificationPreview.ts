@@ -1,8 +1,8 @@
 import type { VerifiedEvent } from "nostr-tools"
 
-import { Session } from "./Session"
-import type { Rumor, SessionState } from "./types"
-import { deepCopyState, deserializeSessionState } from "./utils"
+import { Session } from "./Session.js"
+import type { Rumor, SessionState } from "./types.js"
+import { deepCopyState, deserializeSessionState } from "./utils.js"
 
 export interface SessionPreviewCandidate<TContext = unknown> {
   state: SessionState | string

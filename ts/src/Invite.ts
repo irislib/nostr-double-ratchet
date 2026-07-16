@@ -1,13 +1,13 @@
 import { finalizeEvent, VerifiedEvent, UnsignedEvent, verifyEvent, Filter } from "nostr-tools";
-import { INVITE_EVENT_KIND, NostrSubscribe, Unsubscribe, EncryptFunction, DecryptFunction, INVITE_RESPONSE_KIND } from "./types";
-import { Session } from "./Session.ts";
+import { INVITE_EVENT_KIND, NostrSubscribe, Unsubscribe, EncryptFunction, DecryptFunction, INVITE_RESPONSE_KIND } from "./types.js";
+import { Session } from "./Session.js";
 import {
     generateEphemeralKeypair,
     generateSharedSecret,
     encryptInviteResponse,
     decryptInviteResponse,
     createSessionFromAccept,
-} from "./inviteUtils";
+} from "./inviteUtils.js";
 
 const now = () => Math.round(Date.now() / 1000)
 const PUBLIC_INVITE_D_TAG = "double-ratchet/invites/public"

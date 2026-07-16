@@ -1,13 +1,13 @@
-import type { AppKeys } from "../AppKeys"
+import type { AppKeys } from "../AppKeys.js"
 import type { Filter, UnsignedEvent, VerifiedEvent } from "nostr-tools"
-import type { MessageQueue } from "../MessageQueue"
-import type { Session } from "../Session"
+import type { MessageQueue } from "../MessageQueue.js"
+import type { Session } from "../Session.js"
 import type {
   IdentityKey,
   Rumor,
   Unsubscribe,
-} from "../types"
-import type { MessageOrigin } from "../MessageOrigin"
+} from "../types.js"
+import type { MessageOrigin } from "../MessageOrigin.js"
 
 export type OnEventMeta = {
   fromDeviceId?: string

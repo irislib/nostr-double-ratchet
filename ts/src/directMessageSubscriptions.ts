@@ -6,7 +6,7 @@ import {
   INVITE_LIST_LABEL,
   INVITE_RESPONSE_KIND,
   MESSAGE_EVENT_KIND,
-} from "./types"
+} from "./types.js"
 
 export interface RegisteredDirectMessageSubscription {
   token: number
