@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.165 - 2026-07-16
+
+- Refresh supported TypeScript runtime and development dependencies, including
+  `nostr-tools`, Vite, Vitest, ESLint, and WebSocket tooling; the frozen lock now
+  has no known OSV advisories.
+- Preserve the existing ratchet wire and public API while revalidating
+  TypeScript-to-Rust and Rust-to-TypeScript message vectors.
+
 ## 0.0.164 - 2026-07-16
 
 - Add trusted AppKeys snapshot import and export APIs for transferring verified device rosters between runtimes without introducing another wire format.
