@@ -238,7 +238,7 @@ pub struct GroupSenderKeyRecordSnapshot {
     pub sender_owner: OwnerPubkey,
     pub sender_device: DevicePubkey,
     pub sender_event_pubkey: SenderEventPubkey,
-    #[serde(default, with = "serde_option_bytes_array")]
+    #[serde(default, with = "crate::serde_hex::option")]
     pub sender_event_secret_key: Option<[u8; 32]>,
     pub latest_key_id: Option<u32>,
     pub states: Vec<crate::SenderKeyState>,
@@ -268,7 +268,7 @@ pub struct SenderKeyDistribution {
     pub group_id: String,
     pub key_id: u32,
     pub sender_event_pubkey: SenderEventPubkey,
-    #[serde(with = "serde_bytes_array")]
+    #[serde(with = "hex::serde")]
     pub chain_key: [u8; 32],
     pub iteration: u32,
     pub created_at: UnixSeconds,
@@ -359,7 +359,7 @@ pub struct GroupSenderKeyRepairRequestEvent {
 pub struct GroupSenderKeyMessageEnvelope {
     pub group_id: String,
     pub sender_event_pubkey: SenderEventPubkey,
-    #[serde(with = "serde_bytes_array")]
+    #[serde(with = "hex::serde")]
     pub signer_secret_key: [u8; 32],
     pub key_id: u32,
     pub message_number: u32,
@@ -510,54 +510,5 @@ mod tests {
             ),
             None
         );
-    }
-}
-
-mod serde_bytes_array {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(bytes: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&hex::encode(bytes))
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 32], D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        let bytes = hex::decode(value).map_err(serde::de::Error::custom)?;
-        <[u8; 32]>::try_from(bytes.as_slice())
-            .map_err(|_| serde::de::Error::custom("expected 32-byte hex"))
-    }
-}
-
-mod serde_option_bytes_array {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(bytes: &Option<[u8; 32]>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match bytes {
-            Some(bytes) => serializer.serialize_str(&hex::encode(bytes)),
-            None => serializer.serialize_none(),
-        }
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<[u8; 32]>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = Option::<String>::deserialize(deserializer)?;
-        value
-            .map(|value| {
-                let bytes = hex::decode(value).map_err(serde::de::Error::custom)?;
-                <[u8; 32]>::try_from(bytes.as_slice())
-                    .map_err(|_| serde::de::Error::custom("expected 32-byte hex"))
-            })
-            .transpose()
     }
 }

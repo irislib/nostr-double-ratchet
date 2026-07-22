@@ -1,5 +1,41 @@
 import { describe, expect, it } from "vitest";
-import { SenderKeyState, SENDER_KEY_MAX_SKIP } from "../src/SenderKey";
+import {
+  parseSenderKeyDistribution,
+  SenderKeyState,
+  SENDER_KEY_MAX_SKIP,
+} from "../src/SenderKey";
+
+const validDistribution = {
+  groupId: "group",
+  keyId: 1,
+  chainKey: "ab".repeat(32),
+  iteration: 2,
+  createdAt: 3,
+  senderEventPubkey: "cd".repeat(32),
+};
+
+describe("parseSenderKeyDistribution", () => {
+  it("accepts a valid distribution", () => {
+    expect(parseSenderKeyDistribution(JSON.stringify(validDistribution)))
+      .toEqual(validDistribution);
+  });
+
+  it.each([
+    ["non-object JSON", null],
+    ["missing group", { ...validDistribution, groupId: undefined }],
+    ["fractional key id", { ...validDistribution, keyId: 1.5 }],
+    ["invalid chain key", { ...validDistribution, chainKey: "ab" }],
+    ["negative iteration", { ...validDistribution, iteration: -1 }],
+    ["fractional timestamp", { ...validDistribution, createdAt: 3.5 }],
+    ["non-string sender key", { ...validDistribution, senderEventPubkey: 4 }],
+  ])("rejects %s", (_label, value) => {
+    expect(parseSenderKeyDistribution(JSON.stringify(value))).toBeNull();
+  });
+
+  it("rejects malformed JSON", () => {
+    expect(parseSenderKeyDistribution("{")).toBeNull();
+  });
+});
 
 describe("SenderKeyState", () => {
   it("round-trips plaintext (bytes API)", () => {
@@ -43,4 +79,3 @@ describe("SenderKeyState", () => {
     ).toThrow();
   });
 });
-

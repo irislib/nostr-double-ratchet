@@ -10,6 +10,7 @@ import {
   GROUP_SENDER_KEY_DISTRIBUTION_KIND,
   type GroupData,
 } from "../src/Group";
+import { OneToManyChannel } from "../src/OneToManyChannel";
 import { InMemoryStorageAdapter } from "../src/StorageAdapter";
 import { CHAT_MESSAGE_KIND, REACTION_KIND, TYPING_KIND } from "../src/types";
 import type { NostrFetch, NostrSubscribe, Rumor } from "../src/types";
@@ -738,14 +739,26 @@ describe("GroupManager", () => {
       },
       nowMs: 2_000,
     });
+    for (let index = 3; index <= 5; index += 1) {
+      await alice.sendMessage(`fetch backfill #${index}`, {
+        sendPairwise: async () => {},
+        publishOuter: async (outer) => {
+          published.push(outer);
+        },
+        nowMs: index * 1_000,
+      });
+    }
 
     const received: string[] = [];
     const fetchCalls: Array<{ authors?: string[]; since?: number }> = [];
+    const oneToMany = OneToManyChannel.default();
+    const parseSpy = vi.spyOn(oneToMany, "parseOuterEvent");
 
     const manager = new GroupManager({
       ourOwnerPubkey: bobOwnerPk,
       ourDevicePubkey: bobDevicePk,
       storage: new InMemoryStorageAdapter(),
+      oneToMany,
       outerBackfillRetryDelaysMs: [0],
       nostrFetch: (async (filter) => {
         fetchCalls.push({
@@ -754,7 +767,7 @@ describe("GroupManager", () => {
             : undefined,
           since: typeof filter.since === "number" ? filter.since : undefined,
         });
-        return [published[1]!, published[0]!];
+        return [...published].reverse();
       }) as NostrFetch,
       onDecryptedEvent: (event) => {
         received.push(event.inner.content);
@@ -773,7 +786,10 @@ describe("GroupManager", () => {
 
     expect(fetchCalls).toHaveLength(1);
     expect(fetchCalls.every((call) => call.authors?.length === 1)).toBe(true);
-    expect(received).toEqual(["fetch backfill #1", "fetch backfill #2"]);
+    expect(received).toEqual(
+      Array.from({ length: 5 }, (_, index) => `fetch backfill #${index + 1}`),
+    );
+    expect(parseSpy).toHaveBeenCalledTimes(published.length * 2);
   });
 
   it("suppresses local-device one-to-many outer echoes by default", async () => {

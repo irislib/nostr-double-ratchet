@@ -406,7 +406,7 @@ impl SessionManager {
                 device_pubkey,
             })
             .collect();
-        self.prepare_explicit_send(ctx, recipient_owner, targets, payload, false)
+        self.prepare_explicit_send(ctx, recipient_owner, targets, payload, Vec::new(), false)
     }
 
     pub fn prepare_local_sibling_send<R>(
@@ -436,7 +436,14 @@ impl SessionManager {
                 device_pubkey,
             })
             .collect();
-        self.prepare_explicit_send(ctx, self.local_owner_pubkey, targets, payload, false)
+        self.prepare_explicit_send(
+            ctx,
+            self.local_owner_pubkey,
+            targets,
+            payload,
+            Vec::new(),
+            false,
+        )
     }
 
     pub fn prepare_local_sibling_send_reusing_sessions<R>(
@@ -530,43 +537,14 @@ impl SessionManager {
     {
         let mut targets = BTreeSet::new();
         self.collect_local_sibling_targets(&mut targets);
-
-        let mut deliveries = Vec::new();
-        let mut invite_responses = Vec::new();
-        let mut relay_gaps = Vec::new();
-
-        for target in targets {
-            match self.prepare_device_delivery(
-                ctx,
-                target.owner_pubkey,
-                target.device_pubkey,
-                &payload,
-                refresh_one_way_bootstrap,
-            )? {
-                Some((delivery, maybe_response)) => {
-                    deliveries.push(delivery);
-                    if let Some(response) = maybe_response {
-                        invite_responses.push(response);
-                    }
-                }
-                None => {
-                    relay_gaps.push(RelayGap::MissingDeviceInvite {
-                        owner_pubkey: target.owner_pubkey,
-                        device_pubkey: target.device_pubkey,
-                    });
-                }
-            }
-        }
-
-        relay_gaps.sort();
-
-        Ok(PreparedSend {
-            recipient_owner: self.local_owner_pubkey,
+        self.prepare_explicit_send(
+            ctx,
+            self.local_owner_pubkey,
+            targets,
             payload,
-            deliveries,
-            invite_responses,
-            relay_gaps,
-        })
+            Vec::new(),
+            refresh_one_way_bootstrap,
+        )
     }
 
     pub(crate) fn has_authorized_local_siblings(&self) -> bool {
@@ -977,41 +955,7 @@ impl SessionManager {
             self.collect_local_sibling_targets(&mut targets);
         }
 
-        let mut deliveries = Vec::new();
-        let mut invite_responses = Vec::new();
-
-        for target in targets {
-            match self.prepare_device_delivery(
-                ctx,
-                target.owner_pubkey,
-                target.device_pubkey,
-                &payload,
-                false,
-            )? {
-                Some((delivery, maybe_response)) => {
-                    deliveries.push(delivery);
-                    if let Some(response) = maybe_response {
-                        invite_responses.push(response);
-                    }
-                }
-                None => {
-                    relay_gaps.push(RelayGap::MissingDeviceInvite {
-                        owner_pubkey: target.owner_pubkey,
-                        device_pubkey: target.device_pubkey,
-                    });
-                }
-            }
-        }
-
-        relay_gaps.sort();
-
-        Ok(PreparedSend {
-            recipient_owner,
-            payload,
-            deliveries,
-            invite_responses,
-            relay_gaps,
-        })
+        self.prepare_explicit_send(ctx, recipient_owner, targets, payload, relay_gaps, false)
     }
 
     fn prepare_explicit_send<R>(
@@ -1020,6 +964,7 @@ impl SessionManager {
         recipient_owner: OwnerPubkey,
         targets: BTreeSet<TargetDevice>,
         payload: Vec<u8>,
+        mut relay_gaps: Vec<RelayGap>,
         refresh_one_way_bootstrap: bool,
     ) -> Result<PreparedSend>
     where
@@ -1027,8 +972,6 @@ impl SessionManager {
     {
         let mut deliveries = Vec::new();
         let mut invite_responses = Vec::new();
-        let mut relay_gaps = Vec::new();
-
         for target in targets {
             match self.prepare_device_delivery(
                 ctx,

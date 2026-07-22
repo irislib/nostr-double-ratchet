@@ -120,6 +120,7 @@ fn test_decrypt_typescript_messages() -> Result<()> {
 }
 
 #[test]
+#[ignore = "writes an interop fixture; run the explicit vector-generation lane"]
 fn test_generate_rust_vectors() -> Result<()> {
     let alice_sk =
         hex_to_bytes32("1111111111111111111111111111111111111111111111111111111111111111");

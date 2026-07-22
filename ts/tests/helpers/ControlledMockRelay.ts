@@ -245,10 +245,6 @@ export class ControlledMockRelay {
     return this.deliveryCount.get(eventId) || 0
   }
 
-  clearEvents(): void {
-    this.events = []
-  }
-
   private recordDelivery(subscriberId: string, eventId: string): void {
     this.deliveryHistory.push({
       subscriberId,

@@ -127,22 +127,12 @@ fn max_skip_exceeded_is_rejected_and_state_unchanged() -> Result<()> {
         support::direct_session_pair(31, 32, 1_700_200_500)?;
     let before = snapshot(&bob_session.state);
 
-    let mut last = None;
-    for index in 0..(MAX_SKIP as u64 + 2) {
-        let mut send_ctx = context(100 + index, 1_700_200_510 + index);
-        last = Some(send_text(
-            &mut alice_session,
-            &mut send_ctx,
-            format!("gap-{index}"),
-        )?);
-    }
+    alice_session.state.sending_chain_message_number = MAX_SKIP as u32 + 1;
+    let mut send_ctx = context(100, 1_700_200_510);
+    let too_far = send_text(&mut alice_session, &mut send_ctx, "beyond max skip")?;
 
     let mut recv_ctx = context(999, 1_700_200_999);
-    let result = receive_event(
-        &mut bob_session,
-        &mut recv_ctx,
-        &last.expect("last event").event,
-    );
+    let result = receive_event(&mut bob_session, &mut recv_ctx, &too_far.event);
     assert!(matches!(
         result,
         Err(Error::Domain(DomainError::TooManySkippedMessages))

@@ -49,6 +49,7 @@ fn hex_to_bytes32(hex_str: &str) -> [u8; 32] {
 }
 
 #[test]
+#[ignore = "writes an interop fixture; run the explicit vector-generation lane"]
 fn test_generate_rust_app_keys_vectors() -> Result<()> {
     let owner_secret_hex = "1010101010101010101010101010101010101010101010101010101010101010";
     let device_one_secret_hex = "2020202020202020202020202020202020202020202020202020202020202020";

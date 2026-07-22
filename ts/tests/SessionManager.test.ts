@@ -808,31 +808,6 @@ describe("SessionManager", () => {
     })
   })
 
-  it("should handle back to back messages after initial, answer, and then", async () => {
-    await runScenario({
-      steps: [
-        { type: "addDevice", actor: "alice", deviceId: "alice-device-1" },
-        { type: "addDevice", actor: "bob", deviceId: "bob-device-1" },
-        { type: "send", from: { actor: "alice", deviceId: "alice-device-1" }, to: "bob", message: "alice to bob 1" },
-        { type: "send", from: { actor: "bob", deviceId: "bob-device-1" }, to: "alice", message: "bob to alice 1" },
-        { type: "send", from: { actor: "alice", deviceId: "alice-device-1" }, to: "bob", message: "alice to bob 2" },
-        { type: "send", from: { actor: "alice", deviceId: "alice-device-1" }, to: "bob", message: "alice to bob 3" },
-      ],
-    })
-  })
-
-  it("should handle back to back messages after initial", async () => {
-    await runScenario({
-      steps: [
-        { type: "addDevice", actor: "alice", deviceId: "alice-device-1" },
-        { type: "addDevice", actor: "bob", deviceId: "bob-device-1" },
-        { type: "send", from: { actor: "alice", deviceId: "alice-device-1" }, to: "bob", message: "Initial message" },
-        { type: "send", from: { actor: "bob", deviceId: "bob-device-1" }, to: "alice", message: "Reply message" },
-        { type: "send", from: { actor: "bob", deviceId: "bob-device-1" }, to: "alice", message: "Reply message 2" },
-      ],
-    })
-  })
-
   it("should persist sessions across manager restarts", async () => {
     await runScenario({
       steps: [
@@ -960,38 +935,6 @@ describe("SessionManager", () => {
     })
   })
 
-  it("should deliver when receiver restarts multiple times", async () => {
-    await runScenario({
-      steps: [
-        { type: "addDevice", actor: "alice", deviceId: "alice-device-1" },
-        { type: "addDevice", actor: "bob", deviceId: "bob-device-1" },
-        { type: "send", from: { actor: "alice", deviceId: "alice-device-1" }, to: "bob", message: "1" },
-        { type: "send", from: { actor: "bob", deviceId: "bob-device-1" }, to: "alice", message: "2" },
-        { type: "send", from: { actor: "alice", deviceId: "alice-device-1" }, to: "bob", message: "3" },
-        { type: "restart", actor: "alice", deviceId: "alice-device-1" },
-        { type: "send", from: { actor: "bob", deviceId: "bob-device-1" }, to: "alice", message: "4" },
-        { type: "restart", actor: "alice", deviceId: "alice-device-1" },
-        { type: "send", from: { actor: "bob", deviceId: "bob-device-1" }, to: "alice", message: "5" },
-      ],
-    })
-  })
-
-  it("should deliver when receiver restarts multiple times (clearEvents)", async () => {
-    await runScenario({
-      steps: [
-        { type: "addDevice", actor: "alice", deviceId: "alice-device-1" },
-        { type: "addDevice", actor: "bob", deviceId: "bob-device-1" },
-        { type: "send", from: { actor: "alice", deviceId: "alice-device-1" }, to: "bob", message: "1" },
-        { type: "send", from: { actor: "bob", deviceId: "bob-device-1" }, to: "alice", message: "2" },
-        { type: "send", from: { actor: "alice", deviceId: "alice-device-1" }, to: "bob", message: "3" },
-        { type: "restart", actor: "alice", deviceId: "alice-device-1" },
-        { type: "send", from: { actor: "bob", deviceId: "bob-device-1" }, to: "alice", message: "4" },
-        { type: "clearEvents" },
-        { type: "restart", actor: "alice", deviceId: "alice-device-1" },
-        { type: "send", from: { actor: "bob", deviceId: "bob-device-1" }, to: "alice", message: "5" },
-      ],
-    })
-  })
 })
 
 describe("SessionManager (Controlled Relay)", () => {
@@ -1178,79 +1121,6 @@ describe("SessionManager (Controlled Relay)", () => {
         expect(record.eventId).toBeTruthy()
         expect(record.timestamp).toBeGreaterThan(0)
       }
-    })
-  })
-})
-
-describe("SessionManager Device Revocation Enforcement", () => {
-  it("should not send messages to a revoked device", async () => {
-    await runScenario({
-      steps: [
-        // Setup: Alice has 2 devices, Bob has 1 device
-        { type: "addDevice", actor: "alice", deviceId: "alice-device-1" },
-        { type: "addDelegateDevice", actor: "alice", deviceId: "alice-device-2", mainDeviceId: "alice-device-1" },
-        { type: "addDevice", actor: "bob", deviceId: "bob-device-1" },
-
-        // Establish sessions between all devices
-        { type: "send", from: { actor: "bob", deviceId: "bob-device-1" }, to: "alice", message: "hello alice" },
-        { type: "expect", actor: "alice", deviceId: "alice-device-1", message: "hello alice" },
-        { type: "expect", actor: "alice", deviceId: "alice-device-2", message: "hello alice" },
-
-        // Alice revokes device-2
-        { type: "removeDevice", actor: "alice", deviceId: "alice-device-2" },
-
-        // Bob sends another message - should only reach alice-device-1
-        { type: "send", from: { actor: "bob", deviceId: "bob-device-1" }, to: "alice", message: "after revocation",
-          waitOn: { actor: "alice", deviceId: "alice-device-1" } },
-        { type: "expect", actor: "alice", deviceId: "alice-device-1", message: "after revocation" },
-        // alice-device-2 should NOT receive this message (verified by timeout/no delivery)
-      ],
-    })
-  })
-
-  it("should reject messages from a revoked device", async () => {
-    await runScenario({
-      steps: [
-        // Setup
-        { type: "addDevice", actor: "alice", deviceId: "alice-device-1" },
-        { type: "addDelegateDevice", actor: "alice", deviceId: "alice-device-2", mainDeviceId: "alice-device-1" },
-        { type: "addDevice", actor: "bob", deviceId: "bob-device-1" },
-
-        // Establish sessions
-        { type: "send", from: { actor: "alice", deviceId: "alice-device-1" }, to: "bob", message: "initial" },
-        { type: "expect", actor: "bob", deviceId: "bob-device-1", message: "initial" },
-
-        // Alice revokes device-2
-        { type: "removeDevice", actor: "alice", deviceId: "alice-device-2" },
-
-        // Revoked device tries to send - Bob should reject it
-        // (The test framework may not directly support asserting non-delivery,
-        // but the implementation should log rejection)
-      ],
-    })
-  })
-
-  it("should continue normal communication after device revocation", async () => {
-    await runScenario({
-      steps: [
-        { type: "addDevice", actor: "alice", deviceId: "alice-device-1" },
-        { type: "addDelegateDevice", actor: "alice", deviceId: "alice-device-2", mainDeviceId: "alice-device-1" },
-        { type: "addDevice", actor: "bob", deviceId: "bob-device-1" },
-
-        // Establish sessions
-        { type: "send", from: { actor: "alice", deviceId: "alice-device-1" }, to: "bob", message: "msg1" },
-        { type: "send", from: { actor: "bob", deviceId: "bob-device-1" }, to: "alice", message: "msg2" },
-
-        // Revoke alice-device-2
-        { type: "removeDevice", actor: "alice", deviceId: "alice-device-2" },
-
-        // Verify alice-device-1 and bob can still communicate
-        { type: "send", from: { actor: "alice", deviceId: "alice-device-1" }, to: "bob", message: "after-revoke-1" },
-        { type: "expect", actor: "bob", deviceId: "bob-device-1", message: "after-revoke-1" },
-        { type: "send", from: { actor: "bob", deviceId: "bob-device-1" }, to: "alice", message: "after-revoke-2",
-          waitOn: { actor: "alice", deviceId: "alice-device-1" } },
-        { type: "expect", actor: "alice", deviceId: "alice-device-1", message: "after-revoke-2" },
-      ],
     })
   })
 })

@@ -25,9 +25,3 @@ uuid.workspace = true
 
 [dev-dependencies]
 nostr-double-ratchet-pairwise-codec = { path = "../nostr-double-ratchet-pairwise-codec" }
-tokio.workspace = true
-crossbeam-channel.workspace = true
-tempfile = "3"
-tokio-tungstenite = "0.24"
-futures-util = "0.3"
-chrono = "0.4"

@@ -17,7 +17,7 @@
   "scripts": {
     "test": "vitest --exclude '**/*.integration.test.ts'",
     "test:once": "vitest run --exclude '**/*.integration.test.ts'",
-    "test:integration": "DEBUG='ndk:*' vitest run tests/*.integration.test.ts",
+    "test:integration": "vitest run tests/*.integration.test.ts",
     "bench:relay-churn": "tsx bench/relayChurn.ts",
     "build": "vite build && tsc",
     "prepare": "pnpm run build",

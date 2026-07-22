@@ -31,7 +31,10 @@ import {
   parseSenderKeyRepairRequestRumor,
   type SenderKeyRepairRequest,
 } from "./SenderKeyRepair.js";
-import type { SenderKeyDistribution } from "./SenderKey.js";
+import {
+  parseSenderKeyDistribution,
+  type SenderKeyDistribution,
+} from "./SenderKey.js";
 import { InMemoryStorageAdapter, type StorageAdapter } from "./StorageAdapter.js";
 import {
   CHAT_MESSAGE_KIND,
@@ -112,44 +115,6 @@ function getFirstTagValue(
 
 function isHex32(value: string): boolean {
   return typeof value === "string" && /^[0-9a-f]{64}$/i.test(value);
-}
-
-function parseSenderKeyDistribution(
-  content: string,
-): SenderKeyDistribution | null {
-  try {
-    const d = JSON.parse(content) as Partial<SenderKeyDistribution>;
-    if (!d || typeof d !== "object") return null;
-    if (typeof d.groupId !== "string") return null;
-    if (
-      typeof d.keyId !== "number" ||
-      !Number.isInteger(d.keyId) ||
-      d.keyId < 0
-    )
-      return null;
-    if (typeof d.chainKey !== "string" || !/^[0-9a-f]{64}$/i.test(d.chainKey))
-      return null;
-    if (
-      typeof d.iteration !== "number" ||
-      !Number.isInteger(d.iteration) ||
-      d.iteration < 0
-    )
-      return null;
-    if (
-      typeof d.createdAt !== "number" ||
-      !Number.isInteger(d.createdAt) ||
-      d.createdAt < 0
-    )
-      return null;
-    if (
-      d.senderEventPubkey !== undefined &&
-      typeof d.senderEventPubkey !== "string"
-    )
-      return null;
-    return d as SenderKeyDistribution;
-  } catch {
-    return null;
-  }
 }
 
 function groupMetadataFromRosterFact(fact: GroupRosterFact): GroupMetadata {
@@ -1204,33 +1169,40 @@ export class GroupManager {
   }
 
   private sortOuterEvents(events: VerifiedEvent[]): VerifiedEvent[] {
-    return [...events].sort((a, b) => {
-      if (a.pubkey !== b.pubkey) return a.pubkey.localeCompare(b.pubkey);
+    const authorCounts = new Map<string, number>();
+    for (const event of events) {
+      authorCounts.set(event.pubkey, (authorCounts.get(event.pubkey) ?? 0) + 1);
+    }
 
-      let aKeyId = 0;
-      let bKeyId = 0;
-      let aMessageNumber = 0;
-      let bMessageNumber = 0;
-      try {
-        const parsed = this.oneToMany.parseOuterEvent(a);
-        aKeyId = parsed.keyId;
-        aMessageNumber = parsed.messageNumber;
-      } catch {
-        // ignore malformed content in ordering
-      }
-      try {
-        const parsed = this.oneToMany.parseOuterEvent(b);
-        bKeyId = parsed.keyId;
-        bMessageNumber = parsed.messageNumber;
-      } catch {
-        // ignore malformed content in ordering
-      }
+    return events
+      .map((event) => {
+        let keyId = 0;
+        let messageNumber = 0;
+        if (authorCounts.get(event.pubkey)! > 1) {
+          try {
+            const parsed = this.oneToMany.parseOuterEvent(event);
+            keyId = parsed.keyId;
+            messageNumber = parsed.messageNumber;
+          } catch {
+            // ignore malformed content in ordering
+          }
+        }
+        return { event, keyId, messageNumber };
+      })
+      .sort((a, b) => {
+        if (a.event.pubkey !== b.event.pubkey) {
+          return a.event.pubkey.localeCompare(b.event.pubkey);
+        }
 
-      if (aKeyId !== bKeyId) return aKeyId - bKeyId;
-      if (aMessageNumber !== bMessageNumber)
-        return aMessageNumber - bMessageNumber;
-      if (a.created_at !== b.created_at) return a.created_at - b.created_at;
-      return a.id.localeCompare(b.id);
-    });
+        if (a.keyId !== b.keyId) return a.keyId - b.keyId;
+        if (a.messageNumber !== b.messageNumber) {
+          return a.messageNumber - b.messageNumber;
+        }
+        if (a.event.created_at !== b.event.created_at) {
+          return a.event.created_at - b.event.created_at;
+        }
+        return a.event.id.localeCompare(b.event.id);
+      })
+      .map(({ event }) => event);
   }
 }

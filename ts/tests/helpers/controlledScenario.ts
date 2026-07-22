@@ -17,7 +17,6 @@ type Step =
   | { type: "expectAll"; actor: string; deviceId: string; messages: string[] }
   | { type: "restart"; actor: string; deviceId: string }
   | { type: "close"; actor: string; deviceId: string }
-  | { type: "clearEvents" }
   | { type: "removeDevice"; actor: string; deviceId: string }
   | { type: "deliverEvent"; ref: string }
   | { type: "deliverTo"; actor: string; deviceId: string; ref: string }
@@ -336,12 +335,6 @@ export async function runControlledScenario(config: ControlledScenarioConfig): P
         const device = getDevice(step.actor, step.deviceId)
         device.manager.close()
         device.isClosed = true
-        break
-      }
-
-      case "clearEvents": {
-        log("clearEvents")
-        relay.clearEvents()
         break
       }
 

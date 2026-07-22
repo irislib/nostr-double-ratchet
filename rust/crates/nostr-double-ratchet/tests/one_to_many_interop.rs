@@ -95,6 +95,7 @@ fn test_decrypt_typescript_one_to_many_vectors_out_of_order() -> Result<()> {
 }
 
 #[test]
+#[ignore = "writes an interop fixture; run the explicit vector-generation lane"]
 fn test_generate_rust_one_to_many_vectors() -> Result<()> {
     use std::env;
 

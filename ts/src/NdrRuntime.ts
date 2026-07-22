@@ -499,15 +499,10 @@ export class NdrRuntime {
     event: Partial<Rumor>,
     ownerPubkey?: string,
   ): Promise<Rumor | undefined> {
-    const manager = await this.waitForSessionManager(
+    return this.withSessionManager(
       this.resolveActiveOwnerPubkey(ownerPubkey),
+      (manager) => manager.sendEvent(recipientPubkey, event),
     );
-    try {
-      return await manager.sendEvent(recipientPubkey, event);
-    } finally {
-      await this.flushSessionManagerEvents();
-      this.syncDirectMessageSubscription();
-    }
   }
 
   async queuedMessageDiagnostics(
@@ -526,15 +521,10 @@ export class NdrRuntime {
     options: SendMessageOptions = {},
     ownerPubkey?: string,
   ): Promise<Rumor> {
-    const manager = await this.waitForSessionManager(
+    return this.withSessionManager(
       this.resolveActiveOwnerPubkey(ownerPubkey),
+      (manager) => manager.sendMessage(recipientPubkey, content, options),
     );
-    try {
-      return await manager.sendMessage(recipientPubkey, content, options);
-    } finally {
-      await this.flushSessionManagerEvents();
-      this.syncDirectMessageSubscription();
-    }
   }
 
   async sendChatSettings(
@@ -542,15 +532,10 @@ export class NdrRuntime {
     messageTtlSeconds: ChatSettingsPayloadV1["messageTtlSeconds"],
     ownerPubkey?: string,
   ): Promise<Rumor> {
-    const manager = await this.waitForSessionManager(
+    return this.withSessionManager(
       this.resolveActiveOwnerPubkey(ownerPubkey),
+      (manager) => manager.sendChatSettings(recipientPubkey, messageTtlSeconds),
     );
-    try {
-      return await manager.sendChatSettings(recipientPubkey, messageTtlSeconds);
-    } finally {
-      await this.flushSessionManagerEvents();
-      this.syncDirectMessageSubscription();
-    }
   }
 
   async setChatSettingsForPeer(
@@ -558,15 +543,10 @@ export class NdrRuntime {
     messageTtlSeconds: ChatSettingsPayloadV1["messageTtlSeconds"],
     ownerPubkey?: string,
   ): Promise<Rumor> {
-    const manager = await this.waitForSessionManager(
+    return this.withSessionManager(
       this.resolveActiveOwnerPubkey(ownerPubkey),
+      (manager) => manager.setChatSettingsForPeer(peerPubkey, messageTtlSeconds),
     );
-    try {
-      return await manager.setChatSettingsForPeer(peerPubkey, messageTtlSeconds);
-    } finally {
-      await this.flushSessionManagerEvents();
-      this.syncDirectMessageSubscription();
-    }
   }
 
   async sendReceipt(
@@ -575,30 +555,20 @@ export class NdrRuntime {
     messageIds: string[],
     ownerPubkey?: string,
   ): Promise<Rumor | undefined> {
-    const manager = await this.waitForSessionManager(
+    return this.withSessionManager(
       this.resolveActiveOwnerPubkey(ownerPubkey),
+      (manager) => manager.sendReceipt(recipientPubkey, receiptType, messageIds),
     );
-    try {
-      return await manager.sendReceipt(recipientPubkey, receiptType, messageIds);
-    } finally {
-      await this.flushSessionManagerEvents();
-      this.syncDirectMessageSubscription();
-    }
   }
 
   async sendTyping(
     recipientPubkey: string,
     ownerPubkey?: string,
   ): Promise<Rumor> {
-    const manager = await this.waitForSessionManager(
+    return this.withSessionManager(
       this.resolveActiveOwnerPubkey(ownerPubkey),
+      (manager) => manager.sendTyping(recipientPubkey),
     );
-    try {
-      return await manager.sendTyping(recipientPubkey);
-    } finally {
-      await this.flushSessionManagerEvents();
-      this.syncDirectMessageSubscription();
-    }
   }
 
   async setDefaultExpiration(
@@ -634,15 +604,10 @@ export class NdrRuntime {
   }
 
   async deleteChat(userPubkey: string, ownerPubkey?: string): Promise<void> {
-    const manager = await this.waitForSessionManager(
+    return this.withSessionManager(
       this.resolveActiveOwnerPubkey(ownerPubkey),
+      (manager) => manager.deleteChat(userPubkey),
     );
-    try {
-      await manager.deleteChat(userPubkey);
-    } finally {
-      await this.flushSessionManagerEvents();
-      this.syncDirectMessageSubscription();
-    }
   }
 
   async resolveBaseAppKeys(
@@ -1072,13 +1037,9 @@ export class NdrRuntime {
       this.state.ownerPubkey ||
       invite.ownerPubkey ||
       invite.inviter;
-    const manager = await this.waitForSessionManager(ownerPubkey);
-    try {
-      return await manager.acceptInvite(invite, options);
-    } finally {
-      await this.flushSessionManagerEvents();
-      this.syncDirectMessageSubscription();
-    }
+    return this.withSessionManager(ownerPubkey, (manager) =>
+      manager.acceptInvite(invite, options),
+    );
   }
 
   async acceptLinkInvite(
@@ -1280,6 +1241,19 @@ export class NdrRuntime {
       throw new Error("Owner pubkey required to initialize SessionManager");
     }
     return resolvedOwnerPubkey;
+  }
+
+  private async withSessionManager<T>(
+    ownerPubkey: string,
+    operation: (manager: SessionManager) => Promise<T>,
+  ): Promise<T> {
+    const manager = await this.waitForSessionManager(ownerPubkey);
+    try {
+      return await operation(manager);
+    } finally {
+      await this.flushSessionManagerEvents();
+      this.syncDirectMessageSubscription();
+    }
   }
 
   private buildRegistrationPayload(

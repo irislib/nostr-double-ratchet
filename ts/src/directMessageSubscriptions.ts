@@ -26,11 +26,23 @@ export interface ProtocolDiscoveryFilterTargets {
   inviteAuthors?: Iterable<string>
 }
 
-const normalizeAuthor = (value: unknown): string | null => {
+const normalizePubkey = (value: unknown): string | null => {
   if (typeof value !== "string") return null
   const normalized = value.trim().toLowerCase()
   if (!/^[0-9a-f]{64}$/.test(normalized)) return null
   return normalized
+}
+
+const normalizePubkeys = (values: Iterable<unknown>): string[] => {
+  const pubkeys: string[] = []
+  const seen = new Set<string>()
+  for (const value of values) {
+    const pubkey = normalizePubkey(value)
+    if (!pubkey || seen.has(pubkey)) continue
+    seen.add(pubkey)
+    pubkeys.push(pubkey)
+  }
+  return pubkeys
 }
 
 export function directMessageSubscriptionAuthors(filter: Filter): string[] {
@@ -45,15 +57,7 @@ export function directMessageSubscriptionAuthors(filter: Filter): string[] {
     return []
   }
 
-  const authors: string[] = []
-  const seen = new Set<string>()
-  for (const author of filter.authors) {
-    const normalized = normalizeAuthor(author)
-    if (!normalized || seen.has(normalized)) continue
-    seen.add(normalized)
-    authors.push(normalized)
-  }
-  return authors
+  return normalizePubkeys(filter.authors)
 }
 
 export function directMessageSubscriptionRecipients(filter: Filter): string[] {
@@ -69,15 +73,7 @@ export function directMessageSubscriptionRecipients(filter: Filter): string[] {
     return []
   }
 
-  const normalizedRecipients: string[] = []
-  const seen = new Set<string>()
-  for (const recipient of recipients) {
-    const normalized = normalizeAuthor(recipient)
-    if (!normalized || seen.has(normalized)) continue
-    seen.add(normalized)
-    normalizedRecipients.push(normalized)
-  }
-  return normalizedRecipients
+  return normalizePubkeys(recipients)
 }
 
 export function appKeysSubscriptionAuthors(filter: Filter): string[] {
@@ -92,33 +88,16 @@ export function appKeysSubscriptionAuthors(filter: Filter): string[] {
     return []
   }
 
-  const authors: string[] = []
-  const seen = new Set<string>()
-  for (const author of filter.authors) {
-    const normalized = normalizeAuthor(author)
-    if (!normalized || seen.has(normalized)) continue
-    seen.add(normalized)
-    authors.push(normalized)
-  }
-  return authors
+  return normalizePubkeys(filter.authors)
 }
 
 export function buildDirectMessageBackfillFilter(
   authors: Iterable<string>,
   limit: number = 200,
 ): Filter {
-  const normalizedAuthors: string[] = []
-  const seen = new Set<string>()
-  for (const author of authors) {
-    const normalized = normalizeAuthor(author)
-    if (!normalized || seen.has(normalized)) continue
-    seen.add(normalized)
-    normalizedAuthors.push(normalized)
-  }
-
   return {
     kinds: [MESSAGE_EVENT_KIND],
-    authors: normalizedAuthors,
+    authors: normalizePubkeys(authors),
     limit,
   }
 }
@@ -127,18 +106,9 @@ export function buildDirectMessageRecipientBackfillFilter(
   recipients: Iterable<string>,
   limit: number = 200,
 ): Filter {
-  const normalizedRecipients: string[] = []
-  const seen = new Set<string>()
-  for (const recipient of recipients) {
-    const normalized = normalizeAuthor(recipient)
-    if (!normalized || seen.has(normalized)) continue
-    seen.add(normalized)
-    normalizedRecipients.push(normalized)
-  }
-
   return {
     kinds: [MESSAGE_EVENT_KIND],
-    "#p": normalizedRecipients,
+    "#p": normalizePubkeys(recipients),
     limit,
   }
 }
@@ -147,18 +117,9 @@ export function buildAppKeysBackfillFilter(
   authors: Iterable<string>,
   limit: number = 200,
 ): Filter {
-  const normalizedAuthors: string[] = []
-  const seen = new Set<string>()
-  for (const author of authors) {
-    const normalized = normalizeAuthor(author)
-    if (!normalized || seen.has(normalized)) continue
-    seen.add(normalized)
-    normalizedAuthors.push(normalized)
-  }
-
   return {
     kinds: [APP_KEYS_EVENT_KIND],
-    authors: normalizedAuthors,
+    authors: normalizePubkeys(authors),
     limit,
   }
 }
@@ -167,18 +128,9 @@ export function buildInviteBackfillFilter(
   authors: Iterable<string>,
   limit: number = 200,
 ): Filter {
-  const normalizedAuthors: string[] = []
-  const seen = new Set<string>()
-  for (const author of authors) {
-    const normalized = normalizeAuthor(author)
-    if (!normalized || seen.has(normalized)) continue
-    seen.add(normalized)
-    normalizedAuthors.push(normalized)
-  }
-
   return {
     kinds: [INVITE_EVENT_KIND],
-    authors: normalizedAuthors,
+    authors: normalizePubkeys(authors),
     "#l": [INVITE_LIST_LABEL],
     limit,
   }
@@ -197,33 +149,16 @@ export function inviteResponseSubscriptionRecipients(filter: Filter): string[] {
     return []
   }
 
-  const normalizedRecipients: string[] = []
-  const seen = new Set<string>()
-  for (const recipient of recipients) {
-    const normalized = normalizeAuthor(recipient)
-    if (!normalized || seen.has(normalized)) continue
-    seen.add(normalized)
-    normalizedRecipients.push(normalized)
-  }
-  return normalizedRecipients
+  return normalizePubkeys(recipients)
 }
 
 export function buildInviteResponseBackfillFilter(
   recipients: Iterable<string>,
   limit: number = 200,
 ): Filter {
-  const normalizedRecipients: string[] = []
-  const seen = new Set<string>()
-  for (const recipient of recipients) {
-    const normalized = normalizeAuthor(recipient)
-    if (!normalized || seen.has(normalized)) continue
-    seen.add(normalized)
-    normalizedRecipients.push(normalized)
-  }
-
   return {
     kinds: [INVITE_RESPONSE_KIND],
-    "#p": normalizedRecipients,
+    "#p": normalizePubkeys(recipients),
     limit,
   }
 }
@@ -292,36 +227,17 @@ export class DirectMessageSubscriptionTracker {
   registerFilter(filter: Filter): RegisteredDirectMessageSubscription {
     const token = this.nextToken++
     const authors = directMessageSubscriptionAuthors(filter)
-    if (authors.length === 0) {
-      return { token, addedAuthors: [] }
-    }
-
-    this.authorsByToken.set(token, authors)
-    const addedAuthors: string[] = []
-    for (const author of authors) {
-      const refCount = this.authorRefCounts.get(author) || 0
-      if (refCount === 0) {
-        addedAuthors.push(author)
-      }
-      this.authorRefCounts.set(author, refCount + 1)
-    }
-
+    const addedAuthors = registerValues(
+      authors,
+      this.authorsByToken,
+      this.authorRefCounts,
+      token,
+    )
     return { token, addedAuthors }
   }
 
   unregister(token: number): void {
-    const authors = this.authorsByToken.get(token)
-    if (!authors) return
-
-    this.authorsByToken.delete(token)
-    for (const author of authors) {
-      const nextCount = Math.max((this.authorRefCounts.get(author) || 1) - 1, 0)
-      if (nextCount === 0) {
-        this.authorRefCounts.delete(author)
-      } else {
-        this.authorRefCounts.set(author, nextCount)
-      }
-    }
+    unregisterValues(token, this.authorsByToken, this.authorRefCounts)
   }
 
   trackedAuthors(): string[] {

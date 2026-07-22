@@ -5,6 +5,8 @@ import { generateSecretKey, getPublicKey, finalizeEvent } from "nostr-tools"
 import { InMemoryStorageAdapter } from "../src/StorageAdapter"
 import { AppKeys, isAppKeysEvent, APP_KEYS_ENCRYPTED_DEVICE_LABELS_FACT } from "../src/AppKeys"
 
+const mockRevocationCheck = { timeoutMs: 100, retries: 0 } as const
+
 describe("DelegateManager", () => {
   let nostrSubscribe: NostrSubscribe
   let nostrPublish: NostrPublish
@@ -301,7 +303,7 @@ describe("DelegateManager", () => {
 
       ;(manager as any).nostrSubscribe = isRevokedSubscribe
 
-      const revoked = await manager.isRevoked()
+      const revoked = await manager.isRevoked(mockRevocationCheck)
       expect(revoked).toBe(false)
     })
 
@@ -361,7 +363,7 @@ describe("DelegateManager", () => {
 
       ;(manager as any).nostrSubscribe = isRevokedSubscribe
 
-      const revoked = await manager.isRevoked()
+      const revoked = await manager.isRevoked(mockRevocationCheck)
       expect(revoked).toBe(true)
     })
   })
@@ -777,7 +779,7 @@ describe("AppKeysManager Integration", () => {
     await new Promise((resolve) => setTimeout(resolve, 50))
     await activationPromise
 
-    const initialRevoked = await delegateManager.isRevoked()
+    const initialRevoked = await delegateManager.isRevoked(mockRevocationCheck)
     expect(initialRevoked).toBe(false)
 
     // Revoke by identityPubkey and publish
@@ -786,7 +788,7 @@ describe("AppKeysManager Integration", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 50))
 
-    const revoked = await delegateManager.isRevoked()
+    const revoked = await delegateManager.isRevoked(mockRevocationCheck)
     expect(revoked).toBe(true)
   })
 

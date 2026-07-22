@@ -136,18 +136,22 @@ jobs:
       working-directory: ts
       run: pnpm install --frozen-lockfile
 
-    - name: Generate TypeScript test vectors
+    - name: Generate TypeScript interop vectors
       working-directory: ts
-      run: pnpm vitest run tests/interop.test.ts
+      env:
+        REGENERATE_VECTORS: "true"
+      run: pnpm vitest run tests/interop.test.ts tests/*.interop.test.ts
 
-    - name: Verify Rust can decrypt TypeScript vectors
+    - name: Generate Rust interop vectors
       working-directory: rust
-      run: cargo test test_decrypt_typescript -- --nocapture
+      env:
+        REGENERATE_VECTORS: "true"
+      run: cargo test --workspace generate -- --ignored --test-threads=1 --nocapture
 
-    - name: Generate Rust test vectors
+    - name: Verify Rust interop consumers
       working-directory: rust
-      run: cargo test test_generate_rust -- --nocapture
+      run: cargo test --workspace
 
-    - name: Verify TypeScript can decrypt Rust vectors
+    - name: Verify TypeScript interop consumers
       working-directory: ts
-      run: pnpm vitest run tests/interop.test.ts
+      run: pnpm vitest run tests/interop.test.ts tests/*.interop.test.ts

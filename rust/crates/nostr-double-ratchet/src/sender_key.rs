@@ -12,10 +12,10 @@ const SENDER_KEY_KDF_SALT: &[u8] = b"ndr-sender-key-v1";
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SenderKeyState {
     pub key_id: u32,
-    #[serde(with = "serde_bytes_array")]
+    #[serde(with = "hex::serde")]
     chain_key: [u8; 32],
     iteration: u32,
-    #[serde(default, with = "serde_btreemap_u32_bytes")]
+    #[serde(default, with = "crate::serde_hex::btreemap_u32")]
     skipped_message_keys: BTreeMap<u32, [u8; 32]>,
 }
 
@@ -284,59 +284,6 @@ fn prune_skipped(map: &mut BTreeMap<u32, [u8; 32]>) {
             break;
         };
         map.remove(&first);
-    }
-}
-
-mod serde_bytes_array {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(bytes: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&hex::encode(bytes))
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 32], D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        let bytes = hex::decode(value).map_err(serde::de::Error::custom)?;
-        <[u8; 32]>::try_from(bytes.as_slice())
-            .map_err(|_| serde::de::Error::custom("expected 32-byte hex"))
-    }
-}
-
-mod serde_btreemap_u32_bytes {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use std::collections::BTreeMap;
-
-    pub fn serialize<S>(map: &BTreeMap<u32, [u8; 32]>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let values: BTreeMap<String, String> = map
-            .iter()
-            .map(|(key, value)| (key.to_string(), hex::encode(value)))
-            .collect();
-        values.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<BTreeMap<u32, [u8; 32]>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let values = BTreeMap::<String, String>::deserialize(deserializer)?;
-        let mut out = BTreeMap::new();
-        for (key, value) in values {
-            let key = key.parse::<u32>().map_err(serde::de::Error::custom)?;
-            let bytes = hex::decode(value).map_err(serde::de::Error::custom)?;
-            let value = <[u8; 32]>::try_from(bytes.as_slice())
-                .map_err(|_| serde::de::Error::custom("expected 32-byte hex"))?;
-            out.insert(key, value);
-        }
-        Ok(out)
     }
 }
 

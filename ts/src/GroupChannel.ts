@@ -28,7 +28,10 @@ import type {
   SenderKeyDistribution,
   SenderKeyStateSerialized,
 } from "./SenderKey.js";
-import { SenderKeyState } from "./SenderKey.js";
+import {
+  parseSenderKeyDistribution,
+  SenderKeyState,
+} from "./SenderKey.js";
 import { InMemoryStorageAdapter, type StorageAdapter } from "./StorageAdapter.js";
 import { CHAT_MESSAGE_KIND, MESSAGE_EVENT_KIND, type Rumor } from "./types.js";
 
@@ -88,44 +91,6 @@ function randomU32(): number {
 
 function isHex32(s: string): boolean {
   return typeof s === "string" && /^[0-9a-f]{64}$/i.test(s);
-}
-
-function parseSenderKeyDistribution(
-  content: string,
-): SenderKeyDistribution | null {
-  try {
-    const d = JSON.parse(content) as Partial<SenderKeyDistribution>;
-    if (!d || typeof d !== "object") return null;
-    if (typeof d.groupId !== "string") return null;
-    if (
-      typeof d.keyId !== "number" ||
-      !Number.isInteger(d.keyId) ||
-      d.keyId < 0
-    )
-      return null;
-    if (typeof d.chainKey !== "string" || !/^[0-9a-f]{64}$/i.test(d.chainKey))
-      return null;
-    if (
-      typeof d.iteration !== "number" ||
-      !Number.isInteger(d.iteration) ||
-      d.iteration < 0
-    )
-      return null;
-    if (
-      typeof d.createdAt !== "number" ||
-      !Number.isInteger(d.createdAt) ||
-      d.createdAt < 0
-    )
-      return null;
-    if (
-      d.senderEventPubkey !== undefined &&
-      typeof d.senderEventPubkey !== "string"
-    )
-      return null;
-    return d as SenderKeyDistribution;
-  } catch {
-    return null;
-  }
 }
 
 /**

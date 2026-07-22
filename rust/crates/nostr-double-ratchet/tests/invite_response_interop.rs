@@ -183,6 +183,7 @@ fn build_rust_vector() -> Result<InviteResponseVector> {
 }
 
 #[test]
+#[ignore = "writes an interop fixture; run the explicit vector-generation lane"]
 fn generate_and_validate_rust_invite_response_vector() -> Result<()> {
     let output_path = test_vectors_path().join("rust-invite-response-vectors.json");
     let should_regenerate =

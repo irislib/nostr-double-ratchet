@@ -40,11 +40,24 @@ const countQueueEntries = async (
   return count
 }
 
+const waitForDiscoveryQueueEntry = async (
+  storage: StorageAdapter,
+  targetKey: string,
+  eventId: string,
+): Promise<void> =>
+  expect
+    .poll(
+      () => countQueueEntries(storage, "v1/discovery-queue/", targetKey, eventId),
+      { interval: 10, timeout: 2_000 },
+    )
+    .toBeGreaterThan(0)
+
 const publishAppKeys = (
   relay: MockRelay,
   ownerSecretKey: Uint8Array,
   ownerPublicKey: string,
-  devicePubkeys: string[]
+  devicePubkeys: string[],
+  createdAt: number,
 ) => {
   const appKeys = new AppKeys(
     devicePubkeys.map((identityPubkey, i) => ({
@@ -55,6 +68,7 @@ const publishAppKeys = (
   const event = appKeys.getEvent({
     ownerPrivateKey: ownerSecretKey,
     ownerPubkey: ownerPublicKey,
+    createdAt,
   })
   const signed = finalizeEvent(event, ownerSecretKey)
   relay.storeAndDeliver(signed as unknown as VerifiedEvent)
@@ -191,13 +205,12 @@ describe("MessageQueue crash recovery", () => {
 
     const bobSecret = generateSecretKey()
     const bobPubkey = getPublicKey(bobSecret)
+    publishAppKeys(relay, bobSecret, bobPubkey, [], 1)
     const message = "retry-after-partial-expansion-failure"
     const rumor = await alice.manager.sendMessage(bobPubkey, message)
     const rumorId = rumor.id
 
-    expect(
-      await countQueueEntries(aliceStorage, "v1/discovery-queue/", bobPubkey, rumorId)
-    ).toBeGreaterThan(0)
+    await waitForDiscoveryQueueEntry(aliceStorage, bobPubkey, rumorId)
 
     const bob = await createMockSessionManager("bob-main", relay, bobSecret)
     const bobReceived = new Promise<void>((resolve, reject) => {
@@ -233,6 +246,7 @@ describe("MessageQueue crash recovery", () => {
     const bobOwnerPubkey = getPublicKey(bobOwnerSecret)
     const bobDevice1 = getPublicKey(generateSecretKey())
     const bobDevice2 = getPublicKey(generateSecretKey())
+    publishAppKeys(relay, bobOwnerSecret, bobOwnerPubkey, [], 1)
 
     const rumor = await alice.manager.sendMessage(
       bobOwnerPubkey,
@@ -240,11 +254,9 @@ describe("MessageQueue crash recovery", () => {
     )
     const rumorId = rumor.id
 
-    expect(
-      await countQueueEntries(storage, "v1/discovery-queue/", bobOwnerPubkey, rumorId)
-    ).toBeGreaterThan(0)
+    await waitForDiscoveryQueueEntry(storage, bobOwnerPubkey, rumorId)
 
-    publishAppKeys(relay, bobOwnerSecret, bobOwnerPubkey, [bobDevice1, bobDevice2])
+    publishAppKeys(relay, bobOwnerSecret, bobOwnerPubkey, [bobDevice1, bobDevice2], 2)
     await new Promise((r) => setTimeout(r, 120))
 
     expect(
@@ -254,7 +266,7 @@ describe("MessageQueue crash recovery", () => {
       await countQueueEntries(storage, "v1/message-queue/", bobDevice2, rumorId)
     ).toBeGreaterThan(0)
 
-    publishAppKeys(relay, bobOwnerSecret, bobOwnerPubkey, [bobDevice1])
+    publishAppKeys(relay, bobOwnerSecret, bobOwnerPubkey, [bobDevice1], 3)
     await new Promise((r) => setTimeout(r, 120))
 
     expect(await countQueueEntries(storage, "v1/message-queue/", bobDevice2, rumorId)).toBe(0)
@@ -272,6 +284,7 @@ describe("MessageQueue crash recovery", () => {
     const bobOwnerPubkey = getPublicKey(bobOwnerSecret)
     const bobDevice1 = getPublicKey(generateSecretKey())
     const bobDevice2 = getPublicKey(generateSecretKey())
+    publishAppKeys(relay, bobOwnerSecret, bobOwnerPubkey, [], 1)
 
     const rumor = await alice.manager.sendMessage(
       bobOwnerPubkey,
@@ -279,20 +292,18 @@ describe("MessageQueue crash recovery", () => {
     )
     const rumorId = rumor.id
 
-    expect(
-      await countQueueEntries(aliceStorage, "v1/discovery-queue/", bobOwnerPubkey, rumorId)
-    ).toBeGreaterThan(0)
+    await waitForDiscoveryQueueEntry(aliceStorage, bobOwnerPubkey, rumorId)
 
-    publishAppKeys(relay, bobOwnerSecret, bobOwnerPubkey, [bobDevice1, bobDevice2])
+    publishAppKeys(relay, bobOwnerSecret, bobOwnerPubkey, [bobDevice1, bobDevice2], 2)
     await new Promise((r) => setTimeout(r, 120))
 
     expect(
       await countQueueEntries(aliceStorage, "v1/discovery-queue/", bobOwnerPubkey, rumorId)
     ).toBeGreaterThan(0)
 
-    publishAppKeys(relay, bobOwnerSecret, bobOwnerPubkey, [bobDevice1])
+    publishAppKeys(relay, bobOwnerSecret, bobOwnerPubkey, [bobDevice1], 3)
     await new Promise((r) => setTimeout(r, 120))
-    publishAppKeys(relay, bobOwnerSecret, bobOwnerPubkey, [bobDevice1])
+    publishAppKeys(relay, bobOwnerSecret, bobOwnerPubkey, [bobDevice1], 4)
     await new Promise((r) => setTimeout(r, 120))
 
     expect(await countQueueEntries(aliceStorage, "v1/message-queue/", bobDevice2, rumorId)).toBe(0)

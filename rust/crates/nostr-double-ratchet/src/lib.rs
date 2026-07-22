@@ -15,6 +15,7 @@ pub mod protocol_types;
 pub mod roster;
 pub mod roster_editor;
 pub mod sender_key;
+mod serde_hex;
 pub mod session;
 pub mod session_manager;
 pub mod shared_channel;

@@ -1179,6 +1179,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "writes an interop fixture; run the explicit vector-generation lane"]
     fn generate_rust_group_roster_fact_vector() {
         let codec = JsonGroupPayloadCodecV1;
         let snapshot = snapshot();
@@ -1684,6 +1685,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "writes an interop fixture; run the explicit vector-generation lane"]
     fn generate_rust_sender_key_repair_vector() {
         let vectors_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()

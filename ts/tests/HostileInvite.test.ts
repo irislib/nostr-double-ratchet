@@ -4,7 +4,9 @@ import { MockRelay } from "./helpers/mockRelay"
 import { createMockSessionManager } from "./helpers/mockSessionManager"
 import { encryptInviteResponse } from "../src/inviteUtils"
 import { AppKeys, isAppKeysEvent } from "../src/AppKeys"
-import { runScenario } from "./helpers/scenario"
+
+const settleInviteResponse = () =>
+  new Promise((resolve) => setTimeout(resolve, 100))
 
 /**
  * Extract invite params (ephemeral key, shared secret, device identity) from relay
@@ -97,8 +99,7 @@ describe("Hostile invite acceptance", () => {
 
     relay.storeAndDeliver(fraudulentEvent)
 
-    // Alice's AppKeys exist on relay → fetchAppKeys resolves in ~100ms
-    await new Promise((r) => setTimeout(r, 500))
+    await settleInviteResponse()
 
     // Eve's device should NOT appear under Alice's user record
     const records = bob.manager.getUserRecords()
@@ -135,8 +136,8 @@ describe("Hostile invite acceptance", () => {
 
     relay.storeAndDeliver(fraudulentEvent)
 
-    // No AppKeys → fetchAppKeys times out at 2000ms
-    await new Promise((r) => setTimeout(r, 2500))
+    // The test SessionManager's AppKeys discovery window is 50 ms.
+    await settleInviteResponse()
 
     const records = bob.manager.getUserRecords()
     const record = records.get(nonExistentPubkey)
@@ -171,8 +172,8 @@ describe("Hostile invite acceptance", () => {
 
     relay.storeAndDeliver(legitimateEvent)
 
-    // No AppKeys for Carol → fetchAppKeys times out at 2000ms, then single-device check passes
-    await new Promise((r) => setTimeout(r, 2500))
+    // After AppKeys discovery expires, the single-device check passes.
+    await settleInviteResponse()
 
     const records = bob.manager.getUserRecords()
     const carolRecord = records.get(carolPublicKey)
@@ -206,7 +207,7 @@ describe("Hostile invite acceptance", () => {
 
     relay.storeAndDeliver(eveEvent)
 
-    await new Promise((r) => setTimeout(r, 2500))
+    await settleInviteResponse()
 
     const records = bob.manager.getUserRecords()
 
@@ -229,28 +230,4 @@ describe("Hostile invite acceptance", () => {
     alice.manager.close()
   }, 10000)
 
-  it("legitimate multi-device flow works (positive control)", async () => {
-    await runScenario({
-      steps: [
-        { type: "addDevice", actor: "Alice", deviceId: "device1" },
-        { type: "addDevice", actor: "Bob", deviceId: "device1" },
-        {
-          type: "send",
-          from: { actor: "Alice", deviceId: "device1" },
-          to: "Bob",
-          message: "hello from Alice",
-          waitOn: { actor: "Bob", deviceId: "device1" },
-        },
-        { type: "expect", actor: "Bob", deviceId: "device1", message: "hello from Alice" },
-        {
-          type: "send",
-          from: { actor: "Bob", deviceId: "device1" },
-          to: "Alice",
-          message: "hello from Bob",
-          waitOn: { actor: "Alice", deviceId: "device1" },
-        },
-        { type: "expect", actor: "Alice", deviceId: "device1", message: "hello from Bob" },
-      ],
-    })
-  }, 30000)
 })

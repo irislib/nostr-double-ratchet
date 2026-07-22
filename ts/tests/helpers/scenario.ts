@@ -17,7 +17,6 @@ type Step =
   | { type: "expectAll"; actor: string; deviceId: string; messages: string[] }
   | { type: "restart"; actor: string; deviceId: string }
   | { type: "close"; actor: string; deviceId: string }
-  | { type: "clearEvents" }
   | { type: "removeDevice"; actor: string; deviceId: string }
 
 interface ScenarioConfig {
@@ -280,11 +279,6 @@ export async function runScenario(config: ScenarioConfig): Promise<void> {
         const device = getDevice(step.actor, step.deviceId)
         device.manager.close()
         device.isClosed = true
-        break
-      }
-
-      case "clearEvents": {
-        relay.clearEvents()
         break
       }
 

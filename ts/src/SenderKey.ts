@@ -28,6 +28,42 @@ export interface SenderKeyDistribution {
   senderEventPubkey?: string;
 }
 
+export function parseSenderKeyDistribution(
+  content: string,
+): SenderKeyDistribution | null {
+  try {
+    const distribution = JSON.parse(content) as Partial<SenderKeyDistribution>;
+    if (!distribution || typeof distribution !== "object") return null;
+    if (typeof distribution.groupId !== "string") return null;
+    if (
+      typeof distribution.keyId !== "number" ||
+      !Number.isInteger(distribution.keyId) ||
+      distribution.keyId < 0
+    ) return null;
+    if (
+      typeof distribution.chainKey !== "string" ||
+      !/^[0-9a-f]{64}$/i.test(distribution.chainKey)
+    ) return null;
+    if (
+      typeof distribution.iteration !== "number" ||
+      !Number.isInteger(distribution.iteration) ||
+      distribution.iteration < 0
+    ) return null;
+    if (
+      typeof distribution.createdAt !== "number" ||
+      !Number.isInteger(distribution.createdAt) ||
+      distribution.createdAt < 0
+    ) return null;
+    if (
+      distribution.senderEventPubkey !== undefined &&
+      typeof distribution.senderEventPubkey !== "string"
+    ) return null;
+    return distribution as SenderKeyDistribution;
+  } catch {
+    return null;
+  }
+}
+
 export interface SenderKeyStateSerialized {
   keyId: number;
   /** Hex-encoded 32-byte chain key */

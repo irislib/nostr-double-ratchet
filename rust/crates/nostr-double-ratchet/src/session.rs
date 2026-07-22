@@ -21,19 +21,19 @@ pub struct Header {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SerializableKeyPair {
     pub public_key: DevicePubkey,
-    #[serde(with = "serde_bytes_array")]
+    #[serde(with = "hex::serde")]
     pub private_key: [u8; 32],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct SkippedKeysEntry {
-    #[serde(with = "serde_btreemap_u32_bytes")]
+    #[serde(with = "crate::serde_hex::btreemap_u32")]
     pub message_keys: BTreeMap<u32, [u8; 32]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionState {
-    #[serde(with = "serde_bytes_array")]
+    #[serde(with = "hex::serde")]
     pub root_key: [u8; 32],
     pub their_current_nostr_public_key: Option<DevicePubkey>,
     pub their_next_nostr_public_key: Option<DevicePubkey>,
@@ -41,9 +41,9 @@ pub struct SessionState {
     pub our_previous_nostr_key: Option<SerializableKeyPair>,
     pub our_current_nostr_key: Option<SerializableKeyPair>,
     pub our_next_nostr_key: SerializableKeyPair,
-    #[serde(default, with = "serde_option_bytes_array")]
+    #[serde(default, with = "crate::serde_hex::option")]
     pub receiving_chain_key: Option<[u8; 32]>,
-    #[serde(default, with = "serde_option_bytes_array")]
+    #[serde(default, with = "crate::serde_hex::option")]
     pub sending_chain_key: Option<[u8; 32]>,
     pub sending_chain_message_number: u32,
     pub receiving_chain_message_number: u32,
@@ -549,89 +549,6 @@ fn prune_skipped_message_keys(map: &mut BTreeMap<u32, [u8; 32]>) {
         };
         map.remove(&first);
     }
-}
-
-mod serde_bytes_array {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(bytes: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&hex::encode(bytes))
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 32], D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        super::decode_hex_32(&s).map_err(serde::de::Error::custom)
-    }
-}
-
-mod serde_option_bytes_array {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(bytes: &Option<[u8; 32]>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match bytes {
-            Some(b) => serializer.serialize_str(&hex::encode(b)),
-            None => serializer.serialize_none(),
-        }
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<[u8; 32]>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let opt: Option<String> = Option::deserialize(deserializer)?;
-        match opt {
-            Some(s) => super::decode_hex_32(&s)
-                .map(Some)
-                .map_err(serde::de::Error::custom),
-            None => Ok(None),
-        }
-    }
-}
-
-mod serde_btreemap_u32_bytes {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use std::collections::BTreeMap;
-
-    pub fn serialize<S>(map: &BTreeMap<u32, [u8; 32]>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let string_map: BTreeMap<String, String> = map
-            .iter()
-            .map(|(k, v)| (k.to_string(), hex::encode(v)))
-            .collect();
-        string_map.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<BTreeMap<u32, [u8; 32]>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let string_map: BTreeMap<String, String> = BTreeMap::deserialize(deserializer)?;
-        let mut out = BTreeMap::new();
-        for (k, v) in string_map {
-            let idx: u32 = k.parse().map_err(serde::de::Error::custom)?;
-            out.insert(
-                idx,
-                super::decode_hex_32(&v).map_err(serde::de::Error::custom)?,
-            );
-        }
-        Ok(out)
-    }
-}
-
-fn decode_hex_32(value: &str) -> std::result::Result<[u8; 32], String> {
-    let bytes = hex::decode(value).map_err(|e| e.to_string())?;
-    <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| "invalid 32-byte hex".to_string())
 }
 
 #[cfg(test)]

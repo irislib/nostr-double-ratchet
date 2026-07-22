@@ -1207,5 +1207,18 @@ describe("NdrRuntime", () => {
       runtime.sendReceipt("peer", "seen", ["message-id"]),
     ).resolves.toBe(sendReceiptRumor)
     expect(sendReceiptSpy).toHaveBeenCalledWith("peer", "seen", ["message-id"])
+
+    const runtimeInternals = runtime as unknown as {
+      flushSessionManagerEvents(): Promise<void>
+      syncDirectMessageSubscription(): void
+    }
+    const flushSpy = vi.spyOn(runtimeInternals, "flushSessionManagerEvents")
+    const syncSpy = vi.spyOn(runtimeInternals, "syncDirectMessageSubscription")
+    const sendError = new Error("send failed")
+    sendMessageSpy.mockRejectedValueOnce(sendError)
+
+    await expect(runtime.sendMessage("peer", "failed send")).rejects.toBe(sendError)
+    expect(flushSpy).toHaveBeenCalledTimes(1)
+    expect(syncSpy).toHaveBeenCalledTimes(1)
   })
 })

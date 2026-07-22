@@ -89,6 +89,9 @@ cargo test --manifest-path rust/Cargo.toml
 ```bash
 # Core library
 cargo test -p nostr-double-ratchet --manifest-path rust/Cargo.toml
+
+# Regenerate interop fixtures (fixture writers are ignored in ordinary test runs)
+REGENERATE_VECTORS=true cargo test --workspace --manifest-path rust/Cargo.toml generate -- --ignored --test-threads=1
 ```
 
 ## Multi-Device Test Policy
