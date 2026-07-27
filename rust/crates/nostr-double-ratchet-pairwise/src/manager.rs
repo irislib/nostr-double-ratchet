@@ -12,7 +12,7 @@ use nostr_double_ratchet_pairwise_codec::{self as pairwise_codec, EncodeOptions}
 use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
 
-use crate::persistence::{open_state, seal_state};
+use crate::persistence::{is_legacy_state_payload, open_state, seal_state};
 use crate::state::{pairwise_owner_claim_is_valid, PairwiseState, PeerState, SessionRecord};
 use crate::{
     PairwiseAcceptResult, PairwiseAction, PairwiseActionKind, PairwiseError, PairwiseSendResult,
@@ -37,9 +37,10 @@ impl PairwiseManager {
     ) -> Result<Self> {
         limits.validate()?;
         let payload = store.load()?;
-        let is_new = payload.is_none();
+        let mut needs_storage_commit = payload.is_none();
         let state = match payload {
             Some(payload) => {
+                needs_storage_commit = is_legacy_state_payload(&payload);
                 let state = open_state(&payload, &identity_keys, &limits)?;
                 store.cleanup(state.generation);
                 state
@@ -59,7 +60,7 @@ impl PairwiseManager {
             limits,
             installed_message_authors: Vec::new(),
         };
-        if is_new {
+        if needs_storage_commit {
             manager.commit_next(manager.state.clone(), Vec::new())?;
         }
         manager.refresh_message_subscription(true)?;
@@ -531,6 +532,32 @@ impl PairwiseManager {
             return Ok(());
         }
         self.commit_next(next, self.installed_message_authors.clone())
+    }
+
+    pub fn retire_peer(&mut self, peer: PublicKey) -> Result<bool> {
+        let peer_hex = peer.to_hex();
+        let mut next = self.state.clone();
+        let Some(retired_peer) = next.peers.remove(&peer_hex) else {
+            return Ok(false);
+        };
+        retire_sessions(&mut next, retired_peer.sessions);
+        next.pending_actions.retain(|action| {
+            !matches!(
+                &action.kind,
+                PairwiseActionKind::Delivery {
+                    peer_pubkey_hex,
+                    ..
+                } if peer_pubkey_hex == &peer_hex
+            )
+        });
+        let authors = refresh_subscription_actions(
+            &mut next,
+            &self.installed_message_authors,
+            false,
+            &self.limits,
+        )?;
+        self.commit_next(next, authors)?;
+        Ok(true)
     }
 
     pub fn known_peer_pubkeys(&self) -> Vec<String> {

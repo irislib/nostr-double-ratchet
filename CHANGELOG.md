@@ -6,6 +6,10 @@
   disappearing messages without AppKeys, linked-device, or group dependencies.
 - Persist encrypted ratchet state and pending transport actions atomically, with explicit
   acknowledgement and restart-safe replay/skipped-key handling.
+- Seal local state with a length-capable XChaCha20-Poly1305 format and migrate legacy NIP-44
+  state on open, removing NIP-44's 65,408-byte plaintext ceiling from durable storage.
+- Add durable per-peer retirement so identity rebinds erase that peer's sessions and queued
+  transport actions without resetting unrelated pairwise chats.
 - Split oversized legacy Rust and TypeScript modules without changing their public APIs, and
   enforce repository-wide limits of 1,000 Rust lines and 500 TypeScript-family lines in CI.
 

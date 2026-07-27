@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::{PairwiseAction, PairwiseActionKind, PairwiseError, Result};
 
 pub(crate) const STATE_SCHEMA_VERSION: u32 = 1;
-pub(crate) const STORAGE_FORMAT_VERSION: u32 = 1;
+pub(crate) const STORAGE_FORMAT_VERSION: u32 = 2;
+pub(crate) const LEGACY_STORAGE_FORMAT_VERSION: u32 = 1;
 pub const MAX_PERSISTED_STATE_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
@@ -98,7 +99,7 @@ pub(crate) struct SessionRecord {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct StorageEnvelope {
+pub(crate) struct LegacyStorageEnvelope {
     pub format_version: u32,
     pub generation: u64,
     pub identity_pubkey_hex: String,

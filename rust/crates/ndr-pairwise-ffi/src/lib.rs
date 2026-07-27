@@ -47,6 +47,7 @@ pub fn derive_public_key(private_key_hex: String) -> Result<String, NdrError> {
 pub struct PairwiseAction {
     pub action_id: String,
     pub kind: String,
+    pub session_id: Option<String>,
     pub subscription_id: Option<String>,
     pub filter_json: Option<String>,
     pub event_json: Option<String>,
@@ -228,6 +229,11 @@ impl PairwiseManager {
         Ok(self.lock()?.ack_actions(&action_ids)?)
     }
 
+    pub fn retire_peer(&self, peer_pubkey_hex: String) -> Result<bool, NdrError> {
+        let peer = parse_pubkey(&peer_pubkey_hex)?;
+        Ok(self.lock()?.retire_peer(peer)?)
+    }
+
     pub fn session_info(
         &self,
         peer_pubkey_hex: String,
@@ -268,6 +274,7 @@ fn ffi_action(action: nostr_double_ratchet_pairwise::PairwiseAction) -> Pairwise
     let mut output = PairwiseAction {
         action_id: action.id,
         kind: String::new(),
+        session_id: None,
         subscription_id: None,
         filter_json: None,
         event_json: None,
@@ -279,11 +286,12 @@ fn ffi_action(action: nostr_double_ratchet_pairwise::PairwiseAction) -> Pairwise
     };
     match action.kind {
         PairwiseActionKind::Publish {
+            session_id,
             event_json,
             inner_event_id,
-            ..
         } => {
             output.kind = "publish".to_string();
+            output.session_id = Some(session_id);
             output.outer_event_id = serde_json::from_str::<Event>(&event_json)
                 .ok()
                 .map(|event| event.id.to_hex());
@@ -292,10 +300,11 @@ fn ffi_action(action: nostr_double_ratchet_pairwise::PairwiseAction) -> Pairwise
         }
         PairwiseActionKind::OutOfBand {
             peer_pubkey_hex,
+            session_id,
             event_json,
-            ..
         } => {
             output.kind = "out_of_band".to_string();
+            output.session_id = Some(session_id);
             output.peer_pubkey_hex = Some(peer_pubkey_hex);
             output.event_json = Some(event_json);
         }
@@ -463,6 +472,12 @@ mod tests {
             .iter()
             .find(|action| action.kind == "out_of_band")
             .expect("response");
+        let bootstrap = first
+            .iter()
+            .find(|action| action.kind == "publish")
+            .expect("bootstrap");
+        assert_eq!(response.session_id, bootstrap.session_id);
+        assert!(response.session_id.is_some());
         assert_eq!(
             response.peer_pubkey_hex.as_deref(),
             Some(alice_keys.public_key_hex.as_str())
@@ -473,6 +488,15 @@ mod tests {
                 bob_keys.public_key_hex.clone(),
             )
             .expect("response");
+        assert!(alice
+            .retire_peer(bob_keys.public_key_hex.clone())
+            .expect("retire peer"));
+        assert!(!alice
+            .retire_peer(bob_keys.public_key_hex.clone())
+            .expect("repeat retirement"));
+        drop(alice);
+        let alice = manager(&alice_keys, &alice_path);
+        assert!(alice.known_peer_pubkeys().expect("known peers").is_empty());
         let action_ids = first
             .into_iter()
             .map(|action| action.action_id)

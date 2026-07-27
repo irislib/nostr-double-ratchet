@@ -171,7 +171,10 @@ Groups use a hybrid model:
 For single-device pairwise iOS/Android integration, use
 [`ndr-pairwise-ffi`](./rust/crates/ndr-pairwise-ffi). It exposes invite exchange, durable
 pairwise sessions, disappearing messages, and explicit pending-action acknowledgement without
-compiling AppKeys, linked-device, or group code.
+compiling AppKeys, linked-device, or group code. Publish and out-of-band actions expose their
+session id so an app can admit the out-of-band response before publishing that session's
+bootstrap event. Per-peer retirement durably removes one identity's sessions and queued actions
+without resetting unrelated chats.
 
 Use [`iris-chat-rs`](https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat-rs)
 when the app needs AppKeys, multiple devices, sibling sync, or groups.

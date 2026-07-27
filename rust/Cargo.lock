@@ -797,7 +797,9 @@ dependencies = [
 name = "nostr-double-ratchet-pairwise"
 version = "0.0.164"
 dependencies = [
+ "chacha20poly1305",
  "hex",
+ "hkdf",
  "nostr",
  "nostr-double-ratchet",
  "nostr-double-ratchet-pairwise-codec",
@@ -808,6 +810,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
