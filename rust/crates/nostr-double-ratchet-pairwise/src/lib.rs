@@ -14,4 +14,4 @@ pub use action::{
 pub use error::{PairwiseError, Result};
 pub use manager::PairwiseManager;
 pub use state::RuntimeLimits;
-pub use storage::{FileStore, MemoryStore, PairwiseStore};
+pub use storage::{FileStore, MemoryStore, PairwiseStore, MAX_FILE_STORE_PAYLOAD_BYTES};

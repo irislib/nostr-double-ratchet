@@ -37,6 +37,7 @@ impl From<nostr_double_ratchet_pairwise::PairwiseError> for NdrError {
         match error {
             PairwiseError::InvalidKey(_) => Self::InvalidKey(message),
             PairwiseError::InvalidEvent(_)
+            | PairwiseError::InvalidLimits
             | PairwiseError::OwnerDeviceMismatch
             | PairwiseError::InputTooLarge { .. }
             | PairwiseError::CorruptState(_)

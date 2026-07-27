@@ -20,6 +20,9 @@ pub enum PairwiseError {
     #[error("durable {queue} queue is full")]
     QueueFull { queue: &'static str },
 
+    #[error("invalid pairwise runtime limits")]
+    InvalidLimits,
+
     #[error("{input} exceeds the {limit}-byte limit")]
     InputTooLarge { input: &'static str, limit: usize },
 

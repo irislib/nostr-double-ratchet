@@ -144,6 +144,8 @@ pub struct DecodedPairwiseRumor {
     pub marker: ProtocolMarker,
     pub event: UnsignedEvent,
     pub kind: PairwiseRumorKind,
+    pub millis: Option<u64>,
+    pub expiration: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -303,25 +305,23 @@ pub fn decode_with_mode(payload: &[u8], mode: DecodeMode) -> Result<DecodedPairw
     event.ensure_id();
     event.verify_id()?;
     let marker = protocol_marker(&event, mode)?;
-    validate_control_tags(&event, marker)?;
+    let (millis, expiration) = control_tags(&event, marker)?;
     let kind = match event.kind.as_u16() as u32 {
         CHAT_MESSAGE_KIND => PairwiseRumorKind::Message {
             body: event.content.clone(),
             event_ids: tag_values(&event, "e"),
-            expiration: expiration(&event)?,
+            expiration,
         },
-        TYPING_KIND => PairwiseRumorKind::Typing {
-            expiration: expiration(&event)?,
-        },
+        TYPING_KIND => PairwiseRumorKind::Typing { expiration },
         RECEIPT_KIND => PairwiseRumorKind::Receipt {
             receipt_type: ReceiptType::try_from(event.content.as_str())?,
             event_ids: tag_values(&event, "e"),
-            expiration: expiration(&event)?,
+            expiration,
         },
         REACTION_KIND => PairwiseRumorKind::Reaction {
             emoji: event.content.clone(),
             event_id: tag_values(&event, "e").into_iter().next(),
-            expiration: expiration(&event)?,
+            expiration,
         },
         CHAT_SETTINGS_KIND => PairwiseRumorKind::ChatSettings {
             message_ttl: parse_chat_settings(&event.content)?,
@@ -333,23 +333,27 @@ pub fn decode_with_mode(payload: &[u8], mode: DecodeMode) -> Result<DecodedPairw
         marker,
         event,
         kind,
+        millis,
+        expiration,
     })
 }
 
-fn validate_control_tags(event: &UnsignedEvent, marker: ProtocolMarker) -> Result<()> {
-    if marker == ProtocolMarker::CurrentV1 {
+fn control_tags(
+    event: &UnsignedEvent,
+    marker: ProtocolMarker,
+) -> Result<(Option<u64>, Option<u64>)> {
+    let millis = if marker == ProtocolMarker::CurrentV1 {
         let millis = single_tag_value(event, MS_TAG)?
             .ok_or_else(|| Error::MissingControlTag(MS_TAG.to_string()))?;
-        millis
-            .parse::<u64>()
-            .map_err(|_| Error::InvalidControlTag(MS_TAG.to_string()))?;
-    }
-    if let Some(value) = single_tag_value(event, EXPIRATION_TAG)? {
-        value
-            .parse::<u64>()
-            .map_err(|_| Error::InvalidControlTag(EXPIRATION_TAG.to_string()))?;
-    }
-    Ok(())
+        Some(
+            millis
+                .parse::<u64>()
+                .map_err(|_| Error::InvalidControlTag(MS_TAG.to_string()))?,
+        )
+    } else {
+        None
+    };
+    Ok((millis, expiration(event)?))
 }
 
 fn build_event(
@@ -425,15 +429,22 @@ fn expiration(event: &UnsignedEvent) -> Result<Option<u64>> {
 }
 
 fn single_tag_value(event: &UnsignedEvent, key: &str) -> Result<Option<String>> {
-    let mut values = event.tags.iter().filter_map(|tag| {
-        let values = tag.as_slice();
-        (values.first().map(|value| value.as_str()) == Some(key)).then(|| values.get(1).cloned())
-    });
-    let first = values.next().flatten();
-    if values.next().is_some() {
+    let mut matching = event
+        .tags
+        .iter()
+        .filter(|tag| tag.as_slice().first().map(String::as_str) == Some(key));
+    let Some(first) = matching.next() else {
+        return Ok(None);
+    };
+    let value = first
+        .as_slice()
+        .get(1)
+        .cloned()
+        .ok_or_else(|| Error::InvalidControlTag(key.to_string()))?;
+    if matching.next().is_some() {
         return Err(Error::DuplicateControlTag(key.to_string()));
     }
-    Ok(first)
+    Ok(Some(value))
 }
 
 fn tag_values(event: &UnsignedEvent, key: &str) -> Vec<String> {
@@ -622,6 +633,21 @@ mod tests {
                 .build(author);
         assert!(matches!(
             decode_strict(&serde_json::to_vec(&malformed_expiration).unwrap()),
+            Err(Error::InvalidControlTag(ref key)) if key == EXPIRATION_TAG
+        ));
+
+        let missing_expiration_value =
+            EventBuilder::new(Kind::from(CHAT_MESSAGE_KIND as u16), "missing expiration")
+                .tags(vec![
+                    tag([PROTOCOL_TAG, PROTOCOL_VALUE]).unwrap(),
+                    tag([VERSION_TAG, VERSION_VALUE]).unwrap(),
+                    tag([MS_TAG, "1710000000123"]).unwrap(),
+                    tag([EXPIRATION_TAG]).unwrap(),
+                ])
+                .custom_created_at(Timestamp::from(1_710_000_000))
+                .build(author);
+        assert!(matches!(
+            decode_strict(&serde_json::to_vec(&missing_expiration_value).unwrap()),
             Err(Error::InvalidControlTag(ref key)) if key == EXPIRATION_TAG
         ));
     }

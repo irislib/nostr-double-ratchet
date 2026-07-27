@@ -8,9 +8,18 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+default = []
+bindgen = ["uniffi/cli"]
+
 [lib]
 name = "ndr_ffi"
 crate-type = ["cdylib", "staticlib", "rlib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
 
 [dependencies]
 hex.workspace = true

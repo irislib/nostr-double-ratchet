@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use nostr::{Event, Keys, PublicKey, SecretKey};
 use nostr_double_ratchet::{parse_invite_event, parse_invite_url, Invite};
 use nostr_double_ratchet_pairwise::{
-    FileStore, MemoryStore, PairwiseActionKind, PairwiseManager as RuntimeManager, RuntimeLimits,
+    FileStore, PairwiseActionKind, PairwiseManager as RuntimeManager, RuntimeLimits,
 };
 
 mod error;
@@ -54,6 +54,7 @@ pub struct PairwiseAction {
     pub inner_event_json: Option<String>,
     pub inner_event_id: Option<String>,
     pub outer_event_id: Option<String>,
+    pub expires_at_seconds: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
@@ -117,22 +118,6 @@ pub struct PairwiseManager {
 
 #[uniffi::export]
 impl PairwiseManager {
-    #[uniffi::constructor]
-    pub fn new(
-        our_pubkey_hex: String,
-        our_identity_private_key_hex: String,
-    ) -> Result<Arc<Self>, NdrError> {
-        let keys = validated_keys(&our_pubkey_hex, &our_identity_private_key_hex)?;
-        let runtime = RuntimeManager::open(
-            Arc::new(MemoryStore::default()),
-            keys,
-            RuntimeLimits::default(),
-        )?;
-        Ok(Arc::new(Self {
-            inner: Mutex::new(runtime),
-        }))
-    }
-
     #[uniffi::constructor]
     pub fn new_with_storage_path(
         our_pubkey_hex: String,
@@ -206,14 +191,10 @@ impl PairwiseManager {
         expires_at_seconds: Option<u64>,
     ) -> Result<PairwiseSendResult, NdrError> {
         let peer = parse_pubkey(&peer_pubkey_hex)?;
-        let now = unix_now();
-        let result = self.lock()?.send_text(
-            peer,
-            &text,
-            expires_at_seconds,
-            now,
-            now.saturating_mul(1_000),
-        )?;
+        let millis = unix_now_millis();
+        let result =
+            self.lock()?
+                .send_text(peer, &text, expires_at_seconds, millis / 1_000, millis)?;
         Ok(PairwiseSendResult {
             inner_event_id: result.inner_event_id,
             outer_event_id: result.outer_event_id,
@@ -228,7 +209,16 @@ impl PairwiseManager {
     pub fn pending_actions(&self) -> Result<Vec<PairwiseAction>, NdrError> {
         Ok(self
             .lock()?
-            .pending_actions()
+            .pending_actions()?
+            .into_iter()
+            .map(ffi_action)
+            .collect())
+    }
+
+    pub fn pending_actions_at(&self, now_seconds: u64) -> Result<Vec<PairwiseAction>, NdrError> {
+        Ok(self
+            .lock()?
+            .pending_actions_at(now_seconds)?
             .into_iter()
             .map(ffi_action)
             .collect())
@@ -253,25 +243,16 @@ impl PairwiseManager {
             }))
     }
 
-    pub fn known_peer_pubkeys(&self) -> Vec<String> {
-        self.inner
-            .lock()
-            .map(|runtime| runtime.known_peer_pubkeys())
-            .unwrap_or_default()
+    pub fn known_peer_pubkeys(&self) -> Result<Vec<String>, NdrError> {
+        Ok(self.lock()?.known_peer_pubkeys())
     }
 
-    pub fn get_total_sessions(&self) -> u64 {
-        self.inner
-            .lock()
-            .map(|runtime| runtime.total_sessions())
-            .unwrap_or_default()
+    pub fn get_total_sessions(&self) -> Result<u64, NdrError> {
+        Ok(self.lock()?.total_sessions())
     }
 
-    pub fn get_our_pubkey_hex(&self) -> String {
-        self.inner
-            .lock()
-            .map(|runtime| runtime.local_pubkey().to_hex())
-            .unwrap_or_default()
+    pub fn get_our_pubkey_hex(&self) -> Result<String, NdrError> {
+        Ok(self.lock()?.local_pubkey().to_hex())
     }
 }
 
@@ -294,11 +275,13 @@ fn ffi_action(action: nostr_double_ratchet_pairwise::PairwiseAction) -> Pairwise
         inner_event_json: None,
         inner_event_id: None,
         outer_event_id: None,
+        expires_at_seconds: None,
     };
     match action.kind {
         PairwiseActionKind::Publish {
             event_json,
             inner_event_id,
+            ..
         } => {
             output.kind = "publish".to_string();
             output.outer_event_id = serde_json::from_str::<Event>(&event_json)
@@ -307,8 +290,13 @@ fn ffi_action(action: nostr_double_ratchet_pairwise::PairwiseAction) -> Pairwise
             output.event_json = Some(event_json);
             output.inner_event_id = inner_event_id;
         }
-        PairwiseActionKind::OutOfBand { event_json } => {
+        PairwiseActionKind::OutOfBand {
+            peer_pubkey_hex,
+            event_json,
+            ..
+        } => {
             output.kind = "out_of_band".to_string();
+            output.peer_pubkey_hex = Some(peer_pubkey_hex);
             output.event_json = Some(event_json);
         }
         PairwiseActionKind::Subscribe {
@@ -328,12 +316,14 @@ fn ffi_action(action: nostr_double_ratchet_pairwise::PairwiseAction) -> Pairwise
             inner_event_json,
             inner_event_id,
             outer_event_id,
+            expires_at_seconds,
         } => {
             output.kind = "delivery".to_string();
             output.peer_pubkey_hex = Some(peer_pubkey_hex);
             output.inner_event_json = Some(inner_event_json);
             output.inner_event_id = Some(inner_event_id);
             output.outer_event_id = Some(outer_event_id);
+            output.expires_at_seconds = expires_at_seconds;
         }
     }
     output
@@ -401,21 +391,38 @@ fn unix_now() -> u64 {
         .as_secs()
 }
 
+fn unix_now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
-    fn manager(keys: &FfiKeyPair) -> Arc<PairwiseManager> {
-        PairwiseManager::new(keys.public_key_hex.clone(), keys.private_key_hex.clone())
-            .expect("manager")
+    fn manager(keys: &FfiKeyPair, path: &Path) -> Arc<PairwiseManager> {
+        PairwiseManager::new_with_storage_path(
+            keys.public_key_hex.clone(),
+            keys.private_key_hex.clone(),
+            path.to_string_lossy().into_owned(),
+        )
+        .expect("manager")
     }
 
     #[test]
     fn ffi_handshake_actions_are_pairwise_only_and_durable() {
         let alice_keys = generate_keypair();
         let bob_keys = generate_keypair();
-        let alice = manager(&alice_keys);
-        let bob = manager(&bob_keys);
+        let directory = tempfile::tempdir().expect("tempdir");
+        let alice_path = directory.path().join("alice");
+        let bob_path = directory.path().join("bob");
+        let alice = manager(&alice_keys, &alice_path);
+        let bob = manager(&bob_keys, &bob_path);
         let invite_json = alice.current_invite_event_json().expect("invite");
         let inspected =
             PairwiseInvite::from_event_json(invite_json.clone()).expect("inspect invite");
@@ -430,6 +437,13 @@ mod tests {
         let first = bob.pending_actions().expect("first pending");
         let second = bob.pending_actions().expect("second pending");
         assert_eq!(first, second, "pending actions are non-destructive");
+        drop(bob);
+        let bob = manager(&bob_keys, &bob_path);
+        assert_eq!(
+            bob.pending_actions().expect("pending after reopen"),
+            first,
+            "pending actions survive a physical FileStore reopen"
+        );
         assert!(first.iter().any(|action| action.kind == "out_of_band"));
         assert!(first.iter().any(|action| action.kind == "publish"));
         for action in &first {
@@ -449,6 +463,10 @@ mod tests {
             .iter()
             .find(|action| action.kind == "out_of_band")
             .expect("response");
+        assert_eq!(
+            response.peer_pubkey_hex.as_deref(),
+            Some(alice_keys.public_key_hex.as_str())
+        );
         alice
             .process_out_of_band_response(
                 response.event_json.clone().expect("response JSON"),
@@ -460,6 +478,8 @@ mod tests {
             .map(|action| action.action_id)
             .collect::<Vec<_>>();
         bob.ack_actions(action_ids).expect("ack");
+        drop(bob);
+        let bob = manager(&bob_keys, &bob_path);
         assert!(bob
             .pending_actions()
             .expect("after ack")
@@ -470,7 +490,8 @@ mod tests {
     #[test]
     fn ffi_rejects_oversized_input_before_json_parse() {
         let keys = generate_keypair();
-        let manager = manager(&keys);
+        let directory = tempfile::tempdir().expect("tempdir");
+        let manager = manager(&keys, directory.path());
         let oversized = "x".repeat(MAX_ENCODED_EVENT_BYTES + 1);
         assert!(matches!(
             manager.process_event(oversized),

@@ -6,6 +6,8 @@
   disappearing messages without AppKeys, linked-device, or group dependencies.
 - Persist encrypted ratchet state and pending transport actions atomically, with explicit
   acknowledgement and restart-safe replay/skipped-key handling.
+- Split oversized legacy Rust and TypeScript modules without changing their public APIs, and
+  enforce repository-wide limits of 1,000 Rust lines and 500 TypeScript-family lines in CI.
 
 ## 0.0.165 - 2026-07-16
 

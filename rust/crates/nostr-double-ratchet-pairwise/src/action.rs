@@ -4,10 +4,13 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum PairwiseActionKind {
     Publish {
+        session_id: String,
         event_json: String,
         inner_event_id: Option<String>,
     },
     OutOfBand {
+        peer_pubkey_hex: String,
+        session_id: String,
         event_json: String,
     },
     Subscribe {
@@ -22,6 +25,7 @@ pub enum PairwiseActionKind {
         inner_event_json: String,
         inner_event_id: String,
         outer_event_id: String,
+        expires_at_seconds: Option<u64>,
     },
 }
 

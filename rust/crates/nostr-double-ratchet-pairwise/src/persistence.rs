@@ -4,8 +4,13 @@ use nostr::Keys;
 use crate::state::{PairwiseState, StorageEnvelope, STORAGE_FORMAT_VERSION};
 use crate::{PairwiseError, Result, RuntimeLimits};
 
-pub(crate) fn seal_state(state: &PairwiseState, identity_keys: &Keys) -> Result<Vec<u8>> {
+pub(crate) fn seal_state(
+    state: &PairwiseState,
+    identity_keys: &Keys,
+    max_bytes: usize,
+) -> Result<Vec<u8>> {
     let plaintext = serde_json::to_string(state)?;
+    ensure_state_size(plaintext.len(), max_bytes)?;
     let ciphertext = nip44::encrypt(
         identity_keys.secret_key(),
         &identity_keys.public_key(),
@@ -19,7 +24,9 @@ pub(crate) fn seal_state(state: &PairwiseState, identity_keys: &Keys) -> Result<
         identity_pubkey_hex: identity_keys.public_key().to_hex(),
         ciphertext,
     };
-    serde_json::to_vec(&envelope).map_err(Into::into)
+    let payload = serde_json::to_vec(&envelope)?;
+    ensure_state_size(payload.len(), max_bytes)?;
+    Ok(payload)
 }
 
 pub(crate) fn open_state(
@@ -27,6 +34,7 @@ pub(crate) fn open_state(
     identity_keys: &Keys,
     limits: &RuntimeLimits,
 ) -> Result<PairwiseState> {
+    ensure_state_size(payload.len(), limits.max_persisted_state_bytes)?;
     let envelope: StorageEnvelope = serde_json::from_slice(payload)
         .map_err(|error| PairwiseError::CorruptState(error.to_string()))?;
     if envelope.format_version != STORAGE_FORMAT_VERSION {
@@ -56,11 +64,21 @@ pub(crate) fn open_state(
     Ok(state)
 }
 
+fn ensure_state_size(size: usize, max_bytes: usize) -> Result<()> {
+    if size > max_bytes {
+        return Err(PairwiseError::CorruptState(
+            "persisted pairwise state exceeds configured size limit".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use nostr_double_ratchet::{Invite, OwnerPubkey};
 
     use super::*;
+    use crate::state::MAX_PERSISTED_STATE_BYTES;
 
     fn state(keys: &Keys) -> PairwiseState {
         let mut invite =
@@ -76,7 +94,7 @@ mod tests {
         let alice = Keys::generate();
         let bob = Keys::generate();
         let state = state(&alice);
-        let payload = seal_state(&state, &alice).expect("seal");
+        let payload = seal_state(&state, &alice, MAX_PERSISTED_STATE_BYTES).expect("seal");
         let payload_text = String::from_utf8(payload.clone()).expect("JSON");
         assert!(!payload_text.contains(&hex::encode(state.local_invite.shared_secret)));
         assert!(matches!(
@@ -91,7 +109,7 @@ mod tests {
     fn state_corruption_fails_closed() {
         let keys = Keys::generate();
         let state = state(&keys);
-        let mut payload = seal_state(&state, &keys).expect("seal");
+        let mut payload = seal_state(&state, &keys, MAX_PERSISTED_STATE_BYTES).expect("seal");
         let position = payload.len() / 2;
         payload[position] ^= 1;
         assert!(open_state(&payload, &keys, &RuntimeLimits::default()).is_err());

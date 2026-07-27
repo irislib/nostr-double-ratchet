@@ -89,7 +89,7 @@ jobs:
       run: cargo test --locked
 
     - name: Check minimal pairwise FFI feature graph
-      run: cargo check --locked -p ndr-pairwise-ffi --no-default-features
+      run: cargo check --locked -p ndr-pairwise-ffi --no-default-features --lib
 
     - name: Check formatting
       run: cargo fmt --check

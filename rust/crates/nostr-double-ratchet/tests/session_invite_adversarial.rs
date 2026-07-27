@@ -2,7 +2,8 @@ mod support;
 
 use nostr_double_ratchet::wire as codec;
 use nostr_double_ratchet::{
-    AuthorizedDevice, DeviceRoster, DomainError, Error, Invite, Result, UnixSeconds, MAX_SKIP,
+    AuthorizedDevice, DeviceRoster, DomainError, Error, Invite, OwnerPubkey, Result, UnixSeconds,
+    MAX_SKIP,
 };
 use support::{
     actor, context, corrupt_invite_response_layer, header_tag, invite_response_fixture,
@@ -199,6 +200,46 @@ fn tampered_invite_response_is_rejected_and_invite_state_stays_usable() -> Resul
     let mut recv_ctx = context(19, 1_700_200_705);
     let received = receive_event(&mut alice_session, &mut recv_ctx, &sent.event)?;
     assert_eq!(support::payload_text(&received), "usable");
+    Ok(())
+}
+
+#[test]
+fn invalid_x_only_owner_key_is_rejected_without_panicking_or_consuming_invite() -> Result<()> {
+    let alice = actor(44);
+    let bob = actor(45);
+
+    let mut invite_ctx = context(26, 1_700_201_000);
+    let mut owned_invite =
+        Invite::create_new_with_context(&mut invite_ctx, alice.device_pubkey, None, None)?;
+    let public_invite = codec::parse_invite_url(&codec::invite_url(&owned_invite, ROOT_URL)?)?;
+    let invalid_owner = OwnerPubkey::from_bytes([0xff; 32]);
+
+    let mut malicious_ctx = context(27, 1_700_201_001);
+    let (_, malicious_envelope) = public_invite.accept_with_owner_context(
+        &mut malicious_ctx,
+        bob.device_pubkey,
+        bob.secret_key,
+        Some(invalid_owner),
+    )?;
+    let before = snapshot(&owned_invite);
+    let mut process_ctx = context(28, 1_700_201_002);
+    let rejected =
+        owned_invite.process_response(&mut process_ctx, &malicious_envelope, alice.secret_key);
+    assert!(
+        matches!(rejected, Err(Error::Parse(_))),
+        "unexpected invalid-owner result: {rejected:?}"
+    );
+    assert_eq!(snapshot(&owned_invite), before);
+
+    let mut valid_ctx = context(29, 1_700_201_003);
+    let (_, valid_envelope) = public_invite.accept_with_owner_context(
+        &mut valid_ctx,
+        bob.device_pubkey,
+        bob.secret_key,
+        Some(bob.owner_pubkey),
+    )?;
+    let mut retry_ctx = context(30, 1_700_201_004);
+    owned_invite.process_response(&mut retry_ctx, &valid_envelope, alice.secret_key)?;
     Ok(())
 }
 

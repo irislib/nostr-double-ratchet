@@ -8,9 +8,7 @@ use nostr_double_ratchet::{
     parse_invite_response_event, parse_message_event, DevicePubkey, Invite, OwnerPubkey,
     ProtocolContext, Session, UnixSeconds, INVITE_RESPONSE_KIND, MESSAGE_EVENT_KIND,
 };
-use nostr_double_ratchet_pairwise_codec::{
-    self as pairwise_codec, EncodeOptions, PairwiseRumorKind,
-};
+use nostr_double_ratchet_pairwise_codec::{self as pairwise_codec, EncodeOptions};
 use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
 
@@ -21,7 +19,7 @@ use crate::{
     PairwiseSessionInfo, PairwiseStore, Result, RuntimeLimits,
 };
 
-const MESSAGE_SUBSCRIPTION_ID: &str = "ndr-pairwise-messages";
+const MAX_INVITE_FUTURE_SKEW_SECONDS: u64 = 10 * 60;
 
 pub struct PairwiseManager {
     store: Arc<dyn PairwiseStore>,
@@ -37,6 +35,7 @@ impl PairwiseManager {
         identity_keys: Keys,
         limits: RuntimeLimits,
     ) -> Result<Self> {
+        limits.validate()?;
         let payload = store.load()?;
         let is_new = payload.is_none();
         let state = match payload {
@@ -97,11 +96,16 @@ impl PairwiseManager {
         let encoded_invite = serde_json::to_vec(invite)?;
         ensure_size(encoded_invite.len(), self.limits.max_event_bytes, "invite")?;
         validate_invite_peer(invite, authenticated_peer)?;
+        if invite.created_at.get() > now.saturating_add(MAX_INVITE_FUTURE_SKEW_SECONDS) {
+            return Err(PairwiseError::InvalidEvent(
+                "invite timestamp is unreasonably far in the future".to_string(),
+            ));
+        }
         let peer_hex = authenticated_peer.to_hex();
         ensure_peer_capacity(&self.state, &self.limits, &peer_hex)?;
-        let handshake_id = handshake_id(invite);
+        let handshake_id = handshake_id(invite, self.identity_keys.public_key());
 
-        if let Some(response_json) = self
+        if let Some((response_json, bootstrap_json)) = self
             .state
             .peers
             .get(&peer_hex)
@@ -110,17 +114,41 @@ impl PairwiseManager {
                     .iter()
                     .find(|session| session.handshake_id == handshake_id)
             })
-            .and_then(|session| session.invite_response_event_json.clone())
+            .and_then(|session| {
+                Some((
+                    session.invite_response_event_json.clone()?,
+                    session.bootstrap_event_json.clone()?,
+                ))
+            })
         {
             let mut next = self.state.clone();
-            if !has_pending_event(&next, &response_json) {
-                ensure_outbound_capacity(&next, &self.limits, 1)?;
-                push_action(
-                    &mut next,
-                    PairwiseActionKind::OutOfBand {
-                        event_json: response_json,
-                    },
-                );
+            let response_missing =
+                !has_pending_out_of_band_event(&next, &peer_hex, &handshake_id, &response_json);
+            let bootstrap_missing =
+                !has_pending_publish_event(&next, &handshake_id, &bootstrap_json);
+            let missing = usize::from(response_missing) + usize::from(bootstrap_missing);
+            if missing > 0 {
+                ensure_outbound_capacity(&next, &self.limits, missing)?;
+                if response_missing {
+                    push_action(
+                        &mut next,
+                        PairwiseActionKind::OutOfBand {
+                            peer_pubkey_hex: peer_hex.clone(),
+                            session_id: handshake_id.clone(),
+                            event_json: response_json,
+                        },
+                    );
+                }
+                if bootstrap_missing {
+                    push_action(
+                        &mut next,
+                        PairwiseActionKind::Publish {
+                            session_id: handshake_id.clone(),
+                            event_json: bootstrap_json,
+                            inner_event_id: None,
+                        },
+                    );
+                }
                 self.commit_next(next, self.installed_message_authors.clone())?;
             }
             return Ok(PairwiseAcceptResult {
@@ -129,7 +157,12 @@ impl PairwiseManager {
             });
         }
 
-        ensure_outbound_capacity(&self.state, &self.limits, 2)?;
+        ensure_winning_handshake(
+            &self.state,
+            &peer_hex,
+            invite.created_at.get(),
+            &handshake_id,
+        )?;
         let mut rng = OsRng;
         let mut context = ProtocolContext::new(UnixSeconds(now), &mut rng);
         let local_device = DevicePubkey::from_bytes(self.identity_keys.public_key().to_bytes());
@@ -158,39 +191,53 @@ impl PairwiseManager {
             self.limits.max_event_bytes,
             "bootstrap event",
         )?;
+        let bootstrap_json = serde_json::to_string(&bootstrap_event)?;
 
         let mut next = self.state.clone();
-        let peer = next
-            .peers
-            .entry(peer_hex.clone())
-            .or_insert_with(|| PeerState {
-                peer_pubkey_hex: peer_hex.clone(),
-                sessions: Vec::new(),
-            });
-        let created_new_session = peer.insert_session(
-            SessionRecord {
-                handshake_id,
-                handshake_created_at: invite.created_at.get(),
-                state: session.state,
-                invite_response_event_json: Some(response_json.clone()),
-            },
-            self.limits.max_sessions_per_peer,
-        );
+        let (created_new_session, retired) = {
+            let peer = next
+                .peers
+                .entry(peer_hex.clone())
+                .or_insert_with(|| PeerState {
+                    peer_pubkey_hex: peer_hex.clone(),
+                    sessions: Vec::new(),
+                });
+            peer.install_session(
+                SessionRecord {
+                    handshake_id: handshake_id.clone(),
+                    handshake_created_at: invite.created_at.get(),
+                    state: session.state,
+                    invite_response_event_json: Some(response_json.clone()),
+                    bootstrap_event_json: Some(bootstrap_json.clone()),
+                    accepted_response_event_id: None,
+                },
+                self.limits.max_sessions_per_peer,
+            )?
+        };
+        retire_sessions(&mut next, retired);
+        ensure_outbound_capacity(&next, &self.limits, 2)?;
         push_action(
             &mut next,
             PairwiseActionKind::OutOfBand {
+                peer_pubkey_hex: peer_hex.clone(),
+                session_id: handshake_id.clone(),
                 event_json: response_json,
             },
         );
         push_action(
             &mut next,
             PairwiseActionKind::Publish {
-                event_json: serde_json::to_string(&bootstrap_event)?,
+                session_id: handshake_id,
+                event_json: bootstrap_json,
                 inner_event_id: None,
             },
         );
-        let authors =
-            refresh_subscription_actions(&mut next, &self.installed_message_authors, false)?;
+        let authors = refresh_subscription_actions(
+            &mut next,
+            &self.installed_message_authors,
+            false,
+            &self.limits,
+        )?;
         self.commit_next(next, authors)?;
 
         Ok(PairwiseAcceptResult {
@@ -218,8 +265,18 @@ impl PairwiseManager {
             ));
         }
         let event_id = event.id.to_hex();
+        let authenticated_peer_hex = authenticated_peer.to_hex();
         if self.state.has_seen_event(&event_id) {
-            return Ok(());
+            return match self.state.response_event_peers.get(&event_id) {
+                Some(bound_peer) if bound_peer == &authenticated_peer_hex => Ok(()),
+                Some(bound_peer) => Err(PairwiseError::PeerMismatch {
+                    expected: bound_peer.clone(),
+                    actual: authenticated_peer_hex,
+                }),
+                None => Err(PairwiseError::InvalidEvent(
+                    "seen response is missing authenticated peer binding".to_string(),
+                )),
+            };
         }
 
         let mut invite = self.state.local_invite.clone();
@@ -232,29 +289,47 @@ impl PairwiseManager {
         )?;
         validate_response_peer(&response, authenticated_peer)?;
 
-        let peer_hex = authenticated_peer.to_hex();
+        let peer_hex = authenticated_peer_hex;
+        let response_handshake_id = handshake_id(&invite, authenticated_peer);
         ensure_peer_capacity(&self.state, &self.limits, &peer_hex)?;
+        ensure_winning_handshake(
+            &self.state,
+            &peer_hex,
+            invite.created_at.get(),
+            &response_handshake_id,
+        )?;
         let mut next = self.state.clone();
         next.local_invite = invite;
-        let peer = next
-            .peers
-            .entry(peer_hex.clone())
-            .or_insert_with(|| PeerState {
-                peer_pubkey_hex: peer_hex,
-                sessions: Vec::new(),
-            });
-        peer.insert_session(
-            SessionRecord {
-                handshake_id: handshake_id(&next.local_invite),
-                handshake_created_at: next.local_invite.created_at.get(),
-                state: response.session.state,
-                invite_response_event_json: None,
-            },
-            self.limits.max_sessions_per_peer,
-        );
+        let retired = {
+            let peer = next
+                .peers
+                .entry(peer_hex.clone())
+                .or_insert_with(|| PeerState {
+                    peer_pubkey_hex: peer_hex.clone(),
+                    sessions: Vec::new(),
+                });
+            peer.install_session(
+                SessionRecord {
+                    handshake_id: response_handshake_id,
+                    handshake_created_at: next.local_invite.created_at.get(),
+                    state: response.session.state,
+                    invite_response_event_json: None,
+                    bootstrap_event_json: None,
+                    accepted_response_event_id: Some(event_id.clone()),
+                },
+                self.limits.max_sessions_per_peer,
+            )?
+            .1
+        };
+        retire_sessions(&mut next, retired);
+        next.response_event_peers.insert(event_id.clone(), peer_hex);
         next.push_seen_event(event_id, self.limits.max_seen_event_ids);
-        let authors =
-            refresh_subscription_actions(&mut next, &self.installed_message_authors, false)?;
+        let authors = refresh_subscription_actions(
+            &mut next,
+            &self.installed_message_authors,
+            false,
+            &self.limits,
+        )?;
         self.commit_next(next, authors)
     }
 
@@ -267,15 +342,23 @@ impl PairwiseManager {
         millis: u64,
     ) -> Result<PairwiseSendResult> {
         ensure_size(text.len(), self.limits.max_text_bytes, "message text")?;
+        let next_millis = self
+            .state
+            .last_message_millis
+            .checked_add(1)
+            .ok_or_else(|| {
+                PairwiseError::InvalidEvent("message timestamp exhausted".to_string())
+            })?;
+        let message_millis = millis.max(next_millis);
         let mut inner = pairwise_codec::message_event(self.identity_keys.public_key(), text, {
-            let options = EncodeOptions::new(now, millis);
+            let options = EncodeOptions::new(now, message_millis);
             match expires_at {
                 Some(expiration) => options.with_expiration(expiration),
                 None => options,
             }
         })?;
         inner.ensure_id();
-        self.send_unsigned_event(peer, inner, now)
+        self.validate_and_send_unsigned_event(peer, inner, now, Some(message_millis))
     }
 
     pub fn send_unsigned_event(
@@ -283,6 +366,16 @@ impl PairwiseManager {
         peer: PublicKey,
         inner: UnsignedEvent,
         now: u64,
+    ) -> Result<PairwiseSendResult> {
+        self.validate_and_send_unsigned_event(peer, inner, now, None)
+    }
+
+    fn validate_and_send_unsigned_event(
+        &mut self,
+        peer: PublicKey,
+        inner: UnsignedEvent,
+        now: u64,
+        message_millis: Option<u64>,
     ) -> Result<PairwiseSendResult> {
         ensure_outbound_capacity(&self.state, &self.limits, 1)?;
         let encoded = serde_json::to_vec(&inner)?;
@@ -292,7 +385,7 @@ impl PairwiseManager {
             "inner event",
         )?;
         let decoded = pairwise_codec::decode_strict(&encoded)?;
-        self.send_inner_event(peer, decoded.event, now)
+        self.send_inner_event(peer, decoded.event, now, message_millis.or(decoded.millis))
     }
 
     pub fn process_event(&mut self, event: &Event) -> Result<()> {
@@ -306,11 +399,17 @@ impl PairwiseManager {
                 "pairwise relay input must be kind 1060".to_string(),
             ));
         }
+        event.verify()?;
         let event_id = event.id.to_hex();
         if self.state.has_seen_event(&event_id) {
             return Ok(());
         }
         let envelope = parse_message_event(event)?;
+        if envelope.recipient.is_some() {
+            return Err(PairwiseError::InvalidEvent(
+                "pairwise relay input must not reveal a recipient key".to_string(),
+            ));
+        }
 
         let mut decrypted = None;
         for (peer_hex, peer) in &self.state.peers {
@@ -356,11 +455,8 @@ impl PairwiseManager {
             .as_ref()
             .ok_or_else(|| PairwiseError::InvalidEvent("inner event is missing id".to_string()))?
             .to_hex();
-        let should_deliver = matches!(
-            decoded.kind,
-            PairwiseRumorKind::Message { expiration, .. }
-                if expiration.is_none_or(|expiration| expiration > now)
-        );
+        let expires_at_seconds = decoded.expiration;
+        let should_deliver = expires_at_seconds.is_none_or(|expiration| expiration > now);
         let inner_was_seen = self.state.has_seen_inner_event(&inner_event_id);
         if should_deliver
             && !inner_was_seen
@@ -385,16 +481,38 @@ impl PairwiseManager {
                     inner_event_json: serde_json::to_string(&decoded.event)?,
                     inner_event_id,
                     outer_event_id: event_id,
+                    expires_at_seconds,
                 },
             );
         }
-        let authors =
-            refresh_subscription_actions(&mut next, &self.installed_message_authors, false)?;
+        let authors = refresh_subscription_actions(
+            &mut next,
+            &self.installed_message_authors,
+            false,
+            &self.limits,
+        )?;
         self.commit_next(next, authors)
     }
 
-    pub fn pending_actions(&self) -> Vec<PairwiseAction> {
-        self.state.pending_actions.clone()
+    pub fn pending_actions(&mut self) -> Result<Vec<PairwiseAction>> {
+        self.pending_actions_at(unix_now())
+    }
+
+    pub fn pending_actions_at(&mut self, now: u64) -> Result<Vec<PairwiseAction>> {
+        let mut next = self.state.clone();
+        next.pending_actions.retain(|action| {
+            !matches!(
+                action.kind,
+                PairwiseActionKind::Delivery {
+                    expires_at_seconds: Some(expiration),
+                    ..
+                } if expiration <= now
+            )
+        });
+        if next.pending_actions.len() != self.state.pending_actions.len() {
+            self.commit_next(next, self.installed_message_authors.clone())?;
+        }
+        Ok(self.state.pending_actions.clone())
     }
 
     pub fn ack_actions(&mut self, action_ids: &[String]) -> Result<()> {
@@ -450,6 +568,7 @@ impl PairwiseManager {
         peer: PublicKey,
         mut inner: UnsignedEvent,
         now: u64,
+        message_millis: Option<u64>,
     ) -> Result<PairwiseSendResult> {
         if inner.pubkey != self.identity_keys.public_key() {
             return Err(PairwiseError::PeerMismatch {
@@ -473,6 +592,7 @@ impl PairwiseManager {
         let session_index = peer_state
             .preferred_send_session_index()
             .ok_or_else(|| PairwiseError::SessionNotReady(peer_hex.clone()))?;
+        let session_id = peer_state.sessions[session_index].handshake_id.clone();
         let session = Session::from_state(peer_state.sessions[session_index].state.clone());
         let plan = session.plan_send(&serde_json::to_vec(&inner)?, UnixSeconds(now))?;
         let envelope = plan.envelope.clone();
@@ -486,9 +606,13 @@ impl PairwiseManager {
             .and_then(|peer| peer.sessions.get_mut(session_index))
             .ok_or_else(|| PairwiseError::CorruptState("selected session disappeared".to_string()))?
             .state = plan.next_state;
+        if let Some(message_millis) = message_millis {
+            next.last_message_millis = next.last_message_millis.max(message_millis);
+        }
         push_action(
             &mut next,
             PairwiseActionKind::Publish {
+                session_id,
                 event_json: serde_json::to_string(&event)?,
                 inner_event_id: Some(inner_event_id.clone()),
             },
@@ -502,8 +626,12 @@ impl PairwiseManager {
 
     fn refresh_message_subscription(&mut self, force: bool) -> Result<()> {
         let mut next = self.state.clone();
-        let authors =
-            refresh_subscription_actions(&mut next, &self.installed_message_authors, force)?;
+        let authors = refresh_subscription_actions(
+            &mut next,
+            &self.installed_message_authors,
+            force,
+            &self.limits,
+        )?;
         if next.pending_actions == self.state.pending_actions {
             self.installed_message_authors = authors;
             return Ok(());
@@ -522,7 +650,11 @@ impl PairwiseManager {
             .checked_add(1)
             .ok_or_else(|| PairwiseError::Storage("state generation overflow".to_string()))?;
         next.validate(self.identity_keys.public_key(), &self.limits)?;
-        let payload = seal_state(&next, &self.identity_keys)?;
+        let payload = seal_state(
+            &next,
+            &self.identity_keys,
+            self.limits.max_persisted_state_bytes,
+        )?;
         self.store.commit(next.generation, &payload)?;
         self.state = next;
         self.installed_message_authors = installed_message_authors;
@@ -609,6 +741,47 @@ fn ensure_peer_capacity(
     Ok(())
 }
 
+fn ensure_winning_handshake(
+    state: &PairwiseState,
+    peer_hex: &str,
+    incoming_created_at: u64,
+    incoming_session_id: &str,
+) -> Result<()> {
+    let Some(peer) = state.peers.get(peer_hex) else {
+        return Ok(());
+    };
+    if peer
+        .winning_rank()
+        .is_some_and(|winning_rank| winning_rank > (incoming_created_at, incoming_session_id))
+    {
+        return Err(PairwiseError::InvalidEvent(
+            "handshake is older than the active pairwise session".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn retire_sessions(state: &mut PairwiseState, retired: Vec<SessionRecord>) {
+    if retired.is_empty() {
+        return;
+    }
+    let session_ids = retired
+        .iter()
+        .map(|session| session.handshake_id.as_str())
+        .collect::<BTreeSet<_>>();
+    state.pending_actions.retain(|action| {
+        action_session_id(&action.kind).is_none_or(|session_id| !session_ids.contains(session_id))
+    });
+}
+
+fn action_session_id(kind: &PairwiseActionKind) -> Option<&str> {
+    match kind {
+        PairwiseActionKind::Publish { session_id, .. }
+        | PairwiseActionKind::OutOfBand { session_id, .. } => Some(session_id),
+        _ => None,
+    }
+}
+
 fn ensure_event_size(event: &Event, limit: usize, input: &'static str) -> Result<()> {
     let encoded = serde_json::to_vec(event)?;
     ensure_size(encoded.len(), limit, input)
@@ -626,23 +799,43 @@ fn push_action(state: &mut PairwiseState, kind: PairwiseActionKind) {
     state.pending_actions.push(action);
 }
 
-fn has_pending_event(state: &PairwiseState, event_json: &str) -> bool {
+fn has_pending_out_of_band_event(
+    state: &PairwiseState,
+    peer_pubkey_hex: &str,
+    session_id: &str,
+    event_json: &str,
+) -> bool {
     state
         .pending_actions
         .iter()
         .any(|action| match &action.kind {
-            PairwiseActionKind::Publish {
+            PairwiseActionKind::OutOfBand {
+                peer_pubkey_hex: pending_peer,
+                session_id: pending_session,
                 event_json: pending,
-                ..
+            } => {
+                pending_peer == peer_pubkey_hex
+                    && pending_session == session_id
+                    && pending == event_json
             }
-            | PairwiseActionKind::OutOfBand {
-                event_json: pending,
-            } => pending == event_json,
             _ => false,
         })
 }
 
-fn message_authors(state: &PairwiseState) -> Vec<String> {
+fn has_pending_publish_event(state: &PairwiseState, session_id: &str, event_json: &str) -> bool {
+    state.pending_actions.iter().any(|action| {
+        matches!(
+            &action.kind,
+            PairwiseActionKind::Publish {
+                session_id: pending_session,
+                event_json: pending,
+                ..
+            } if pending_session == session_id && pending == event_json
+        )
+    })
+}
+
+fn message_authors(state: &PairwiseState, limits: &RuntimeLimits) -> Result<Vec<String>> {
     let mut authors = BTreeSet::new();
     for peer in state.peers.values() {
         authors.extend(
@@ -650,33 +843,63 @@ fn message_authors(state: &PairwiseState) -> Vec<String> {
                 .into_iter()
                 .map(|pubkey| pubkey.to_hex()),
         );
+        if authors.len() > limits.max_subscription_authors {
+            return Err(PairwiseError::QueueFull {
+                queue: "subscription-authors",
+            });
+        }
     }
-    authors.into_iter().collect()
+    Ok(authors.into_iter().collect())
 }
 
 fn refresh_subscription_actions(
     state: &mut PairwiseState,
     installed_authors: &[String],
     force: bool,
+    limits: &RuntimeLimits,
 ) -> Result<Vec<String>> {
-    let authors = message_authors(state);
+    let authors = message_authors(state, limits)?;
+    let subscription_id = state.message_subscription_id.clone();
+    let has_pending_subscribe = state.pending_actions.iter().any(|action| {
+        matches!(
+            &action.kind,
+            PairwiseActionKind::Subscribe {
+                subscription_id: pending,
+                ..
+            } if pending == &subscription_id
+        )
+    });
+    let has_pending_unsubscribe = state.pending_actions.iter().any(|action| {
+        matches!(
+            &action.kind,
+            PairwiseActionKind::Unsubscribe {
+                subscription_id: pending,
+            } if pending == &subscription_id
+        )
+    });
+    if installed_authors.is_empty()
+        && (has_pending_subscribe || (authors.is_empty() && has_pending_unsubscribe))
+    {
+        return Ok(authors);
+    }
     if !force && authors == installed_authors {
         return Ok(authors);
     }
     state.pending_actions.retain(|action| match &action.kind {
         PairwiseActionKind::Subscribe {
-            subscription_id, ..
+            subscription_id: pending,
+            ..
         }
-        | PairwiseActionKind::Unsubscribe { subscription_id } => {
-            subscription_id != MESSAGE_SUBSCRIPTION_ID
-        }
+        | PairwiseActionKind::Unsubscribe {
+            subscription_id: pending,
+        } => pending != &subscription_id,
         _ => true,
     });
-    if !installed_authors.is_empty() {
+    if authors.is_empty() && !installed_authors.is_empty() {
         push_action(
             state,
             PairwiseActionKind::Unsubscribe {
-                subscription_id: MESSAGE_SUBSCRIPTION_ID.to_string(),
+                subscription_id: subscription_id.clone(),
             },
         );
     }
@@ -691,7 +914,7 @@ fn refresh_subscription_actions(
         push_action(
             state,
             PairwiseActionKind::Subscribe {
-                subscription_id: MESSAGE_SUBSCRIPTION_ID.to_string(),
+                subscription_id,
                 filter_json: serde_json::to_string(&filter)?,
             },
         );
@@ -699,12 +922,13 @@ fn refresh_subscription_actions(
     Ok(authors)
 }
 
-fn handshake_id(invite: &Invite) -> String {
+fn handshake_id(invite: &Invite, invitee: PublicKey) -> String {
     let mut hash = Sha256::new();
     hash.update(invite.inviter_device_pubkey.to_bytes());
     hash.update(invite.inviter_ephemeral_public_key.to_bytes());
     hash.update(invite.shared_secret);
     hash.update(invite.created_at.get().to_be_bytes());
+    hash.update(invitee.to_bytes());
     hex::encode(hash.finalize())
 }
 
@@ -716,177 +940,4 @@ fn unix_now() -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use super::*;
-    use crate::MemoryStore;
-
-    #[test]
-    fn relay_publish_invariant_rejects_long_term_recipient_tag() {
-        let keys = Keys::generate();
-        let recipient = Keys::generate();
-        let event = nostr::EventBuilder::new(Kind::from(MESSAGE_EVENT_KIND as u16), "ciphertext")
-            .tag(nostr::Tag::parse(["p", recipient.public_key().to_hex().as_str()]).expect("p tag"))
-            .sign_with_keys(&keys)
-            .expect("signed");
-        assert!(validate_relay_publish(&event).is_err());
-    }
-
-    #[test]
-    fn subscription_filter_is_message_only_and_uses_ephemeral_authors() {
-        let mut state = PairwiseState::new(
-            Keys::generate().public_key().to_hex(),
-            Invite::create_new(Keys::generate().public_key(), None, None).expect("invite"),
-        );
-        let authors =
-            refresh_subscription_actions(&mut state, &[], true).expect("subscription refresh");
-        assert!(authors.is_empty());
-        assert!(state.pending_actions.is_empty());
-    }
-
-    fn test_manager(keys: &Keys) -> PairwiseManager {
-        PairwiseManager::open(
-            Arc::new(MemoryStore::default()),
-            keys.clone(),
-            RuntimeLimits::default(),
-        )
-        .expect("manager")
-    }
-
-    fn establish(
-        alice: &mut PairwiseManager,
-        bob: &mut PairwiseManager,
-        alice_keys: &Keys,
-        bob_keys: &Keys,
-    ) {
-        let invite: Event =
-            serde_json::from_str(&alice.current_invite_event_json().unwrap()).unwrap();
-        bob.accept_invite_from_event(&invite, alice_keys.public_key(), 1_710_000_000)
-            .unwrap();
-        let response = bob
-            .state
-            .pending_actions
-            .iter()
-            .find_map(|action| match &action.kind {
-                PairwiseActionKind::OutOfBand { event_json } => Some(event_json.clone()),
-                _ => None,
-            })
-            .unwrap();
-        let bootstrap = bob
-            .state
-            .pending_actions
-            .iter()
-            .find_map(|action| match &action.kind {
-                PairwiseActionKind::Publish { event_json, .. } => Some(event_json.clone()),
-                _ => None,
-            })
-            .unwrap();
-        alice
-            .process_out_of_band_response(
-                &serde_json::from_str(&response).unwrap(),
-                bob_keys.public_key(),
-                1_710_000_001,
-            )
-            .unwrap();
-        alice
-            .process_event_at(&serde_json::from_str(&bootstrap).unwrap(), 1_710_000_002)
-            .unwrap();
-    }
-
-    fn encrypt_unchecked(
-        sender: &mut PairwiseManager,
-        peer: PublicKey,
-        mut inner: UnsignedEvent,
-        now: u64,
-    ) -> Event {
-        inner.ensure_id();
-        let peer_hex = peer.to_hex();
-        let session_index = sender.state.peers[&peer_hex]
-            .preferred_send_session_index()
-            .expect("send session");
-        let session = Session::from_state(
-            sender.state.peers[&peer_hex].sessions[session_index]
-                .state
-                .clone(),
-        );
-        let plan = session
-            .plan_send(&serde_json::to_vec(&inner).unwrap(), UnixSeconds(now))
-            .unwrap();
-        let event = message_event(&plan.envelope).unwrap();
-        let mut next = sender.state.clone();
-        next.peers.get_mut(&peer_hex).unwrap().sessions[session_index].state = plan.next_state;
-        sender
-            .commit_next(next, sender.installed_message_authors.clone())
-            .unwrap();
-        event
-    }
-
-    #[test]
-    fn receive_rejects_forged_author_and_legacy_rumor_without_state_advance() {
-        let alice_keys = Keys::generate();
-        let bob_keys = Keys::generate();
-        let attacker_keys = Keys::generate();
-        let mut alice = test_manager(&alice_keys);
-        let mut bob = test_manager(&bob_keys);
-        establish(&mut alice, &mut bob, &alice_keys, &bob_keys);
-
-        let forged = pairwise_codec::message_event(
-            attacker_keys.public_key(),
-            "forged",
-            EncodeOptions::new(1_710_000_010, 1_710_000_010_000),
-        )
-        .unwrap();
-        let forged_outer =
-            encrypt_unchecked(&mut bob, alice_keys.public_key(), forged, 1_710_000_010);
-        assert!(matches!(
-            alice.process_event_at(&forged_outer, 1_710_000_011),
-            Err(PairwiseError::PeerMismatch { .. })
-        ));
-        assert!(alice
-            .pending_actions()
-            .iter()
-            .all(|action| !matches!(action.kind, PairwiseActionKind::Delivery { .. })));
-
-        let legacy = nostr::EventBuilder::new(Kind::from(14u16), "legacy")
-            .custom_created_at(nostr::Timestamp::from(1_710_000_012))
-            .build(bob_keys.public_key());
-        let legacy_outer =
-            encrypt_unchecked(&mut bob, alice_keys.public_key(), legacy, 1_710_000_012);
-        assert!(alice
-            .process_event_at(&legacy_outer, 1_710_000_013)
-            .is_err());
-
-        let live = bob
-            .send_text(
-                alice_keys.public_key(),
-                "valid after rejects",
-                None,
-                1_710_000_014,
-                1_710_000_014_000,
-            )
-            .unwrap();
-        let live_event = bob
-            .pending_actions()
-            .into_iter()
-            .find_map(|action| match action.kind {
-                PairwiseActionKind::Publish { event_json, .. } => {
-                    let event: Event = serde_json::from_str(&event_json).ok()?;
-                    (event.id.to_hex() == live.outer_event_id).then_some(event)
-                }
-                _ => None,
-            })
-            .unwrap();
-        alice
-            .process_event_at(&live_event, 1_710_000_015)
-            .expect("skipped rejected message keys remain recoverable");
-        assert_eq!(
-            alice
-                .pending_actions()
-                .iter()
-                .filter(|action| matches!(action.kind, PairwiseActionKind::Delivery { .. }))
-                .count(),
-            1
-        );
-    }
-}
+mod tests;

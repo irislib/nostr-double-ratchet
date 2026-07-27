@@ -335,6 +335,18 @@ impl Invite {
         if self.used_response_contents.contains(&envelope.content) {
             return Err(DomainError::InviteAlreadyUsed.into());
         }
+        let owner_public_key = payload
+            .owner_pubkey
+            .map(|owner| -> Result<PublicKey> {
+                let public_key = PublicKey::from_slice(&owner.to_bytes()).map_err(|error| {
+                    crate::Error::Parse(format!("invalid owner pubkey: {error}"))
+                })?;
+                public_key.xonly().map_err(|error| {
+                    crate::Error::Parse(format!("invalid owner pubkey: {error}"))
+                })?;
+                Ok(public_key)
+            })
+            .transpose()?;
         let invitee_device_pubkey = DevicePubkey::from_bytes(inner_event.pubkey.to_bytes());
         self.ensure_accept_allowed(invitee_device_pubkey)?;
         let session = Session::new_responder(
@@ -352,9 +364,7 @@ impl Invite {
             invitee_owner_pubkey: payload.owner_pubkey,
             invitee_identity: inner_event.pubkey,
             device_id: payload.device_id,
-            owner_public_key: payload.owner_pubkey.map(|owner| {
-                PublicKey::from_slice(&owner.to_bytes()).expect("owner pubkey bytes must be valid")
-            }),
+            owner_public_key,
         })
     }
 
