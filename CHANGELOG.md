@@ -10,8 +10,8 @@
   state on open, removing NIP-44's 65,408-byte plaintext ceiling from durable storage.
 - Add durable per-peer retirement so identity rebinds erase that peer's sessions and queued
   transport actions without resetting unrelated pairwise chats.
-- Use portable exclusive file locking for pairwise state so the durable runtime opens on
-  Android as well as desktop targets.
+- Use portable exclusive file locking and atomic rename publication for pairwise state so the
+  durable runtime opens on Android as well as desktop targets.
 - Split oversized legacy Rust and TypeScript modules without changing their public APIs, and
   enforce repository-wide limits of 1,000 Rust lines and 500 TypeScript-family lines in CI.
 

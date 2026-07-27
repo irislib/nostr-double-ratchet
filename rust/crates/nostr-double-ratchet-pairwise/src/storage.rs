@@ -290,6 +290,33 @@ impl FileStore {
         }
     }
 
+    /// Publishes an already-synced temporary file while the caller holds the
+    /// store's exclusive lock continuously from the generation CAS.
+    fn publish_temporary_locked(&self, temporary: &Path, destination: &Path) -> Result<()> {
+        let destination_exists = match destination.try_exists() {
+            Ok(exists) => exists,
+            Err(error) => {
+                let error = storage_error("check pairwise state destination", error);
+                return Err(self.rollback_publish_locked(temporary, None, error));
+            }
+        };
+        if destination_exists {
+            let error = PairwiseError::Storage(
+                "refusing to replace existing pairwise state generation".to_string(),
+            );
+            return Err(self.rollback_publish_locked(temporary, None, error));
+        }
+        // Every FileStore writer holds the same exclusive lock from the generation
+        // CAS through this rename, so the destination cannot race into existence.
+        // rename is atomic on the same filesystem and works in Android app storage,
+        // where creating hard links is denied.
+        if let Err(error) = fs::rename(temporary, destination) {
+            let error = storage_error("publish pairwise state", error);
+            return Err(self.rollback_publish_locked(temporary, None, error));
+        }
+        Ok(())
+    }
+
     fn rollback_publish_locked(
         &self,
         temporary: &Path,
@@ -424,10 +451,7 @@ impl PairwiseStore for FileStore {
             let error = PairwiseError::Storage("injected state publish failure".to_string());
             return Err(self.rollback_publish_locked(&temporary, None, error));
         }
-        if let Err(error) = fs::hard_link(&temporary, &destination) {
-            let error = storage_error("publish pairwise state without replacement", error);
-            return Err(self.rollback_publish_locked(&temporary, None, error));
-        }
+        self.publish_temporary_locked(&temporary, &destination)?;
         #[cfg(test)]
         let durable_result = if self.fault == Some(TestFault::DirectorySync) {
             Err(PairwiseError::Storage(
@@ -692,6 +716,23 @@ mod tests {
             .recv_timeout(Duration::from_secs(2))
             .expect("lock released");
         second_thread.join().expect("second thread");
+    }
+
+    #[test]
+    fn atomic_publish_never_replaces_an_existing_generation() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let store = FileStore::new(directory.path()).expect("store");
+        let temporary = store.temporary_path(1, uuid::Uuid::new_v4());
+        let destination = store.state_path(1);
+        fs::write(&temporary, b"new").expect("temporary");
+        fs::write(&destination, b"existing").expect("destination");
+
+        assert!(matches!(
+            store.publish_temporary_locked(&temporary, &destination),
+            Err(PairwiseError::Storage(_))
+        ));
+        assert_eq!(fs::read(&destination).expect("destination"), b"existing");
+        assert!(!temporary.exists());
     }
 
     #[test]
