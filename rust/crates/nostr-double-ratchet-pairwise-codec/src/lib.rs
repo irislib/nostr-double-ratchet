@@ -35,6 +35,12 @@ pub enum Error {
     InvalidReceiptType(String),
     #[error("invalid chat settings payload")]
     InvalidChatSettings,
+    #[error("duplicate `{0}` tag")]
+    DuplicateControlTag(String),
+    #[error("missing `{0}` tag")]
+    MissingControlTag(String),
+    #[error("invalid `{0}` tag value")]
+    InvalidControlTag(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -297,24 +303,25 @@ pub fn decode_with_mode(payload: &[u8], mode: DecodeMode) -> Result<DecodedPairw
     event.ensure_id();
     event.verify_id()?;
     let marker = protocol_marker(&event, mode)?;
+    validate_control_tags(&event, marker)?;
     let kind = match event.kind.as_u16() as u32 {
         CHAT_MESSAGE_KIND => PairwiseRumorKind::Message {
             body: event.content.clone(),
             event_ids: tag_values(&event, "e"),
-            expiration: expiration(&event),
+            expiration: expiration(&event)?,
         },
         TYPING_KIND => PairwiseRumorKind::Typing {
-            expiration: expiration(&event),
+            expiration: expiration(&event)?,
         },
         RECEIPT_KIND => PairwiseRumorKind::Receipt {
             receipt_type: ReceiptType::try_from(event.content.as_str())?,
             event_ids: tag_values(&event, "e"),
-            expiration: expiration(&event),
+            expiration: expiration(&event)?,
         },
         REACTION_KIND => PairwiseRumorKind::Reaction {
             emoji: event.content.clone(),
             event_id: tag_values(&event, "e").into_iter().next(),
-            expiration: expiration(&event),
+            expiration: expiration(&event)?,
         },
         CHAT_SETTINGS_KIND => PairwiseRumorKind::ChatSettings {
             message_ttl: parse_chat_settings(&event.content)?,
@@ -327,6 +334,22 @@ pub fn decode_with_mode(payload: &[u8], mode: DecodeMode) -> Result<DecodedPairw
         event,
         kind,
     })
+}
+
+fn validate_control_tags(event: &UnsignedEvent, marker: ProtocolMarker) -> Result<()> {
+    if marker == ProtocolMarker::CurrentV1 {
+        let millis = single_tag_value(event, MS_TAG)?
+            .ok_or_else(|| Error::MissingControlTag(MS_TAG.to_string()))?;
+        millis
+            .parse::<u64>()
+            .map_err(|_| Error::InvalidControlTag(MS_TAG.to_string()))?;
+    }
+    if let Some(value) = single_tag_value(event, EXPIRATION_TAG)? {
+        value
+            .parse::<u64>()
+            .map_err(|_| Error::InvalidControlTag(EXPIRATION_TAG.to_string()))?;
+    }
+    Ok(())
 }
 
 fn build_event(
@@ -354,7 +377,7 @@ fn build_event(
 }
 
 fn protocol_marker(event: &UnsignedEvent, mode: DecodeMode) -> Result<ProtocolMarker> {
-    let protocol = first_tag_value(event, PROTOCOL_TAG);
+    let protocol = single_tag_value(event, PROTOCOL_TAG)?;
     match protocol.as_deref() {
         Some(PROTOCOL_VALUE) => {}
         Some(other) => return Err(Error::UnknownProtocol(other.to_string())),
@@ -364,7 +387,7 @@ fn protocol_marker(event: &UnsignedEvent, mode: DecodeMode) -> Result<ProtocolMa
         None => return Err(Error::MissingProtocol),
     }
 
-    match first_tag_value(event, VERSION_TAG).as_deref() {
+    match single_tag_value(event, VERSION_TAG)?.as_deref() {
         Some(VERSION_VALUE) => Ok(ProtocolMarker::CurrentV1),
         Some(other) => Err(Error::UnsupportedVersion(other.to_string())),
         None => Err(Error::MissingVersion),
@@ -391,18 +414,26 @@ fn parse_chat_settings(content: &str) -> Result<ChatSettingsTtl> {
     }
 }
 
-fn expiration(event: &UnsignedEvent) -> Option<u64> {
-    first_tag_value(event, EXPIRATION_TAG).and_then(|value| value.parse::<u64>().ok())
+fn expiration(event: &UnsignedEvent) -> Result<Option<u64>> {
+    single_tag_value(event, EXPIRATION_TAG)?
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|_| Error::InvalidControlTag(EXPIRATION_TAG.to_string()))
+        })
+        .transpose()
 }
 
-fn first_tag_value(event: &UnsignedEvent, key: &str) -> Option<String> {
-    event.tags.iter().find_map(|tag| {
+fn single_tag_value(event: &UnsignedEvent, key: &str) -> Result<Option<String>> {
+    let mut values = event.tags.iter().filter_map(|tag| {
         let values = tag.as_slice();
-        if values.first().map(|value| value.as_str()) != Some(key) {
-            return None;
-        }
-        values.get(1).cloned()
-    })
+        (values.first().map(|value| value.as_str()) == Some(key)).then(|| values.get(1).cloned())
+    });
+    let first = values.next().flatten();
+    if values.next().is_some() {
+        return Err(Error::DuplicateControlTag(key.to_string()));
+    }
+    Ok(first)
 }
 
 fn tag_values(event: &UnsignedEvent, key: &str) -> Vec<String> {
@@ -500,7 +531,12 @@ mod tests {
             "pubkey": public_key().to_string(),
             "created_at": 1710000000,
             "kind": 15,
-            "tags": [[PROTOCOL_TAG, PROTOCOL_VALUE], [VERSION_TAG, VERSION_VALUE], ["e", "abc"]],
+            "tags": [
+                [PROTOCOL_TAG, PROTOCOL_VALUE],
+                [VERSION_TAG, VERSION_VALUE],
+                [MS_TAG, "1710000000000"],
+                ["e", "abc"]
+            ],
             "content": "read"
         });
         let bytes = serde_json::to_vec(&payload).expect("json");
@@ -527,6 +563,66 @@ mod tests {
             PairwiseRumorKind::ChatSettings {
                 message_ttl: ChatSettingsTtl::Seconds(86_400)
             }
+        ));
+    }
+
+    #[test]
+    fn strict_decode_rejects_duplicate_control_tags() {
+        for duplicate in [PROTOCOL_TAG, VERSION_TAG, MS_TAG, EXPIRATION_TAG] {
+            let mut event = message_event(
+                public_key(),
+                "duplicate",
+                EncodeOptions::new(1_710_000_000, 1_710_000_000_123).with_expiration(99),
+            )
+            .expect("event");
+            let value = match duplicate {
+                PROTOCOL_TAG => PROTOCOL_VALUE,
+                VERSION_TAG => VERSION_VALUE,
+                MS_TAG => "1710000000123",
+                EXPIRATION_TAG => "99",
+                _ => unreachable!(),
+            };
+            event
+                .tags
+                .push(tag([duplicate, value]).expect("duplicate tag"));
+            event.id = None;
+            event.ensure_id();
+            let payload = serde_json::to_vec(&event).expect("json");
+            assert!(matches!(
+                decode_strict(&payload),
+                Err(Error::DuplicateControlTag(ref key)) if key == duplicate
+            ));
+        }
+    }
+
+    #[test]
+    fn strict_decode_rejects_missing_or_malformed_control_values() {
+        let author = public_key();
+        let missing_millis = EventBuilder::new(Kind::from(CHAT_MESSAGE_KIND as u16), "missing")
+            .tags(vec![
+                tag([PROTOCOL_TAG, PROTOCOL_VALUE]).unwrap(),
+                tag([VERSION_TAG, VERSION_VALUE]).unwrap(),
+            ])
+            .custom_created_at(Timestamp::from(1_710_000_000))
+            .build(author);
+        assert!(matches!(
+            decode_strict(&serde_json::to_vec(&missing_millis).unwrap()),
+            Err(Error::MissingControlTag(ref key)) if key == MS_TAG
+        ));
+
+        let malformed_expiration =
+            EventBuilder::new(Kind::from(CHAT_MESSAGE_KIND as u16), "malformed")
+                .tags(vec![
+                    tag([PROTOCOL_TAG, PROTOCOL_VALUE]).unwrap(),
+                    tag([VERSION_TAG, VERSION_VALUE]).unwrap(),
+                    tag([MS_TAG, "1710000000123"]).unwrap(),
+                    tag([EXPIRATION_TAG, "not-a-timestamp"]).unwrap(),
+                ])
+                .custom_created_at(Timestamp::from(1_710_000_000))
+                .build(author);
+        assert!(matches!(
+            decode_strict(&serde_json::to_vec(&malformed_expiration).unwrap()),
+            Err(Error::InvalidControlTag(ref key)) if key == EXPIRATION_TAG
         ));
     }
 }

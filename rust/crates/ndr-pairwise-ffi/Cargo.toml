@@ -1,0 +1,24 @@
+[package]
+name = "ndr-pairwise-ffi"
+description = "UniFFI bindings for the durable single-device NDR pairwise runtime"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "ndr_ffi"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+hex.workspace = true
+nostr.workspace = true
+nostr-double-ratchet = { workspace = true, default-features = false, features = ["pairwise"] }
+nostr-double-ratchet-pairwise.workspace = true
+serde_json.workspace = true
+uniffi.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

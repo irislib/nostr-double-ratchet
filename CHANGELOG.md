@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Add a durable single-device pairwise runtime and UniFFI surface for forward-secure direct and
+  disappearing messages without AppKeys, linked-device, or group dependencies.
+- Persist encrypted ratchet state and pending transport actions atomically, with explicit
+  acknowledgement and restart-safe replay/skipped-key handling.
+
 ## 0.0.165 - 2026-07-16
 
 - Refresh supported TypeScript runtime and development dependencies, including

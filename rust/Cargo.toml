@@ -2,7 +2,9 @@
 resolver = "2"
 members = [
     "crates/nostr-double-ratchet",
+    "crates/nostr-double-ratchet-pairwise",
     "crates/nostr-double-ratchet-pairwise-codec",
+    "crates/ndr-pairwise-ffi",
 ]
 
 [workspace.package]
@@ -13,7 +15,8 @@ license = "MIT"
 repository = "https://files.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/nostr-double-ratchet"
 
 [workspace.dependencies]
-nostr-double-ratchet = { version = "0.0.164", path = "crates/nostr-double-ratchet" }
+nostr-double-ratchet = { version = "0.0.164", path = "crates/nostr-double-ratchet", default-features = false }
+nostr-double-ratchet-pairwise = { version = "0.0.164", path = "crates/nostr-double-ratchet-pairwise" }
 nostr-double-ratchet-pairwise-codec = { version = "0.0.164", path = "crates/nostr-double-ratchet-pairwise-codec" }
 nostr = { version = "0.44.2", default-features = false, features = ["std", "nip44"] }
 serde = { version = "1", features = ["derive"] }
@@ -26,3 +29,4 @@ base64 = "0.22"
 urlencoding = "2.1"
 rand = "0.8"
 uuid = { version = "1", features = ["v4"] }
+uniffi = { version = "0.29.4", features = ["cli"] }

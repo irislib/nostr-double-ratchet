@@ -14,16 +14,18 @@ Rust library implementing Double Ratchet messaging for Nostr, including multi-de
 
 ## Recommended Integration Paths
 
-There are two practical layers:
+There are three practical layers:
 
 - `Session`: smallest 1:1 primitive when the caller already owns bootstrap, persistence, and
   transport.
+- `nostr-double-ratchet-pairwise`: durable single-device pairwise runtime with invite bootstrap,
+  replay/skipped-key handling, disappearing messages, and an acknowledged transport-action
+  journal. Mobile clients can use its `ndr-pairwise-ffi` UniFFI bindings.
 - `SessionManager`: deterministic multi-device routing and invite handling primitives for apps
   that own relay I/O and runtime wiring.
 
-Current native consumers can use the reusable protocol runtime and FFI in
-[`iris-chat-rs`](https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat-rs),
-which builds on this crate.
+Use [`iris-chat-rs`](https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat-rs)
+when a native app needs AppKeys, linked devices, sibling sync, or groups.
 
 ## Security Properties
 
@@ -104,8 +106,9 @@ assert!(plaintext.is_some());
 
 This crate exposes deterministic protocol state machines. Host apps or higher-level protocol
 runtimes translate prepared sends into relay publishes, feed fetched relay events back into the
-state machines, and persist snapshots. For a ready app-facing Rust runtime and mobile FFI, use
-`iris-chat-rs`.
+state machines, and persist snapshots. Use `nostr-double-ratchet-pairwise` /
+`ndr-pairwise-ffi` for a single-device direct-message runtime, or `iris-chat-rs` for the full
+multi-device/group protocol.
 
 ## Disappearing Messages
 

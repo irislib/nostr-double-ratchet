@@ -20,7 +20,8 @@ use the `iris` CLI from the
 - Multi-device identity model (owner key + device keys) with AppKeys
 - Invite and link flows for session bootstrapping
 - Group messaging with sender keys and one-to-many outer events
-- High-level TypeScript `NdrRuntime`; reusable Rust app protocol runtime lives in `iris-chat-rs`
+- High-level TypeScript `NdrRuntime`; dedicated Rust pairwise runtime and mobile UniFFI
+- Full Rust AppKeys, linked-device, and group runtime lives in `iris-chat-rs`
 - Cross-language TS/Rust interoperability tests
 - Breaking changes are still possible while APIs settle
 
@@ -29,7 +30,8 @@ use the `iris` CLI from the
 | Mode | Use it when | What it owns |
 | --- | --- | --- |
 | TypeScript `NdrRuntime` | You want the default TypeScript production path with one app-facing surface for direct messages, linked devices, and groups. | `AppKeysManager`, `DelegateManager`, `SessionManager`, and `GroupManager` in TypeScript. |
-| Rust protocol runtime | You want a reusable Rust app-facing surface or mobile FFI. | Use `iris-chat-rs` `chat-protocol` / `protocol-ffi`, which builds on these core crates. |
+| Rust pairwise runtime / mobile FFI | You have one local identity and need forward-secure asynchronous direct messages without AppKeys, sibling-device sync, or groups. | Durable encrypted ratchet state, invite bootstrap, replay/skipped-key handling, expiring messages, and an acknowledged transport-action journal. Use `nostr-double-ratchet-pairwise` or `ndr-pairwise-ffi`. |
+| Rust full protocol runtime | You need AppKeys authorization, linked devices, sibling sync, or groups. | Use [`iris-chat-rs`](https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat-rs), which builds on these core crates. |
 | Rust `SessionManager` | You want deterministic multi-device routing and storage primitives, but your app owns relay/runtime wiring. | Session orchestration, routing decisions, storage-backed session state, and prepared sends/receives. |
 | `Session` | You want the simplest 1:1 primitive and you already own invite/bootstrap, persistence, and transport. Good for negotiated 1:1 channels or other app-specific direct links. | Only the ratchet session state itself. |
 
@@ -166,14 +168,21 @@ Groups use a hybrid model:
 
 ## Mobile FFI (optional)
 
-For iOS/Android integration, use the protocol-backed UniFFI crate in
-[`iris-chat-rs/protocol-ffi`](https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat-rs).
+For single-device pairwise iOS/Android integration, use
+[`ndr-pairwise-ffi`](./rust/crates/ndr-pairwise-ffi). It exposes invite exchange, durable
+pairwise sessions, disappearing messages, and explicit pending-action acknowledgement without
+compiling AppKeys, linked-device, or group code.
+
+Use [`iris-chat-rs`](https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat-rs)
+when the app needs AppKeys, multiple devices, sibling sync, or groups.
 
 ## Repository Layout
 
 - `ts/`: TypeScript library
 - `rust/crates/nostr-double-ratchet/`: Rust library with sessions, groups, AppKeys fact events, and event wire helpers
-- `rust/crates/nostr-double-ratchet-pairwise-codec/`: group pairwise payload codec
+- `rust/crates/nostr-double-ratchet-pairwise-codec/`: strict pairwise inner-rumor codec
+- `rust/crates/nostr-double-ratchet-pairwise/`: durable single-device pairwise runtime
+- `rust/crates/ndr-pairwise-ffi/`: UniFFI bindings for the pairwise runtime
 
 ## Development And Tests
 

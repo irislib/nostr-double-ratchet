@@ -76,13 +76,16 @@ jobs:
       run: pnpm install --frozen-lockfile
 
     - name: Run tests
-      run: cargo test
+      run: cargo test --locked
+
+    - name: Check minimal pairwise FFI feature graph
+      run: cargo check --locked -p ndr-pairwise-ffi --no-default-features
 
     - name: Check formatting
       run: cargo fmt --check
 
     - name: Run clippy
-      run: cargo clippy -- -D warnings
+      run: cargo clippy --locked -- -D warnings
 
   formal:
     name: Formal
@@ -146,11 +149,11 @@ jobs:
       working-directory: rust
       env:
         REGENERATE_VECTORS: "true"
-      run: cargo test --workspace generate -- --ignored --test-threads=1 --nocapture
+      run: cargo test --locked --workspace generate -- --ignored --test-threads=1 --nocapture
 
     - name: Verify Rust interop consumers
       working-directory: rust
-      run: cargo test --workspace
+      run: cargo test --locked --workspace
 
     - name: Verify TypeScript interop consumers
       working-directory: ts

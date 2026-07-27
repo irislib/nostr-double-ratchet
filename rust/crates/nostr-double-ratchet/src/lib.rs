@@ -1,27 +1,43 @@
+#[cfg(feature = "full")]
 pub mod app_keys;
+#[cfg(feature = "full")]
 pub mod device_link;
+#[cfg(feature = "full")]
 pub mod direct_message_subscriptions;
 pub mod error;
+#[cfg(feature = "full")]
 pub mod group;
+#[cfg(feature = "full")]
 pub mod group_manager;
+#[cfg(feature = "full")]
 pub mod group_wire;
 pub mod ids;
 pub mod invite;
+#[cfg(feature = "full")]
 pub mod message_builders;
+#[cfg(feature = "full")]
 pub mod message_origin;
+#[cfg(feature = "full")]
 pub mod multi_device;
+#[cfg(feature = "full")]
 pub mod one_to_many;
 pub mod protocol_types;
+#[cfg(feature = "full")]
 pub mod roster;
+#[cfg(feature = "full")]
 pub mod roster_editor;
+#[cfg(feature = "full")]
 pub mod sender_key;
 mod serde_hex;
 pub mod session;
+#[cfg(feature = "full")]
 pub mod session_manager;
+#[cfg(feature = "full")]
 pub mod shared_channel;
 pub mod utils;
 pub mod wire;
 
+#[cfg(feature = "full")]
 pub use app_keys::{
     build_app_keys_device_authorization_filter,
     encrypted_device_label_payloads_from_app_keys_event, is_app_keys_event,
@@ -30,10 +46,12 @@ pub use app_keys::{
     APP_KEYS_ENCRYPTED_DEVICE_LABELS_SCHEMA, APP_KEYS_FACT_TYPE, APP_KEYS_OWNER_PUBKEY_FACT,
     APP_KEYS_SCHEMA, APP_KEYS_SNAPSHOT_KIND,
 };
+#[cfg(feature = "full")]
 pub use device_link::{
     deterministic_link_invite_for_device, deterministic_link_invite_for_device_link_request,
     encode_compact_device_link_request, parse_compact_device_link_request, DeviceLinkRequest,
 };
+#[cfg(feature = "full")]
 pub use direct_message_subscriptions::{
     app_keys_subscription_authors, build_app_keys_backfill_filter,
     build_direct_message_backfill_filter, build_invite_backfill_filter,
@@ -43,8 +61,11 @@ pub use direct_message_subscriptions::{
     RuntimeSubscriptionRegistration, RuntimeSubscriptionTracker,
 };
 pub use error::{DomainError, Error, Result};
+#[cfg(feature = "full")]
 pub use group::*;
+#[cfg(feature = "full")]
 pub use group_manager::*;
+#[cfg(feature = "full")]
 pub use group_wire::{
     build_group_roster_fact_filter, group_roster_unsigned_event, is_group_roster_fact_event,
     parse_group_roster_fact_event, project_group_roster_fact_events, GroupEventManager,
@@ -53,8 +74,11 @@ pub use group_wire::{
 };
 pub use ids::{DevicePubkey, OwnerPubkey, UnixSeconds};
 pub use invite::{Invite, InviteResponse, InviteResponseEnvelope, OwnerClaimVerifier};
+#[cfg(feature = "full")]
 pub use message_builders::*;
+#[cfg(feature = "full")]
 pub use message_origin::{classify_message_origin, MessageOrigin};
+#[cfg(feature = "full")]
 pub use multi_device::{
     apply_app_keys_snapshot, apply_app_keys_snapshot_with_required_device,
     evaluate_device_registration_state, resolve_conversation_candidate_pubkeys,
@@ -62,27 +86,36 @@ pub use multi_device::{
     should_require_relay_registration_confirmation, AppKeysSnapshot, AppKeysSnapshotDecision,
     DeviceRegistrationState, InviteOwnerRoutingResolution,
 };
+#[cfg(feature = "full")]
 pub use one_to_many::*;
 pub use protocol_types::{ProtocolContext, MAX_SKIP};
+#[cfg(feature = "full")]
 pub use roster::{AuthorizedDevice, DeviceRoster, RosterSnapshotDecision};
+#[cfg(feature = "full")]
 pub use roster_editor::RosterEditor;
+#[cfg(feature = "full")]
 pub use sender_key::*;
 pub use session::{
     Header, MessageEnvelope, ReceiveOutcome, ReceivePlan, SendOutcome, SendPlan,
     SerializableKeyPair, Session, SessionState, SkippedKeysEntry,
 };
+#[cfg(feature = "full")]
 pub use session_manager::{
     Delivery, DeviceRecordSnapshot, PreparedSend, ProcessedInviteResponse, PruneReport,
     ReceivedMessage, RelayGap, SessionManager, SessionManagerSnapshot, UserRecordSnapshot,
 };
+#[cfg(feature = "full")]
 pub use shared_channel::SharedChannel;
+#[cfg(feature = "full")]
 pub use wire::{
-    group_sender_key_message_event, invite_response_event, invite_unsigned_event, invite_url,
-    message_event, parse_group_sender_key_message_event,
-    parse_group_sender_key_message_event_unchecked, parse_invite_event,
-    parse_invite_response_event, parse_invite_url, parse_message_event, parse_roster_event,
-    roster_unsigned_event, DecodedRosterEvent, GROUP_SENDER_KEY_MESSAGE_KIND, INVITE_EVENT_KIND,
-    INVITE_LIST_LABEL, INVITE_RESPONSE_KIND, MESSAGE_EVENT_KIND, ROSTER_EVENT_KIND,
+    group_sender_key_message_event, parse_group_sender_key_message_event,
+    parse_group_sender_key_message_event_unchecked, parse_roster_event, roster_unsigned_event,
+    DecodedRosterEvent, GROUP_SENDER_KEY_MESSAGE_KIND, ROSTER_EVENT_KIND,
+};
+pub use wire::{
+    invite_response_event, invite_unsigned_event, invite_url, message_event, parse_invite_event,
+    parse_invite_response_event, parse_invite_url, parse_message_event, INVITE_EVENT_KIND,
+    INVITE_LIST_LABEL, INVITE_RESPONSE_KIND, MESSAGE_EVENT_KIND,
 };
 
 pub(crate) use ids::owner_pubkey_from_device_pubkey;
@@ -90,12 +123,14 @@ pub(crate) use utils::{
     device_pubkey_from_secret_bytes, kdf, random_secret_key_bytes, secret_key_from_bytes,
 };
 
+#[cfg(feature = "full")]
 impl OwnerClaimVerifier for AppKeys {
     fn has_device(&self, _device_pubkey: DevicePubkey, device_identity: nostr::PublicKey) -> bool {
         self.get_device(&device_identity).is_some()
     }
 }
 
+#[cfg(feature = "full")]
 pub const APP_KEYS_EVENT_KIND: u32 = APP_KEYS_SNAPSHOT_KIND;
 pub const CHAT_MESSAGE_KIND: u32 = 14;
 pub const CHAT_SETTINGS_KIND: u32 = 10448;

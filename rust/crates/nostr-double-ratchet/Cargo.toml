@@ -8,7 +8,9 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = []
+default = ["full"]
+pairwise = []
+full = ["pairwise"]
 
 [dependencies]
 nostr.workspace = true

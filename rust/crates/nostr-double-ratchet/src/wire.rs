@@ -1,27 +1,37 @@
+#[cfg(feature = "full")]
+use crate::{AuthorizedDevice, DeviceRoster, GroupSenderKeyMessageEnvelope};
 use crate::{
-    AuthorizedDevice, DevicePubkey, DeviceRoster, Error as CoreError,
-    GroupSenderKeyMessageEnvelope, Invite, InviteResponseEnvelope, MessageEnvelope, OwnerPubkey,
+    DevicePubkey, Error as CoreError, Invite, InviteResponseEnvelope, MessageEnvelope, OwnerPubkey,
     UnixSeconds,
 };
+#[cfg(feature = "full")]
 use base64::Engine;
-use nostr::{nips::nip44, Event, EventBuilder, Keys, Kind, Tag, Timestamp, UnsignedEvent};
+#[cfg(feature = "full")]
+use nostr::nips::nip44;
+use nostr::{Event, EventBuilder, Keys, Kind, Tag, Timestamp, UnsignedEvent};
 use thiserror::Error;
 
 pub const MESSAGE_EVENT_KIND: u32 = 1060;
+#[cfg(feature = "full")]
 pub const GROUP_SENDER_KEY_MESSAGE_KIND: u32 = MESSAGE_EVENT_KIND;
 pub const INVITE_EVENT_KIND: u32 = 30078;
 pub const INVITE_RESPONSE_KIND: u32 = 1059;
+#[cfg(feature = "full")]
 pub const ROSTER_EVENT_KIND: u32 = 30078;
 
+#[cfg(feature = "full")]
 const ROSTER_D_TAG: &str = "double-ratchet/app-keys";
+#[cfg(feature = "full")]
 const ROSTER_VERSION: &str = "1";
 pub const INVITE_LIST_LABEL: &str = "double-ratchet/invites";
+#[cfg(feature = "full")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodedRosterEvent {
     pub owner_pubkey: OwnerPubkey,
     pub roster: DeviceRoster,
 }
 
+#[cfg(feature = "full")]
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ParsedGroupSenderKeyMessageEvent {
     pub sender_event_pubkey: DevicePubkey,
@@ -107,6 +117,7 @@ pub fn parse_message_event(event: &Event) -> Result<MessageEnvelope> {
     })
 }
 
+#[cfg(feature = "full")]
 pub fn group_sender_key_message_event(envelope: &GroupSenderKeyMessageEnvelope) -> Result<Event> {
     let author_secret_key = secret_key_from_bytes(&envelope.signer_secret_key)?;
     let author_keys = Keys::new(author_secret_key);
@@ -130,6 +141,7 @@ pub fn group_sender_key_message_event(envelope: &GroupSenderKeyMessageEnvelope) 
     Ok(unsigned.sign_with_keys(&author_keys)?)
 }
 
+#[cfg(feature = "full")]
 pub fn parse_group_sender_key_message_event(
     event: &Event,
 ) -> Result<ParsedGroupSenderKeyMessageEvent> {
@@ -144,6 +156,7 @@ pub fn parse_group_sender_key_message_event(
     parsed_group_sender_key_message_event_from_content(event)
 }
 
+#[cfg(feature = "full")]
 pub fn parse_group_sender_key_message_event_unchecked(
     event: &Event,
 ) -> Result<ParsedGroupSenderKeyMessageEvent> {
@@ -152,6 +165,7 @@ pub fn parse_group_sender_key_message_event_unchecked(
     parsed_group_sender_key_message_event_from_content(event)
 }
 
+#[cfg(feature = "full")]
 fn parsed_group_sender_key_message_event_from_content(
     event: &Event,
 ) -> Result<ParsedGroupSenderKeyMessageEvent> {
@@ -172,11 +186,13 @@ fn parsed_group_sender_key_message_event_from_content(
     })
 }
 
+#[cfg(feature = "full")]
 pub(crate) fn encrypted_cover_header_tag(keys: &Keys) -> Result<Tag> {
     let encrypted = encrypted_cover_header(keys)?;
     tag(["header", encrypted.as_str()])
 }
 
+#[cfg(feature = "full")]
 fn encrypted_cover_header(keys: &Keys) -> Result<String> {
     let cover = serde_json::json!({
         "v": 1,
@@ -190,17 +206,19 @@ fn encrypted_cover_header(keys: &Keys) -> Result<String> {
     )?)
 }
 
+#[cfg(feature = "full")]
 fn build_group_sender_key_hidden_content(ciphertext: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(ciphertext)
 }
 
+#[cfg(feature = "full")]
 fn parse_group_sender_key_hidden_content(content: &str) -> Result<Vec<u8>> {
     base64::engine::general_purpose::STANDARD
         .decode(content)
         .map_err(|e| Error::InvalidEvent(e.to_string()))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "full"))]
 fn build_group_sender_key_legacy_content(
     key_id: u32,
     message_number: u32,
@@ -213,6 +231,7 @@ fn build_group_sender_key_legacy_content(
     base64::engine::general_purpose::STANDARD.encode(payload)
 }
 
+#[cfg(feature = "full")]
 fn parse_group_sender_key_legacy_content(content: &str) -> Result<(u32, u32, Vec<u8>)> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(content)
@@ -438,6 +457,7 @@ pub fn parse_invite_response_event(event: &Event) -> Result<InviteResponseEnvelo
     })
 }
 
+#[cfg(feature = "full")]
 pub fn roster_unsigned_event(
     owner_pubkey: OwnerPubkey,
     roster: &DeviceRoster,
@@ -458,6 +478,7 @@ pub fn roster_unsigned_event(
     Ok(builder.build(owner_public_key(owner_pubkey)?))
 }
 
+#[cfg(feature = "full")]
 pub fn parse_roster_event(event: &Event) -> Result<DecodedRosterEvent> {
     verify_event_kind(event, ROSTER_EVENT_KIND)?;
     event.verify()?;
@@ -551,6 +572,7 @@ fn public_key(device_pubkey: DevicePubkey) -> Result<nostr::PublicKey> {
     Ok(nostr::PublicKey::from_slice(&device_pubkey.to_bytes())?)
 }
 
+#[cfg(feature = "full")]
 fn owner_public_key(owner_pubkey: OwnerPubkey) -> Result<nostr::PublicKey> {
     Ok(nostr::PublicKey::from_slice(&owner_pubkey.to_bytes())?)
 }
@@ -584,6 +606,7 @@ mod tests {
         assert_eq!(parsed.ciphertext, "ciphertext");
     }
 
+    #[cfg(feature = "full")]
     #[test]
     fn group_sender_key_message_event_roundtrip_is_camouflaged_as_message_event() {
         let signer_secret = [22u8; 32];
@@ -622,6 +645,7 @@ mod tests {
         assert_eq!(parsed.ciphertext, b"ciphertext");
     }
 
+    #[cfg(feature = "full")]
     #[test]
     fn legacy_group_sender_key_message_without_header_still_parses() {
         let signer_secret = [23u8; 32];
@@ -831,6 +855,7 @@ mod tests {
         assert!(parse_invite_event(&signed).is_err());
     }
 
+    #[cfg(feature = "full")]
     #[test]
     fn roster_event_roundtrip() {
         let owner_secret = [41u8; 32];

@@ -1,6 +1,8 @@
+#[cfg(feature = "full")]
+use crate::DeviceRoster;
 use crate::{
     owner_pubkey_from_device_pubkey, random_secret_key_bytes, secret_key_from_bytes, DevicePubkey,
-    DeviceRoster, DomainError, OwnerPubkey, ProtocolContext, Result, Session, UnixSeconds,
+    DomainError, OwnerPubkey, ProtocolContext, Result, Session, UnixSeconds,
 };
 use base64::Engine;
 use nostr::nips::nip44::{self, Version};
@@ -83,6 +85,7 @@ pub trait OwnerClaimVerifier {
     fn has_device(&self, device_pubkey: DevicePubkey, device_identity: PublicKey) -> bool;
 }
 
+#[cfg(feature = "full")]
 impl OwnerClaimVerifier for DeviceRoster {
     fn has_device(&self, device_pubkey: DevicePubkey, _device_identity: PublicKey) -> bool {
         self.get_device(&device_pubkey).is_some()
