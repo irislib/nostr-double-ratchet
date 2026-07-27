@@ -3,6 +3,8 @@ use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use fs2::FileExt;
+
 use crate::{PairwiseError, Result};
 
 const STATE_PREFIX: &str = "ndr-pairwise-state-v1-";
@@ -99,8 +101,8 @@ impl FileStore {
             .open(&path)
             .map_err(|error| storage_error("open state lock", error))?;
         set_private_file_permissions(&path)?;
-        file.lock()
-            .map_err(|error| storage_error("lock state directory", error))?;
+        file.lock_exclusive()
+            .map_err(|error| storage_error("lock state file", error))?;
         Ok(file)
     }
 
@@ -577,8 +579,9 @@ fn set_private_file_mode(_options: &mut OpenOptions) {}
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Barrier};
+    use std::sync::{mpsc, Arc, Barrier};
     use std::thread;
+    use std::time::Duration;
 
     use super::*;
 
@@ -663,6 +666,32 @@ mod tests {
         ];
         assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
         assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+    }
+
+    #[test]
+    fn exclusive_file_lock_blocks_a_competing_store_until_release() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let first = FileStore::new(directory.path()).expect("first store");
+        let second = FileStore::new(directory.path()).expect("second store");
+        let first_lock = first.acquire_lock().expect("first lock");
+        let (started_tx, started_rx) = mpsc::channel();
+        let (acquired_tx, acquired_rx) = mpsc::channel();
+
+        let second_thread = thread::spawn(move || {
+            started_tx.send(()).expect("signal start");
+            let _lock = second.acquire_lock().expect("second lock");
+            acquired_tx.send(()).expect("signal acquisition");
+        });
+        started_rx.recv().expect("second thread started");
+        assert!(acquired_rx
+            .recv_timeout(Duration::from_millis(100))
+            .is_err());
+
+        drop(first_lock);
+        acquired_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("lock released");
+        second_thread.join().expect("second thread");
     }
 
     #[test]
