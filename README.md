@@ -187,6 +187,9 @@ when the app needs AppKeys, multiple devices, sibling sync, or groups.
 ## Development And Tests
 
 ```bash
+# Source size (all tracked Rust <= 1000 lines; TypeScript <= 500)
+./scripts/check-source-size.sh
+
 # TypeScript tests
 pnpm -C ts test:once
 
