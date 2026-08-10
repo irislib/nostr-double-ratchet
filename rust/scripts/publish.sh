@@ -68,6 +68,9 @@ publish_crate "nostr-double-ratchet" "--no-verify"
 # Tier 2: leaf crates that only depend on the core library
 publish_crate "nostr-double-ratchet-pairwise-codec"
 
+# Tier 3: durable runtime, after both core and codec are indexed
+publish_crate "nostr-double-ratchet-pairwise"
+
 if [[ "$FAILED" -ne 0 ]]; then
     echo ""
     echo "One or more crates failed to publish." >&2

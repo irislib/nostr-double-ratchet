@@ -1,6 +1,6 @@
 {
   "name": "nostr-double-ratchet",
-  "version": "0.0.165",
+  "version": "0.0.166",
   "type": "module",
   "packageManager": "pnpm@9.15.0",
   "description": "Nostr double ratchet library",

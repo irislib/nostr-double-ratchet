@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.0.166 - 2026-08-10
+
+- Bind each invite responder identity to its advertised session key with a mandatory,
+  transcript-bound Schnorr proof, preventing another identity from claiming an observed
+  bootstrap key from the same invite.
+- Reject signed or extended inner rumors, malformed successor keys, oversized encrypted
+  payloads, and invalid NIP-44 versions before ratchet state is committed.
 - Add a durable single-device pairwise runtime and UniFFI surface for forward-secure direct and
   disappearing messages without AppKeys, linked-device, or group dependencies.
 - Persist encrypted ratchet state and pending transport actions atomically, with explicit

@@ -740,7 +740,7 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "ndr-pairwise-ffi"
-version = "0.0.164"
+version = "0.0.166"
 dependencies = [
  "hex",
  "nostr",
@@ -787,7 +787,7 @@ dependencies = [
 
 [[package]]
 name = "nostr-double-ratchet"
-version = "0.0.164"
+version = "0.0.166"
 dependencies = [
  "base64",
  "hex",
@@ -805,7 +805,7 @@ dependencies = [
 
 [[package]]
 name = "nostr-double-ratchet-pairwise"
-version = "0.0.164"
+version = "0.0.166"
 dependencies = [
  "chacha20poly1305",
  "fs2",
@@ -826,7 +826,7 @@ dependencies = [
 
 [[package]]
 name = "nostr-double-ratchet-pairwise-codec"
-version = "0.0.164"
+version = "0.0.166"
 dependencies = [
  "nostr",
  "serde",
