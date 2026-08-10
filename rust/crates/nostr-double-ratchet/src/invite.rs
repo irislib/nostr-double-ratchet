@@ -6,10 +6,15 @@ use crate::{
 };
 use base64::Engine;
 use nostr::nips::nip44::{self, Version};
-use nostr::{JsonUtil, Kind, PublicKey, Tag, Timestamp, UnsignedEvent};
+use nostr::secp256k1::schnorr::Signature;
+use nostr::secp256k1::Message;
+use nostr::{
+    EventId, JsonUtil, Keys, Kind, PublicKey, Tag, Tags, Timestamp, UnsignedEvent, SECP256K1,
+};
 use rand::rngs::OsRng;
 use rand::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Invite {
@@ -234,6 +239,17 @@ impl Invite {
         let invitee_session_public_key =
             crate::device_pubkey_from_secret_bytes(&invitee_session_key)?;
 
+        let proof_digest = invite_session_proof_digest(
+            self.inviter_device_pubkey,
+            self.inviter_ephemeral_public_key,
+            invitee_public_key,
+            invitee_session_public_key,
+            self.shared_secret,
+        );
+        let proof_message = Message::from_digest(proof_digest);
+        let session_keys = Keys::new(secret_key_from_bytes(&invitee_session_key)?);
+        let session_proof = session_keys.sign_schnorr_with_ctx(SECP256K1, &proof_message, ctx.rng);
+
         let session = Session::new_initiator(
             ctx,
             self.inviter_ephemeral_public_key,
@@ -243,6 +259,7 @@ impl Invite {
 
         let payload = InviteResponsePayload {
             session_key: invitee_session_public_key,
+            session_proof,
             owner_pubkey: invitee_owner_pubkey,
             device_id,
         };
@@ -314,7 +331,7 @@ impl Invite {
             &envelope.sender.to_nostr()?,
             &envelope.content,
         )?;
-        let inner_event = UnsignedEvent::from_json(&decrypted)?;
+        let inner_event = InviteResponseRumor::from_json(&decrypted)?.into_unsigned_event();
         validate_invite_response_inner_rumor(&inner_event)?;
 
         let ciphertext_bytes = base64::engine::general_purpose::STANDARD
@@ -349,6 +366,25 @@ impl Invite {
             .transpose()?;
         let invitee_device_pubkey = DevicePubkey::from_bytes(inner_event.pubkey.to_bytes());
         self.ensure_accept_allowed(invitee_device_pubkey)?;
+        let proof_digest = invite_session_proof_digest(
+            self.inviter_device_pubkey,
+            self.inviter_ephemeral_public_key,
+            invitee_device_pubkey,
+            payload.session_key,
+            self.shared_secret,
+        );
+        let session_public_key = payload
+            .session_key
+            .to_nostr()?
+            .xonly()
+            .map_err(|error| crate::Error::Parse(format!("invalid session key: {error}")))?;
+        SECP256K1
+            .verify_schnorr(
+                &payload.session_proof,
+                &Message::from_digest(proof_digest),
+                &session_public_key,
+            )
+            .map_err(|_| crate::Error::Parse("invalid invite session proof".to_string()))?;
         let session = Session::new_responder(
             ctx,
             payload.session_key,
@@ -400,6 +436,53 @@ impl Invite {
 
 const INVITE_RESPONSE_INNER_RUMOR_KIND: u32 = 1060;
 
+const SESSION_PROOF_DOMAIN: &[u8] = b"NIP-118/session-proof/v1";
+
+fn invite_session_proof_digest(
+    inviter_identity: DevicePubkey,
+    inviter_ephemeral: DevicePubkey,
+    invitee_identity: DevicePubkey,
+    session_key: DevicePubkey,
+    shared_secret: [u8; 32],
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(SESSION_PROOF_DOMAIN);
+    hasher.update(inviter_identity.to_bytes());
+    hasher.update(inviter_ephemeral.to_bytes());
+    hasher.update(invitee_identity.to_bytes());
+    hasher.update(session_key.to_bytes());
+    hasher.update(shared_secret);
+    hasher.finalize().into()
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InviteResponseRumor {
+    id: EventId,
+    pubkey: PublicKey,
+    created_at: Timestamp,
+    kind: Kind,
+    tags: Tags,
+    content: String,
+}
+
+impl InviteResponseRumor {
+    fn from_json(json: &str) -> Result<Self> {
+        Ok(serde_json::from_str(json)?)
+    }
+
+    fn into_unsigned_event(self) -> UnsignedEvent {
+        UnsignedEvent {
+            id: Some(self.id),
+            pubkey: self.pubkey,
+            created_at: self.created_at,
+            kind: self.kind,
+            tags: self.tags,
+            content: self.content,
+        }
+    }
+}
+
 fn validate_invite_response_inner_rumor(rumor: &UnsignedEvent) -> Result<()> {
     if rumor.id.is_none() {
         return Err(crate::Error::Parse(
@@ -424,6 +507,8 @@ fn validate_invite_response_inner_rumor(rumor: &UnsignedEvent) -> Result<()> {
 struct InviteResponsePayload {
     #[serde(rename = "sessionKey")]
     session_key: DevicePubkey,
+    #[serde(rename = "sessionProof")]
+    session_proof: Signature,
     #[serde(rename = "deviceId", skip_serializing_if = "Option::is_none")]
     device_id: Option<String>,
     #[serde(rename = "ownerPublicKey", skip_serializing_if = "Option::is_none")]

@@ -95,6 +95,7 @@ describe('inviteUtils', () => {
 
       const encrypted = await encryptInviteResponse({
         inviteeSessionPublicKey: inviteeSessionKeypair.publicKey,
+        inviteeSessionPrivateKey: inviteeSessionKeypair.privateKey,
         inviteePublicKey,
         inviteePrivateKey,
         inviterPublicKey,
@@ -106,8 +107,10 @@ describe('inviteUtils', () => {
       return {
         encrypted,
         inviterPrivateKey,
+        inviterPublicKey,
         inviterEphemeralKeypair,
         sharedSecret,
+        inviteePrivateKey,
         inviteePublicKey,
         inviteeSessionKeypair,
         ownerPublicKey,
@@ -132,6 +135,29 @@ describe('inviteUtils', () => {
         JSON.stringify(inner),
         getConversationKey(fixture.encrypted.randomSenderPrivateKey, fixture.inviterEphemeralKeypair.publicKey)
       )
+    }
+
+    function rewriteInvitePayload(
+      fixture: Awaited<ReturnType<typeof createInviteResponseFixture>>,
+      rewrite: (payload: Record<string, unknown>) => void,
+    ) {
+      const inner = decryptInnerRumor(fixture)
+      const identityCiphertext = nip44.decrypt(inner.content, hexToBytes(fixture.sharedSecret))
+      const payload = JSON.parse(nip44.decrypt(
+        identityCiphertext,
+        getConversationKey(fixture.inviterPrivateKey, fixture.inviteePublicKey),
+      )) as Record<string, unknown>
+      rewrite(payload)
+      const rewrittenIdentityCiphertext = nip44.encrypt(
+        JSON.stringify(payload),
+        getConversationKey(fixture.inviteePrivateKey, fixture.inviterPublicKey),
+      )
+      inner.content = nip44.encrypt(
+        rewrittenIdentityCiphertext,
+        hexToBytes(fixture.sharedSecret),
+      )
+      inner.id = getEventHash(inner)
+      return reencryptInnerRumor(fixture, inner)
     }
 
     function expectCorruptedInnerToReject(
@@ -164,6 +190,7 @@ describe('inviteUtils', () => {
       // Invitee encrypts response
       const encrypted = await encryptInviteResponse({
         inviteeSessionPublicKey: inviteeSessionKeypair.publicKey,
+        inviteeSessionPrivateKey: inviteeSessionKeypair.privateKey,
         inviteePublicKey,
         inviteePrivateKey,
         inviterPublicKey,
@@ -210,6 +237,8 @@ describe('inviteUtils', () => {
           inner.tags = [['p', '0'.repeat(64)]]
           inner.id = getEventHash(inner)
         },
+        (inner: any) => { inner.sig = '0'.repeat(128) },
+        (inner: any) => { inner.unexpected = true },
       ]
 
       for (const corrupt of corruptions) {
@@ -233,6 +262,7 @@ describe('inviteUtils', () => {
 
       const encrypted = await encryptInviteResponse({
         inviteeSessionPublicKey: inviteeSessionKeypair.publicKey,
+        inviteeSessionPrivateKey: inviteeSessionKeypair.privateKey,
         inviteePublicKey,
         inviteePrivateKey,
         inviterPublicKey,
@@ -277,6 +307,7 @@ describe('inviteUtils', () => {
 
       const encrypted = await encryptInviteResponse({
         inviteeSessionPublicKey: inviteeSessionKeypair.publicKey,
+        inviteeSessionPrivateKey: inviteeSessionKeypair.privateKey,
         inviteePublicKey,
         inviterPublicKey,
         inviterEphemeralPublicKey: inviterEphemeralKeypair.publicKey,
@@ -289,6 +320,7 @@ describe('inviteUtils', () => {
         envelopeContent: encrypted.envelope.content,
         envelopeSenderPubkey: encrypted.randomSenderPublicKey,
         inviterEphemeralPrivateKey: inviterEphemeralKeypair.privateKey,
+        inviterPublicKey,
         sharedSecret,
         decrypt,
       })
@@ -312,6 +344,7 @@ describe('inviteUtils', () => {
 
       const encrypted = await encryptInviteResponse({
         inviteeSessionPublicKey: inviteeSessionKeypair.publicKey,
+        inviteeSessionPrivateKey: inviteeSessionKeypair.privateKey,
         inviteePublicKey,
         inviteePrivateKey,
         inviterPublicKey,
@@ -345,6 +378,7 @@ describe('inviteUtils', () => {
 
       const encrypted = await encryptInviteResponse({
         inviteeSessionPublicKey: inviteeSessionKeypair.publicKey,
+        inviteeSessionPrivateKey: inviteeSessionKeypair.privateKey,
         inviteePublicKey,
         inviteePrivateKey,
         inviterPublicKey,
@@ -362,6 +396,62 @@ describe('inviteUtils', () => {
           sharedSecret: wrongSharedSecret,
         })
       ).rejects.toThrow()
+    })
+
+    it('should reject an identity-authenticated response that cannot prove the claimed session key', async () => {
+      const inviterPrivateKey = generateSecretKey()
+      const inviterPublicKey = getPublicKey(inviterPrivateKey)
+      const inviterEphemeralKeypair = generateEphemeralKeypair()
+      const sharedSecret = generateSharedSecret()
+      const inviteePrivateKey = generateSecretKey()
+      const inviteePublicKey = getPublicKey(inviteePrivateKey)
+      const claimedSessionKeypair = generateEphemeralKeypair()
+
+      await expect(
+        encryptInviteResponse({
+          inviteeSessionPublicKey: claimedSessionKeypair.publicKey,
+          // An attacker knows its identity key, but not the claimed session secret.
+          inviteeSessionPrivateKey: inviteePrivateKey,
+          inviteePublicKey,
+          inviteePrivateKey,
+          inviterPublicKey,
+          inviterEphemeralPublicKey: inviterEphemeralKeypair.publicKey,
+          sharedSecret,
+        })
+      ).rejects.toThrow('does not match')
+    })
+
+    it('should bind the session proof to the complete invite transcript', async () => {
+      const fixture = await createInviteResponseFixture()
+      const unrelatedInviter = getPublicKey(generateSecretKey())
+
+      await expect(
+        decryptInviteResponse({
+          envelopeContent: fixture.encrypted.envelope.content,
+          envelopeSenderPubkey: fixture.encrypted.randomSenderPublicKey,
+          inviterEphemeralPrivateKey: fixture.inviterEphemeralKeypair.privateKey,
+          inviterPrivateKey: fixture.inviterPrivateKey,
+          inviterPublicKey: unrelatedInviter,
+          sharedSecret: fixture.sharedSecret,
+        })
+      ).rejects.toThrow('Invalid invite session proof')
+    })
+
+    it('should reject a response whose session proof is invalid', async () => {
+      const fixture = await createInviteResponseFixture()
+      const envelope = rewriteInvitePayload(fixture, (payload) => {
+        const proof = payload.sessionProof as string
+        payload.sessionProof = `${proof[0] === '0' ? '1' : '0'}${proof.slice(1)}`
+      })
+      await expectCorruptedInnerToReject(fixture, envelope)
+    })
+
+    it('should reject a proofless legacy response payload', async () => {
+      const fixture = await createInviteResponseFixture()
+      const envelope = rewriteInvitePayload(fixture, (payload) => {
+        delete payload.sessionProof
+      })
+      await expectCorruptedInnerToReject(fixture, envelope)
     })
   })
 

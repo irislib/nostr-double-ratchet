@@ -251,6 +251,8 @@ fn malformed_invite_response_layers_fail_independently() -> Result<()> {
         InviteResponseCorruption::InnerJson,
         InviteResponseCorruption::PayloadJson,
         InviteResponseCorruption::InvalidSessionKey,
+        InviteResponseCorruption::MissingSessionProof,
+        InviteResponseCorruption::InvalidSessionProof,
     ]
     .into_iter()
     .enumerate()
@@ -274,6 +276,25 @@ fn malformed_invite_response_layers_fail_independently() -> Result<()> {
         assert_eq!(snapshot(&fixture.owned_invite), before);
     }
 
+    Ok(())
+}
+
+#[test]
+fn invite_session_proof_is_bound_to_the_invite_transcript() -> Result<()> {
+    let mut fixture = invite_response_fixture(1_700_405_000, None)?;
+    let response_event = codec::invite_response_event(&fixture.response_envelope)?;
+    let incoming = codec::parse_invite_response_event(&response_event)?;
+
+    fixture.owned_invite.inviter_ephemeral_public_key = actor(99).device_pubkey;
+    let mut process_ctx = context(11_400, 1_700_405_010);
+    let result = fixture.owned_invite.process_response(
+        &mut process_ctx,
+        &incoming,
+        fixture.alice.secret_key,
+    );
+
+    assert!(result.is_err());
+    assert!(fixture.owned_invite.used_by.is_empty());
     Ok(())
 }
 

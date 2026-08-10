@@ -1,4 +1,4 @@
-use nostr::{EventBuilder, Kind, PublicKey, Tag, Timestamp, UnsignedEvent};
+use nostr::{EventBuilder, EventId, Kind, PublicKey, Tag, Tags, Timestamp, UnsignedEvent};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -35,6 +35,8 @@ pub enum Error {
     InvalidReceiptType(String),
     #[error("invalid chat settings payload")]
     InvalidChatSettings,
+    #[error("missing inner rumor id")]
+    MissingEventId,
     #[error("duplicate `{0}` tag")]
     DuplicateControlTag(String),
     #[error("missing `{0}` tag")]
@@ -289,7 +291,9 @@ pub fn encode_chat_settings(
 }
 
 pub fn encode_event(event: &UnsignedEvent) -> Result<Vec<u8>> {
-    Ok(serde_json::to_vec(event)?)
+    let mut event = event.clone();
+    event.ensure_id();
+    Ok(serde_json::to_vec(&event)?)
 }
 
 pub fn decode(payload: &[u8]) -> Result<DecodedPairwiseRumor> {
@@ -301,7 +305,10 @@ pub fn decode_strict(payload: &[u8]) -> Result<DecodedPairwiseRumor> {
 }
 
 pub fn decode_with_mode(payload: &[u8], mode: DecodeMode) -> Result<DecodedPairwiseRumor> {
-    let mut event = serde_json::from_slice::<UnsignedEvent>(payload)?;
+    let mut event = StrictRumor::from_slice(payload)?.into_unsigned_event();
+    if mode == DecodeMode::Strict && event.id.is_none() {
+        return Err(Error::MissingEventId);
+    }
     event.ensure_id();
     event.verify_id()?;
     let marker = protocol_marker(&event, mode)?;
@@ -336,6 +343,34 @@ pub fn decode_with_mode(payload: &[u8], mode: DecodeMode) -> Result<DecodedPairw
         millis,
         expiration,
     })
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StrictRumor {
+    id: Option<EventId>,
+    pubkey: PublicKey,
+    created_at: Timestamp,
+    kind: Kind,
+    tags: Tags,
+    content: String,
+}
+
+impl StrictRumor {
+    fn from_slice(payload: &[u8]) -> Result<Self> {
+        Ok(serde_json::from_slice(payload)?)
+    }
+
+    fn into_unsigned_event(self) -> UnsignedEvent {
+        UnsignedEvent {
+            id: self.id,
+            pubkey: self.pubkey,
+            created_at: self.created_at,
+            kind: self.kind,
+            tags: self.tags,
+            content: self.content,
+        }
+    }
 }
 
 fn control_tags(
@@ -373,10 +408,11 @@ fn build_event(
         tags.push(tag([EXPIRATION_TAG, expiration.to_string().as_str()])?);
     }
 
-    let event = EventBuilder::new(Kind::from(kind as u16), content)
+    let mut event = EventBuilder::new(Kind::from(kind as u16), content)
         .tags(tags)
         .custom_created_at(Timestamp::from(options.created_at_secs))
         .build(author);
+    event.ensure_id();
     Ok(event)
 }
 
@@ -537,6 +573,26 @@ mod tests {
     }
 
     #[test]
+    fn strict_decode_rejects_signed_or_extended_rumors() {
+        let event = message_event(
+            public_key(),
+            "strict fields",
+            EncodeOptions::new(1_710_000_000, 1_710_000_000_123),
+        )
+        .expect("event");
+
+        for (field, value) in [
+            ("sig", serde_json::Value::String("00".repeat(64))),
+            ("unexpected", serde_json::Value::Bool(true)),
+        ] {
+            let mut rumor = serde_json::to_value(&event).expect("json");
+            rumor[field] = value;
+            let payload = serde_json::to_vec(&rumor).expect("json");
+            assert!(decode_strict(&payload).is_err(), "accepted field {field}");
+        }
+    }
+
+    #[test]
     fn receipt_rejects_unknown_status() {
         let payload = serde_json::json!({
             "pubkey": public_key().to_string(),
@@ -550,7 +606,9 @@ mod tests {
             ],
             "content": "read"
         });
-        let bytes = serde_json::to_vec(&payload).expect("json");
+        let mut event: UnsignedEvent = serde_json::from_value(payload).expect("event");
+        event.ensure_id();
+        let bytes = serde_json::to_vec(&event).expect("json");
 
         assert!(matches!(
             decode_strict(&bytes),

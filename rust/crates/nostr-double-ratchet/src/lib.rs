@@ -177,6 +177,31 @@ pub trait SessionNostrExt {
     fn receive(&mut self, event: &nostr::Event) -> Result<Option<String>>;
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StrictUnsignedRumor {
+    id: nostr::EventId,
+    pubkey: nostr::PublicKey,
+    created_at: nostr::Timestamp,
+    kind: nostr::Kind,
+    tags: nostr::Tags,
+    content: String,
+}
+
+fn validate_unsigned_rumor(payload: &[u8]) -> Result<()> {
+    let rumor: StrictUnsignedRumor = serde_json::from_slice(payload)?;
+    nostr::UnsignedEvent {
+        id: Some(rumor.id),
+        pubkey: rumor.pubkey,
+        created_at: rumor.created_at,
+        kind: rumor.kind,
+        tags: rumor.tags,
+        content: rumor.content,
+    }
+    .verify_id()?;
+    Ok(())
+}
+
 impl SessionNostrExt for Session {
     fn send_event(&mut self, mut event: nostr::UnsignedEvent) -> Result<nostr::Event> {
         event.ensure_id();
@@ -201,6 +226,7 @@ impl SessionNostrExt for Session {
         let mut rng = rand::rngs::OsRng;
         let mut ctx = ProtocolContext::new(UnixSeconds(event.created_at.as_secs()), &mut rng);
         let plan = self.plan_receive(&mut ctx, &envelope)?;
+        validate_unsigned_rumor(&plan.payload)?;
         let outcome = self.apply_receive(plan);
         let plaintext = String::from_utf8(outcome.payload)
             .map_err(|error| Error::Decryption(error.to_string()))?;

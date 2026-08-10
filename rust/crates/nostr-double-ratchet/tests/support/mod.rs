@@ -2,6 +2,7 @@
 
 use base64::Engine;
 use nostr::nips::nip44::{self, Version};
+use nostr::secp256k1::Message;
 use nostr::{
     Event, EventBuilder, JsonUtil, Keys, Kind, PublicKey, SecretKey, Tag, Timestamp, UnsignedEvent,
 };
@@ -15,6 +16,7 @@ use nostr_double_ratchet::{
 };
 use rand::{rngs::StdRng, CryptoRng, RngCore, SeedableRng};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 pub const ROOT_URL: &str = "https://chat.iris.to";
 
@@ -60,6 +62,8 @@ pub enum InviteResponseCorruption {
     InnerJson,
     PayloadJson,
     InvalidSessionKey,
+    MissingSessionProof,
+    InvalidSessionProof,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -535,6 +539,53 @@ pub fn corrupt_invite_response_layer(
                 invite,
                 invitee,
                 r#"{"sessionKey":"deadbeef","deviceId":"broken-device"}"#,
+            )?;
+            inner.id = None;
+            inner.ensure_id();
+            reencrypt_outer_response(response, inner.try_as_json()?)
+        }
+        InviteResponseCorruption::MissingSessionProof
+        | InviteResponseCorruption::InvalidSessionProof => {
+            let mut inner = decrypt_outer_response(invite, response)?;
+            let ciphertext_bytes = base64::engine::general_purpose::STANDARD
+                .decode(inner.content.as_bytes())
+                .map_err(|error| nostr_double_ratchet::Error::Decryption(error.to_string()))?;
+            let conversation_key = nip44::v2::ConversationKey::new(invite.shared_secret);
+            let identity_ciphertext = String::from_utf8(nip44::v2::decrypt_to_bytes(
+                &conversation_key,
+                &ciphertext_bytes,
+            )?)
+            .map_err(|error| nostr_double_ratchet::Error::Decryption(error.to_string()))?;
+            let payload_json = nip44::decrypt(
+                &SecretKey::from_slice(&invitee.secret_key).unwrap(),
+                &nostr_pubkey(invite.inviter_device_pubkey),
+                &identity_ciphertext,
+            )?;
+            let mut payload: serde_json::Value = serde_json::from_str(&payload_json)?;
+            if corruption == InviteResponseCorruption::MissingSessionProof {
+                payload
+                    .as_object_mut()
+                    .expect("invite response payload must be an object")
+                    .remove("sessionProof");
+            } else {
+                let session_key: DevicePubkey =
+                    serde_json::from_value(payload["sessionKey"].clone())?;
+                let mut hasher = Sha256::new();
+                hasher.update(b"NIP-118/session-proof/v1");
+                hasher.update(invite.inviter_device_pubkey.to_bytes());
+                hasher.update(invite.inviter_ephemeral_public_key.to_bytes());
+                hasher.update(invitee.device_pubkey.to_bytes());
+                hasher.update(session_key.to_bytes());
+                hasher.update(invite.shared_secret);
+                let proof_digest: [u8; 32] = hasher.finalize().into();
+                let identity_keys = Keys::new(SecretKey::from_slice(&invitee.secret_key).unwrap());
+                let invalid_proof = identity_keys.sign_schnorr(&Message::from_digest(proof_digest));
+                payload["sessionProof"] = serde_json::Value::String(invalid_proof.to_string());
+            }
+            inner.content = build_invite_payload_ciphertext(
+                invite,
+                invitee,
+                &serde_json::to_string(&payload)?,
             )?;
             inner.id = None;
             inner.ensure_id();

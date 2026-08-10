@@ -1,5 +1,7 @@
 import { generateSecretKey, getEventHash, getPublicKey, nip44 } from 'nostr-tools'
 import { getConversationKey } from 'nostr-tools/nip44'
+import { schnorr } from '@noble/curves/secp256k1.js'
+import { sha256 } from '@noble/hashes/sha256'
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils'
 import { Session } from './Session.js'
 import { INVITE_RESPONSE_KIND, MESSAGE_EVENT_KIND, EncryptFunction, DecryptFunction, KeyPair, Rumor } from './types.js'
@@ -49,6 +51,8 @@ export function generateDeviceId(): string {
 export interface EncryptInviteResponseParams {
   /** The invitee's session public key */
   inviteeSessionPublicKey: string
+  /** The invitee's session private key, used only to prove control of the session key */
+  inviteeSessionPrivateKey: Uint8Array
   /** The invitee's identity public key (also serves as device ID) */
   inviteePublicKey: string
   /** The invitee's identity private key (optional if encrypt function provided) */
@@ -83,13 +87,61 @@ export interface EncryptedInviteResponse {
 }
 
 const TWO_DAYS = 2 * 24 * 60 * 60
+const SESSION_PROOF_DOMAIN = new TextEncoder().encode('NIP-118/session-proof/v1')
 const now = () => Math.round(Date.now() / 1000)
 const randomNow = () => Math.round(now() - Math.random() * TWO_DAYS)
 
+function requireLowerHex(value: unknown, bytes: number, field: string): string {
+  if (typeof value !== 'string' || !new RegExp(`^[0-9a-f]{${bytes * 2}}$`).test(value)) {
+    throw new Error(`Invalid ${field}`)
+  }
+  return value
+}
+
+function sessionProofDigest(
+  inviterIdentity: string,
+  inviterEphemeral: string,
+  inviteeIdentity: string,
+  sessionKey: string,
+  sharedSecret: string,
+): Uint8Array {
+  const values = [
+    requireLowerHex(inviterIdentity, 32, 'inviter identity'),
+    requireLowerHex(inviterEphemeral, 32, 'inviter ephemeral key'),
+    requireLowerHex(inviteeIdentity, 32, 'invitee identity'),
+    requireLowerHex(sessionKey, 32, 'session key'),
+    requireLowerHex(sharedSecret, 32, 'shared secret'),
+  ]
+  const transcript = new Uint8Array(SESSION_PROOF_DOMAIN.length + values.length * 32)
+  transcript.set(SESSION_PROOF_DOMAIN)
+  let offset = SESSION_PROOF_DOMAIN.length
+  for (const value of values) {
+    transcript.set(hexToBytes(value), offset)
+    offset += 32
+  }
+  return sha256(transcript)
+}
+
 function parseInviteResponseInnerRumor(json: string): Rumor {
-  const rumor = JSON.parse(json) as Rumor
+  const parsed: unknown = JSON.parse(json)
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('Invalid invite response inner rumor')
+  }
+  const expectedFields = ['content', 'created_at', 'id', 'kind', 'pubkey', 'tags']
+  const actualFields = Object.keys(parsed).sort()
   if (
-    typeof rumor.id !== 'string' ||
+    actualFields.length !== expectedFields.length ||
+    actualFields.some((field, index) => field !== expectedFields[index])
+  ) {
+    throw new Error('Invalid invite response inner rumor')
+  }
+  const rumor = parsed as Rumor
+  if (
+    !/^[0-9a-f]{64}$/.test(rumor.id) ||
+    !/^[0-9a-f]{64}$/.test(rumor.pubkey) ||
+    typeof rumor.content !== 'string' ||
+    !Number.isSafeInteger(rumor.created_at) ||
+    rumor.created_at < 0 ||
     rumor.kind !== MESSAGE_EVENT_KIND ||
     !Array.isArray(rumor.tags) ||
     rumor.tags.length !== 0 ||
@@ -110,6 +162,7 @@ function parseInviteResponseInnerRumor(json: string): Rumor {
 export async function encryptInviteResponse(params: EncryptInviteResponseParams): Promise<EncryptedInviteResponse> {
   const {
     inviteeSessionPublicKey,
+    inviteeSessionPrivateKey,
     inviteePublicKey,
     inviteePrivateKey,
     inviterPublicKey,
@@ -121,6 +174,10 @@ export async function encryptInviteResponse(params: EncryptInviteResponseParams)
 
   const sharedSecretBytes = hexToBytes(sharedSecret)
 
+  if (getPublicKey(inviteeSessionPrivateKey) !== inviteeSessionPublicKey) {
+    throw new Error('inviteeSessionPrivateKey does not match inviteeSessionPublicKey')
+  }
+
   // Create the encrypt function
   const encryptFn = encrypt ?? (async (plaintext: string, pubkey: string) => {
     if (!inviteePrivateKey) {
@@ -131,8 +188,19 @@ export async function encryptInviteResponse(params: EncryptInviteResponseParams)
 
   // Create the payload
   // Note: deviceId is no longer needed - inviteePublicKey (identity) serves as device ID
+  const sessionProof = bytesToHex(schnorr.sign(
+    sessionProofDigest(
+      inviterPublicKey,
+      inviterEphemeralPublicKey,
+      inviteePublicKey,
+      inviteeSessionPublicKey,
+      sharedSecret,
+    ),
+    inviteeSessionPrivateKey,
+  ))
   const payload = JSON.stringify({
     sessionKey: inviteeSessionPublicKey,
+    sessionProof,
     ...(ownerPublicKey && { ownerPublicKey }),
   })
 
@@ -181,6 +249,8 @@ export interface DecryptInviteResponseParams {
   inviterEphemeralPrivateKey: Uint8Array
   /** The inviter's identity private key (optional if decrypt function provided) */
   inviterPrivateKey?: Uint8Array
+  /** The inviter's identity public key (required when only a custom decrypt function is provided) */
+  inviterPublicKey?: string
   /** The shared secret for the invite */
   sharedSecret: string
   /** Optional custom decrypt function */
@@ -205,6 +275,7 @@ export async function decryptInviteResponse(params: DecryptInviteResponseParams)
     envelopeSenderPubkey,
     inviterEphemeralPrivateKey,
     inviterPrivateKey,
+    inviterPublicKey,
     sharedSecret,
     decrypt,
   } = params
@@ -234,16 +305,44 @@ export async function decryptInviteResponse(params: DecryptInviteResponseParams)
   // Decrypt using DH key
   const decryptedPayload = await decryptFn(dhEncrypted, inviteeIdentity)
 
-  let inviteeSessionPublicKey: string
-  let ownerPublicKey: string | undefined
+  const parsed: unknown = JSON.parse(decryptedPayload)
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('Invalid invite response payload')
+  }
+  const payload = parsed as Record<string, unknown>
+  const allowedFields = new Set(['sessionKey', 'sessionProof', 'ownerPublicKey', 'deviceId'])
+  if (Object.keys(payload).some((field) => !allowedFields.has(field))) {
+    throw new Error('Invalid invite response payload')
+  }
+  const inviteeSessionPublicKey = requireLowerHex(payload.sessionKey, 32, 'session key')
+  const sessionProof = requireLowerHex(payload.sessionProof, 64, 'invite session proof')
+  const ownerPublicKey = payload.ownerPublicKey === undefined
+    ? undefined
+    : requireLowerHex(payload.ownerPublicKey, 32, 'owner public key')
+  if (payload.deviceId !== undefined && typeof payload.deviceId !== 'string') {
+    throw new Error('Invalid device id')
+  }
 
+  const resolvedInviterPublicKey = inviterPublicKey ??
+    (inviterPrivateKey ? getPublicKey(inviterPrivateKey) : undefined)
+  if (!resolvedInviterPublicKey) {
+    throw new Error('inviterPublicKey is required when inviterPrivateKey is not provided')
+  }
+  const proofDigest = sessionProofDigest(
+    resolvedInviterPublicKey,
+    getPublicKey(inviterEphemeralPrivateKey),
+    inviteeIdentity,
+    inviteeSessionPublicKey,
+    sharedSecret,
+  )
+  let validProof = false
   try {
-    const parsed = JSON.parse(decryptedPayload)
-    inviteeSessionPublicKey = parsed.sessionKey
-    ownerPublicKey = parsed.ownerPublicKey
+    validProof = schnorr.verify(hexToBytes(sessionProof), proofDigest, hexToBytes(inviteeSessionPublicKey))
   } catch {
-    // Backward compatibility: plain session key
-    inviteeSessionPublicKey = decryptedPayload
+    validProof = false
+  }
+  if (!validProof) {
+    throw new Error('Invalid invite session proof')
   }
 
   return {

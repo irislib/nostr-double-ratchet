@@ -88,6 +88,19 @@ describe("Session", () => {
     expect(bob.state.receivingChainKey).not.toBe(initialReceivingChainKey)
   })
 
+  it("rejects extended inner rumors without advancing receive state", () => {
+    const { alice, bob } = createPair()
+    const before = serializeSessionState(bob.state)
+    const extended = {
+      ...buildTextRumor("unexpected field"),
+      unexpected: true,
+    }
+    const { event } = alice.sendEvent(extended)
+
+    expect(() => bob.receiveEvent(event)).toThrow("Invalid Double Ratchet inner rumor")
+    expect(serializeSessionState(bob.state)).toBe(before)
+  })
+
   it("handles multiple back-and-forth messages", async () => {
     const { alice, bob } = createPair()
 

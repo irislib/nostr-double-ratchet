@@ -13,6 +13,32 @@ import { kdf, deepCopyState } from "./utils.js";
 
 const MAX_SKIP = 1000;
 
+function parseInnerRumor(text: string): Rumor {
+  const parsed: unknown = JSON.parse(text)
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("Invalid Double Ratchet inner rumor")
+  }
+  const expectedFields = ["content", "created_at", "id", "kind", "pubkey", "tags"]
+  const actualFields = Object.keys(parsed).sort()
+  if (
+    actualFields.length !== expectedFields.length ||
+    actualFields.some((field, index) => field !== expectedFields[index])
+  ) {
+    throw new Error("Invalid Double Ratchet inner rumor")
+  }
+  const rumor = parsed as Rumor
+  if (
+    !validateEvent(rumor) ||
+    !/^[0-9a-f]{64}$/.test(rumor.id) ||
+    !Number.isSafeInteger(rumor.created_at) ||
+    rumor.created_at < 0 ||
+    rumor.id !== getEventHash(rumor)
+  ) {
+    throw new Error("Invalid Double Ratchet inner rumor")
+  }
+  return rumor
+}
+
 /**
  * Double ratchet secure communication session over Nostr
  * 
@@ -330,14 +356,7 @@ export class Session {
       }
 
       const text = this.ratchetDecrypt(header, e.content, e.pubkey);
-      const innerEvent = JSON.parse(text);
-
-      if (!validateEvent(innerEvent)) {
-        this.state = snapshot;
-        return;
-      }
-      // The `id` field is derived; don't trust the sender-provided value.
-      innerEvent.id = getEventHash(innerEvent);
+      const innerEvent = parseInnerRumor(text);
 
       this.internalSubscriptions.forEach(callback => callback(innerEvent, e));
       return innerEvent

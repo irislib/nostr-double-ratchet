@@ -400,6 +400,7 @@ export class Invite {
 
         const encrypted = await encryptInviteResponse({
             inviteeSessionPublicKey: inviteeSessionKeypair.publicKey,
+            inviteeSessionPrivateKey: inviteeSessionKeypair.privateKey,
             inviteePublicKey,
             inviteePrivateKey,
             inviterPublicKey,
@@ -445,6 +446,7 @@ export class Invite {
                     envelopeSenderPubkey: event.pubkey,
                     inviterEphemeralPrivateKey: this.inviterEphemeralPrivateKey!,
                     inviterPrivateKey,
+                    inviterPublicKey: this.inviter,
                     sharedSecret: this.sharedSecret,
                     decrypt,
                 });

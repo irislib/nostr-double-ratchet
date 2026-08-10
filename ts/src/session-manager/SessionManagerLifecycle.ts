@@ -174,6 +174,7 @@ export abstract class SessionManagerLifecycle extends SessionManagerRecords {
         inviterEphemeralPrivateKey: ephemeralPrivkey,
         inviterPrivateKey:
           this.identityKey instanceof Uint8Array ? this.identityKey : undefined,
+        inviterPublicKey: this.ourPublicKey,
         sharedSecret: this.inviteKeys.sharedSecret,
         decrypt:
           this.identityKey instanceof Uint8Array

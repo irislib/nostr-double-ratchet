@@ -61,6 +61,7 @@ async function craftInviteResponse(params: {
 
   const result = await encryptInviteResponse({
     inviteeSessionPublicKey: sessionPublicKey,
+    inviteeSessionPrivateKey: sessionKey,
     inviteePublicKey: params.responderPublicKey,
     inviteePrivateKey: params.responderPrivateKey,
     inviterPublicKey: params.inviterIdentityPubkey,

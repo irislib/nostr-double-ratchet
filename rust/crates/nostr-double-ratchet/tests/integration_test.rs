@@ -1,6 +1,7 @@
 use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag, UnsignedEvent};
-use nostr_double_ratchet::{build_text_rumor, SessionNostrExt};
-use nostr_double_ratchet::{Result, Session};
+use nostr_double_ratchet::{
+    build_text_rumor, message_event, Result, Session, SessionNostrExt, UnixSeconds,
+};
 
 fn send_text(session: &mut Session, text: &str) -> Result<nostr::Event> {
     session.send_event(build_text_rumor(
@@ -213,5 +214,40 @@ fn test_send_event_recomputes_id_with_ms_tag() -> Result<()> {
         .verify_id()
         .expect("rumor id should match computed hash");
 
+    Ok(())
+}
+
+#[test]
+fn receive_rejects_extended_rumor_without_committing_state() -> Result<()> {
+    let alice_keys = Keys::generate();
+    let bob_keys = Keys::generate();
+    let shared_secret = [9u8; 32];
+    let mut alice = Session::init(
+        bob_keys.public_key(),
+        alice_keys.secret_key().to_secret_bytes(),
+        true,
+        shared_secret,
+        Some("alice".to_string()),
+    )?;
+    let mut bob = Session::init(
+        alice_keys.public_key(),
+        bob_keys.secret_key().to_secret_bytes(),
+        false,
+        shared_secret,
+        Some("bob".to_string()),
+    )?;
+
+    let mut rumor = serde_json::to_value(build_text_rumor(
+        alice_keys.public_key(),
+        "strict rumor",
+        vec![],
+    )?)?;
+    rumor["unexpected"] = serde_json::Value::Bool(true);
+    let plan = alice.plan_send(&serde_json::to_vec(&rumor)?, UnixSeconds(1_700_000_000))?;
+    let event = message_event(&alice.apply_send(plan).envelope)?;
+    let before = serde_json::to_string(&bob.state)?;
+
+    assert!(bob.receive(&event).is_err());
+    assert_eq!(serde_json::to_string(&bob.state)?, before);
     Ok(())
 }
