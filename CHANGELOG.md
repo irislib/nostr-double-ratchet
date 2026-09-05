@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.0.167 - 2026-09-05
+
+- Preserve skipped TypeScript message keys under the previous ratchet sender so delayed
+  messages remain readable after a ratchet turn and a session restore.
+- Cover delayed-message delivery, duplicate handling, and continued replies for both
+  initiator roles, and remove a redundant invite-response round-trip test.
+- Keep the existing wire format and Rust 0.0.166 compatibility unchanged.
+
 ## 0.0.166 - 2026-08-10
 
 - Bind each invite responder identity to its advertised session key with a mandatory,

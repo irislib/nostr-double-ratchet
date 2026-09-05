@@ -249,41 +249,6 @@ describe('inviteUtils', () => {
       }
     })
 
-    it('should work with ownerPublicKey for chat routing', async () => {
-      const inviterPrivateKey = generateSecretKey()
-      const inviterPublicKey = getPublicKey(inviterPrivateKey)
-      const inviterEphemeralKeypair = generateEphemeralKeypair()
-      const sharedSecret = generateSharedSecret()
-
-      const inviteePrivateKey = generateSecretKey()
-      const inviteePublicKey = getPublicKey(inviteePrivateKey)
-      const inviteeSessionKeypair = generateEphemeralKeypair()
-      const ownerPublicKey = getPublicKey(generateSecretKey())
-
-      const encrypted = await encryptInviteResponse({
-        inviteeSessionPublicKey: inviteeSessionKeypair.publicKey,
-        inviteeSessionPrivateKey: inviteeSessionKeypair.privateKey,
-        inviteePublicKey,
-        inviteePrivateKey,
-        inviterPublicKey,
-        inviterEphemeralPublicKey: inviterEphemeralKeypair.publicKey,
-        sharedSecret,
-        ownerPublicKey,
-      })
-
-      const decrypted = await decryptInviteResponse({
-        envelopeContent: encrypted.envelope.content,
-        envelopeSenderPubkey: encrypted.randomSenderPublicKey,
-        inviterEphemeralPrivateKey: inviterEphemeralKeypair.privateKey,
-        inviterPrivateKey,
-        sharedSecret,
-      })
-
-      expect(decrypted.inviteeIdentity).toBe(inviteePublicKey)
-      expect(decrypted.inviteeSessionPublicKey).toBe(inviteeSessionKeypair.publicKey)
-      expect(decrypted.ownerPublicKey).toBe(ownerPublicKey)
-    })
-
     it('should use custom encrypt/decrypt functions when provided', async () => {
       const inviterPrivateKey = generateSecretKey()
       const inviterPublicKey = getPublicKey(inviterPrivateKey)
