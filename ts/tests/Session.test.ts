@@ -160,6 +160,23 @@ describe("Session", () => {
     expect(deliver(bob, message2).content).toBe("Message 2")
   })
 
+  it.each(["initiator", "responder"])("decrypts delayed %s messages after a ratchet and restore", (role) => {
+    const { alice, bob } = createPair()
+    deliver(bob, sendText(alice, "Initialize").event)
+    const [sender, receiver] = role === "initiator" ? [alice, bob] : [bob, alice]
+    deliver(receiver, sendText(sender, "First message").event)
+    const delayed = sendText(sender, "Delayed message").event
+
+    deliver(sender, sendText(receiver, "Reply").event)
+    deliver(receiver, sendText(sender, "New chain").event)
+
+    const restored = new Session(deserializeSessionState(serializeSessionState(receiver.state)))
+    expect(deliver(restored, delayed).content).toBe("Delayed message")
+    expect(restored.receiveEvent(delayed)).toBeUndefined()
+    expect(deliver(sender, sendText(restored, "Still connected").event).content)
+      .toBe("Still connected")
+  })
+
   it("maintains conversation state through serialization", async () => {
     const { alice, bob } = createPair()
 

@@ -344,15 +344,14 @@ export class Session {
         this.state.theirNextNostrPublicKey = header.nextPublicKey;
       }
 
-      if (!isSkipped) {
-        if (shouldRatchet) {
-          this.skipMessageKeys(header.previousChainLength, e.pubkey);
-          this.ratchetStep();
-        }
-      } else {
+      if (isSkipped) {
         if (!this.state.skippedKeys[e.pubkey]?.messageKeys[header.number]) {
           return;
         }
+      } else if (shouldRatchet) {
+        const previousSender = snapshot.theirCurrentNostrPublicKey ?? snapshot.theirNextNostrPublicKey!;
+        this.skipMessageKeys(header.previousChainLength, previousSender);
+        this.ratchetStep();
       }
 
       const text = this.ratchetDecrypt(header, e.content, e.pubkey);
