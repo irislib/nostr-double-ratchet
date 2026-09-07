@@ -81,7 +81,7 @@ export abstract class NdrRuntimeCore {
 
   protected sessionManagerEventsAvailableCleanup: Unsubscribe | null = null;
 
-  protected sessionManagerEventFlushPromise: Promise<void> | null = null;
+  protected readonly pendingSessionManagerEvents = new Set<Promise<void>>();
 
   protected readonly sessionManagerEmittedSubscriptions = new Map<
     string,

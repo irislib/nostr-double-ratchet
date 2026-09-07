@@ -136,36 +136,30 @@ export class NdrRuntime extends NdrRuntimeRegistration {
     this.clearSessionManagerEvents();
     this.sessionManagerEventsAvailableCleanup = manager.onEventsAvailable(
       () => {
-        void this.flushSessionManagerEvents();
+        void this.flushSessionManagerEvents().catch(() => {});
       },
     );
-    void this.flushSessionManagerEvents();
+    void this.flushSessionManagerEvents().catch(() => {});
   }
 
   protected async flushSessionManagerEvents(): Promise<void> {
-    if (this.sessionManagerEventFlushPromise) {
-      return this.sessionManagerEventFlushPromise;
+    // Dispatch in order, without letting a relay acknowledgement hold up
+    // subscriptions or decrypted messages. Explicit callers still await I/O.
+    const manager = this.sessionManager;
+    while (this.sessionManager === manager) {
+      for (const event of manager?.drainEvents() ?? []) {
+        const pending = Promise.resolve()
+          .then(() => {
+            if (this.sessionManager === manager) {
+              return this.handleSessionManagerEvent(event);
+            }
+          })
+          .finally(() => this.pendingSessionManagerEvents.delete(pending));
+        this.pendingSessionManagerEvents.add(pending);
+      }
+      if (this.pendingSessionManagerEvents.size === 0) return;
+      await Promise.all(this.pendingSessionManagerEvents);
     }
-
-    this.sessionManagerEventFlushPromise = (async () => {
-      while (true) {
-        const events = this.sessionManager?.drainEvents() ?? [];
-        if (events.length === 0) {
-          return;
-        }
-
-        for (const event of events) {
-          await this.handleSessionManagerEvent(event);
-        }
-      }
-    })().finally(() => {
-      this.sessionManagerEventFlushPromise = null;
-      if (this.sessionManager?.hasPendingEvents()) {
-        void this.flushSessionManagerEvents();
-      }
-    });
-
-    return this.sessionManagerEventFlushPromise;
   }
 
   protected async handleSessionManagerEvent(
@@ -204,7 +198,7 @@ export class NdrRuntime extends NdrRuntimeRegistration {
   protected feedSessionManagerEvent(event: VerifiedEvent): boolean {
     const handled = this.sessionManager?.feedEvent(event) ?? false;
     if (handled) {
-      void this.flushSessionManagerEvents();
+      void this.flushSessionManagerEvents().catch(() => {});
       this.syncDirectMessageSubscription();
     }
     return handled;
@@ -245,6 +239,7 @@ export class NdrRuntime extends NdrRuntimeRegistration {
       cleanup();
     }
     this.sessionManagerEmittedSubscriptions.clear();
+    this.pendingSessionManagerEvents.clear();
   }
 
   protected resolveActiveOwnerPubkey(ownerPubkey?: string): string {
