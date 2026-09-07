@@ -740,7 +740,7 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "ndr-pairwise-ffi"
-version = "0.0.166"
+version = "0.0.167"
 dependencies = [
  "hex",
  "nostr",
@@ -763,9 +763,9 @@ dependencies = [
 
 [[package]]
 name = "nostr"
-version = "0.44.5"
+version = "0.44.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0112d3433a5550ba13481970d5b6844714510ddcdaca4d9d0aa6e7b83f270271"
+checksum = "40ff7b77ef428b40aa2834a6acbae38a0e104c98b306208ca4b87a420d579a4b"
 dependencies = [
  "base64",
  "bech32",
@@ -787,7 +787,7 @@ dependencies = [
 
 [[package]]
 name = "nostr-double-ratchet"
-version = "0.0.166"
+version = "0.0.167"
 dependencies = [
  "base64",
  "hex",
@@ -805,7 +805,7 @@ dependencies = [
 
 [[package]]
 name = "nostr-double-ratchet-pairwise"
-version = "0.0.166"
+version = "0.0.167"
 dependencies = [
  "chacha20poly1305",
  "fs2",
@@ -826,7 +826,7 @@ dependencies = [
 
 [[package]]
 name = "nostr-double-ratchet-pairwise-codec"
-version = "0.0.166"
+version = "0.0.167"
 dependencies = [
  "nostr",
  "serde",

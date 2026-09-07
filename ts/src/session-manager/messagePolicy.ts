@@ -107,12 +107,12 @@ export function chatSettingsAdoptionForRumor(
   }
 
   const recipientP = event.tags?.find((tag) => tag[0] === "p")?.[1]
+  // Only an authenticated sibling device may select another conversation
+  // through the recipient tag. A peer controls settings for its own chat.
   const peerPubkey =
-    recipientP && recipientP !== ownerPubkey
+    fromOwnerPubkey === ownerPubkey
       ? recipientP
-      : fromOwnerPubkey && fromOwnerPubkey !== ownerPubkey
-        ? fromOwnerPubkey
-        : undefined
+      : fromOwnerPubkey
 
   if (!peerPubkey || peerPubkey === ownerPubkey) {
     return undefined

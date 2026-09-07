@@ -78,4 +78,67 @@ describe("SenderKeyState", () => {
       receiver.decryptFromBytes(SENDER_KEY_MAX_SKIP + 1, new Uint8Array([1, 2, 3]))
     ).toThrow();
   });
+
+  it.each(["current", "ahead", "skipped"])(
+    "preserves receive state when a %s message fails authentication",
+    (position) => {
+      const chainKey = new Uint8Array(32).fill(7);
+      const sender = new SenderKeyState(123, chainKey, 0);
+      const receiver = new SenderKeyState(123, chainKey, 0);
+      const first = sender.encryptToBytes("first");
+      const second = sender.encryptToBytes("second");
+      if (position === "skipped") {
+        expect(receiver.decryptFromBytes(second.messageNumber, second.ciphertext))
+          .toBe("second");
+      }
+      const message = position === "ahead" ? second : first;
+      const tampered = new Uint8Array(message.ciphertext);
+      tampered[tampered.length - 1] ^= 1;
+      const before = receiver.toJSON();
+
+      expect(() => receiver.decryptFromBytes(message.messageNumber, tampered))
+        .toThrow("invalid MAC");
+      expect(receiver.toJSON()).toEqual(before);
+      expect(receiver.decryptFromBytes(message.messageNumber, message.ciphertext))
+        .toBe(position === "ahead" ? "second" : "first");
+    },
+  );
+
+  it.each([-1, 0x1_0000_0000, 0.5, NaN, Infinity])(
+    "rejects invalid message number %s without consuming a key",
+    (messageNumber) => {
+      const chainKey = new Uint8Array(32).fill(7);
+      const sender = new SenderKeyState(123, chainKey, 0);
+      const receiver = new SenderKeyState(123, chainKey, 0);
+      const message = sender.encrypt("hello");
+      const before = receiver.toJSON();
+
+      expect(() => receiver.decrypt(messageNumber, message.ciphertext))
+        .toThrow("Invalid messageNumber");
+      expect(receiver.toJSON()).toEqual(before);
+      expect(receiver.decrypt(message.messageNumber, message.ciphertext))
+        .toBe("hello");
+    },
+  );
+
+  it("does not advance the sending chain when encryption fails", () => {
+    const sender = new SenderKeyState(123, new Uint8Array(32).fill(7), 0);
+    const before = sender.toJSON();
+
+    expect(() => sender.encryptToBytes("")).toThrow();
+    expect(sender.toJSON()).toEqual(before);
+  });
+
+  it("rejects sender-key counter overflow without changing state", () => {
+    const chainKey = new Uint8Array(32).fill(7);
+    const sender = new SenderKeyState(123, chainKey, 0xffff_ffff);
+    const before = sender.toJSON();
+    const message = new SenderKeyState(123, chainKey, 0).encryptToBytes("last");
+
+    expect(() => sender.encryptToBytes("overflow")).toThrow("overflow");
+    expect(sender.toJSON()).toEqual(before);
+    expect(() => sender.decryptFromBytes(0xffff_ffff, message.ciphertext))
+      .toThrow("overflow");
+    expect(sender.toJSON()).toEqual(before);
+  });
 });

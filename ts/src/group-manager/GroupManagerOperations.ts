@@ -1,4 +1,4 @@
-import { getEventHash, type VerifiedEvent } from "nostr-tools";
+import { getEventHash, verifyEvent, type VerifiedEvent } from "nostr-tools";
 import {
   Group,
   type GroupDecryptedEvent,
@@ -375,6 +375,13 @@ export abstract class GroupManagerOperations extends GroupManagerState {
   ): Promise<GroupDecryptedEvent | null> {
     return this.enqueueOperation(async () => {
       if (outer.kind !== this.oneToMany.outerEventKind()) return null;
+      // Authenticate before either remembering the id or queueing the event.
+      // Otherwise a forged wrapper can suppress the authentic event later.
+      try {
+        if (!verifyEvent(outer)) return null;
+      } catch {
+        return null;
+      }
       if (this.hasSeenOuterEvent(outer.id)) return null;
       this.rememberOuterEvent(outer.id);
 

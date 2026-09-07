@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generateSecretKey, getPublicKey } from "nostr-tools";
+import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools";
 import { SharedChannel, SHARED_CHANNEL_KIND } from "../src/SharedChannel";
 import type { Rumor } from "../src/types";
 
@@ -111,6 +111,55 @@ describe("SharedChannel", () => {
     const tampered = { ...event, content: event.content + "x" };
     expect(() => channel.decryptEvent(tampered)).toThrow();
   });
+
+  it("rejects captured ciphertext republished by an unrelated author", () => {
+    const channel = new SharedChannel(generateSecretKey());
+    const rumor = makeRumor(getPublicKey(generateSecretKey()), "private message");
+    const original = channel.createEvent(rumor);
+    const replay = finalizeEvent({
+      kind: original.kind,
+      content: original.content,
+      tags: original.tags,
+      created_at: original.created_at + 1,
+    }, generateSecretKey());
+
+    expect(() => channel.decryptEvent(replay)).toThrow("Invalid shared channel event");
+    expect(channel.decryptEvent(original)).toEqual(rumor);
+  });
+
+  it("rejects channel ciphertext signed with an unexpected kind", () => {
+    const secret = generateSecretKey();
+    const channel = new SharedChannel(secret);
+    const original = channel.createEvent(
+      makeRumor(getPublicKey(generateSecretKey()), "private message"),
+    );
+    const wrongKind = finalizeEvent({
+      kind: 1,
+      content: original.content,
+      tags: original.tags,
+      created_at: original.created_at,
+    }, secret);
+
+    expect(() => channel.decryptEvent(wrongKind)).toThrow("Invalid shared channel event");
+  });
+
+  it.each(["signature", "id", "timestamp"])(
+    "rejects a tampered %s even when the original was already verified",
+    (field) => {
+      const channel = new SharedChannel(generateSecretKey());
+      const original = channel.createEvent(
+        makeRumor(getPublicKey(generateSecretKey()), "private message"),
+      );
+      const tampered = {
+        ...original,
+        ...(field === "signature" ? { sig: "00".repeat(64) } : {}),
+        ...(field === "id" ? { id: "00".repeat(32) } : {}),
+        ...(field === "timestamp" ? { created_at: original.created_at + 1 } : {}),
+      };
+
+      expect(() => channel.decryptEvent(tampered)).toThrow("Invalid shared channel event");
+    },
+  );
 
   it("same secret creates equivalent channel", () => {
     const secret = generateSecretKey();

@@ -52,8 +52,15 @@ impl SharedChannel {
         Ok(event)
     }
 
-    /// Decrypt an outer event and return the inner rumor JSON string.
+    /// Authenticate the channel's outer event and return the decrypted rumor JSON.
     pub fn decrypt_event(&self, event: &nostr::Event) -> Result<String> {
+        if !self.is_channel_event(event) {
+            return Err(Error::InvalidEvent(
+                "event does not belong to this shared channel".to_string(),
+            ));
+        }
+        event.verify()?;
+
         let ciphertext_bytes = base64::engine::general_purpose::STANDARD
             .decode(event.content.as_bytes())
             .map_err(|e| Error::Decryption(format!("Base64 decode error: {}", e)))?;
@@ -142,6 +149,68 @@ mod tests {
         let original: serde_json::Value = serde_json::from_str(&rumor).unwrap();
         let result: serde_json::Value = serde_json::from_str(&decrypted).unwrap();
         assert_eq!(original, result);
+    }
+
+    #[test]
+    fn decrypt_rejects_ciphertext_republished_by_another_author() {
+        let channel = SharedChannel::new(&test_secret()).unwrap();
+        let rumor = make_rumor_json("aabbcc", "captured channel message");
+        let event = channel.create_event(&rumor).unwrap();
+        let attacker = Keys::generate();
+        let republished = make_test_event(&attacker, event.kind, &event.content);
+
+        assert!(republished.verify().is_ok());
+        assert_ne!(republished.id, event.id);
+        assert!(channel.decrypt_event(&republished).is_err());
+        assert_eq!(channel.decrypt_event(&event).unwrap(), rumor);
+    }
+
+    #[test]
+    fn decrypt_rejects_channel_ciphertext_under_another_kind() {
+        let secret = test_secret();
+        let channel = SharedChannel::new(&secret).unwrap();
+        let event = channel
+            .create_event(&make_rumor_json("aabbcc", "wrong kind"))
+            .unwrap();
+        let keys = Keys::new(nostr::SecretKey::from_slice(&secret).unwrap());
+        let republished = make_test_event(&keys, nostr::Kind::TextNote, &event.content);
+
+        assert!(republished.verify().is_ok());
+        assert!(channel.decrypt_event(&republished).is_err());
+    }
+
+    #[test]
+    fn decrypt_rejects_forged_channel_signature_with_valid_event_id() {
+        let channel = SharedChannel::new(&test_secret()).unwrap();
+        let mut event = channel
+            .create_event(&make_rumor_json("aabbcc", "forged timestamp"))
+            .unwrap();
+        let mut forged = nostr::UnsignedEvent::new(
+            event.pubkey,
+            nostr::Timestamp::from(event.created_at.as_secs() + 1),
+            event.kind,
+            event.tags.clone().to_vec(),
+            event.content.clone(),
+        );
+        forged.ensure_id();
+        event.id = forged.id.unwrap();
+        event.created_at = forged.created_at;
+
+        assert!(forged.verify_id().is_ok());
+        assert!(event.verify().is_err());
+        assert!(channel.decrypt_event(&event).is_err());
+    }
+
+    #[test]
+    fn decrypt_rejects_channel_event_with_invalid_id() {
+        let channel = SharedChannel::new(&test_secret()).unwrap();
+        let mut event = channel
+            .create_event(&make_rumor_json("aabbcc", "tampered timestamp"))
+            .unwrap();
+        event.created_at = nostr::Timestamp::from(event.created_at.as_secs() + 1);
+
+        assert!(event.verify().is_err());
+        assert!(channel.decrypt_event(&event).is_err());
     }
 
     #[test]

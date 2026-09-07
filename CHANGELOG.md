@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## TypeScript 0.0.170 / Rust 0.0.167 - 2026-09-07
+
+- Authenticate shared-channel event authors, kinds, IDs, and signatures before
+  decrypting in both languages, rejecting repackaged captured ciphertext.
+- Preserve TypeScript sender-key state when encryption or authentication fails;
+  reject invalid counters and counter wraparound.
+- Authenticate TypeScript group events before recording replay IDs or queueing
+  them, preventing forged wrappers from suppressing authentic messages.
+- Restrict incoming disappearing-message settings to the authenticated peer's
+  conversation; only verified sibling devices may select another peer by tag.
+- Require Rust `nostr` 0.44.7 to address dependency security advisories, including
+  NIP-44 decryption resource exhaustion (RUSTSEC-2026-0227).
+- Preserve the existing message wire format.
+
 ## TypeScript 0.0.169 - 2026-09-07
 
 - Separate signed publication from relay acknowledgments across runtime, AppKeys,

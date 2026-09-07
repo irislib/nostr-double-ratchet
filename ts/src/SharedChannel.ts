@@ -1,4 +1,4 @@
-import { getPublicKey, finalizeEvent } from "nostr-tools";
+import { getPublicKey, finalizeEvent, verifyEvent } from "nostr-tools";
 import * as nip44 from "nostr-tools/nip44";
 import { Rumor, NostrEvent, SHARED_CHANNEL_KIND } from "./types.js";
 
@@ -40,6 +40,19 @@ export class SharedChannel {
 
   /** Decrypt an outer event and return the inner Rumor */
   decryptEvent(event: NostrEvent): Rumor {
+    // Verify the actual fields without inheriting nostr-tools' cached verification flag.
+    // Ciphertext authentication alone does not bind a captured payload to this outer event.
+    if (!this.isChannelEvent(event) || !verifyEvent({
+      id: event.id,
+      sig: event.sig,
+      kind: event.kind,
+      pubkey: event.pubkey,
+      content: event.content,
+      tags: event.tags,
+      created_at: event.created_at,
+    })) {
+      throw new Error("Invalid shared channel event");
+    }
     const json = nip44.v2.decrypt(event.content, this.conversationKey);
     return JSON.parse(json) as Rumor;
   }

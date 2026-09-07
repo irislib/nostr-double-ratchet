@@ -76,6 +76,39 @@ describe("Chat settings (disappearing message signaling)", () => {
   })
 
   it(
+    "a remote peer cannot disable expiration for another conversation with a forged p tag",
+    async () => {
+      vi.spyOn(Date, "now").mockReturnValue(FIXED_TIMESTAMP_MS)
+      const relay = new MockRelay()
+      const alice = await createMockSessionManager("alice", relay)
+      const bob = await createMockSessionManager("bob", relay)
+      const mallory = await createMockSessionManager("mallory", relay)
+      await alice.manager.setExpirationForPeer(bob.publicKey, { ttlSeconds: 60 })
+
+      const received = new Promise<void>((resolve) => {
+        alice.manager.onEvent((event, from) => {
+          if (event.kind === CHAT_SETTINGS_KIND && from === mallory.publicKey) resolve()
+        })
+      })
+      await mallory.manager.sendMessage(alice.publicKey, JSON.stringify({
+        type: "chat-settings",
+        v: 1,
+        messageTtlSeconds: null,
+      }), {
+        kind: CHAT_SETTINGS_KIND,
+        tags: [["p", bob.publicKey], ["p", alice.publicKey]],
+      })
+      await received
+
+      const outgoing = await alice.manager.sendMessage(bob.publicKey, "still disappearing")
+      expect(outgoing.tags).toContainEqual([
+        EXPIRATION_TAG,
+        String(Math.floor(FIXED_TIMESTAMP_MS / 1000) + 60),
+      ])
+    },
+  )
+
+  it(
     "auto-adopt should also sync settings across the sender's own devices (uses p-tag peer)",
     async () => {
       vi.spyOn(Date, "now").mockReturnValue(FIXED_TIMESTAMP_MS)
@@ -126,4 +159,3 @@ describe("Chat settings (disappearing message signaling)", () => {
     15000
   )
 })
-

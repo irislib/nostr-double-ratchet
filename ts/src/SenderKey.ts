@@ -96,6 +96,16 @@ function decryptWithMessageKeyBytes(
   return nip44.v2.decrypt(payload, messageKey);
 }
 
+function validateMessageNumber(messageNumber: number): void {
+  if (
+    !Number.isInteger(messageNumber) ||
+    messageNumber < 0 ||
+    messageNumber > 0xffff_ffff
+  ) {
+    throw new Error("Invalid messageNumber (expected u32)");
+  }
+}
+
 /**
  * Signal-style "sender key" state (symmetric chain) for efficient one-to-many group messages.
  *
@@ -145,14 +155,16 @@ export class SenderKeyState {
     messageNumber: number;
     ciphertext: Uint8Array;
   } {
+    if (this.iteration === 0xffff_ffff) {
+      throw new Error("sender-key iteration overflow");
+    }
     const messageNumber = this.iteration;
     const [nextChainKey, messageKey] = deriveMessageKey(this.chainKey);
-
-    this.chainKey = nextChainKey;
-    this.iteration = (this.iteration + 1) >>> 0;
-
     const payload = nip44.v2.encrypt(plaintext, messageKey);
     const ciphertext = base64Decode(payload);
+
+    this.chainKey = nextChainKey;
+    this.iteration += 1;
     return { messageNumber, ciphertext };
   }
 
@@ -162,7 +174,8 @@ export class SenderKeyState {
   }
 
   decryptFromBytes(messageNumber: number, ciphertextBytes: Uint8Array): string {
-    const msgNum = messageNumber >>> 0;
+    validateMessageNumber(messageNumber);
+    const msgNum = messageNumber;
 
     // Old message: try cached skipped key.
     if (msgNum < this.iteration) {
@@ -170,33 +183,40 @@ export class SenderKeyState {
       if (!messageKey) {
         throw new Error("Missing skipped sender key message");
       }
+      const plaintext = decryptWithMessageKeyBytes(messageKey, ciphertextBytes);
       this.skippedMessageKeys.delete(msgNum);
-      return decryptWithMessageKeyBytes(messageKey, ciphertextBytes);
+      return plaintext;
     }
 
     // Fast-fail if the sender is too far ahead.
-    const delta = (msgNum - this.iteration) >>> 0;
+    const delta = msgNum - this.iteration;
     if (delta > SENDER_KEY_MAX_SKIP) {
       throw new Error("TooManySkippedMessages");
     }
-
-    // Derive and cache keys for skipped messages so we can decrypt out-of-order later.
-    while (this.iteration < msgNum) {
-      const [nextChainKey, messageKey] = deriveMessageKey(this.chainKey);
-      this.chainKey = nextChainKey;
-      this.skippedMessageKeys.set(this.iteration, messageKey);
-      this.iteration = (this.iteration + 1) >>> 0;
+    if (msgNum === 0xffff_ffff) {
+      throw new Error("sender-key iteration overflow");
     }
 
-    // Now decrypt the current message using the next derived key.
-    const [nextChainKey, messageKey] = deriveMessageKey(this.chainKey);
+    // Keep derived state local until the message authenticates. A forged ciphertext must not
+    // advance the chain, consume skipped keys, or prune keys needed by genuine messages.
+    let chainKey = this.chainKey;
+    let iteration = this.iteration;
+    const skippedMessageKeys = new Map(this.skippedMessageKeys);
+    while (iteration < msgNum) {
+      const [nextChainKey, messageKey] = deriveMessageKey(chainKey);
+      chainKey = nextChainKey;
+      skippedMessageKeys.set(iteration, messageKey);
+      iteration += 1;
+    }
+
+    const [nextChainKey, messageKey] = deriveMessageKey(chainKey);
+    const plaintext = decryptWithMessageKeyBytes(messageKey, ciphertextBytes);
     this.chainKey = nextChainKey;
-    this.iteration = (this.iteration + 1) >>> 0;
+    this.iteration = iteration + 1;
+    this.skippedMessageKeys = skippedMessageKeys;
 
-    // Prune skipped cache if it grows unbounded.
     this.pruneSkipped();
-
-    return decryptWithMessageKeyBytes(messageKey, ciphertextBytes);
+    return plaintext;
   }
 
   planDecryptBlind(ciphertextBytes: Uint8Array): SenderKeyBlindDecryptPlan {
@@ -270,7 +290,8 @@ export class SenderKeyState {
   }
 
   decrypt(messageNumber: number, ciphertext: string): string {
-    const msgNum = messageNumber >>> 0;
+    validateMessageNumber(messageNumber);
+    const msgNum = messageNumber;
 
     // Preserve Rust behavior: reject far-ahead message numbers without requiring a well-formed
     // ciphertext. This avoids turning a skip-limit error into a base64 error.
