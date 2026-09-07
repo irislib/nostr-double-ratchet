@@ -4,7 +4,8 @@ import {
   type SenderKeyRepairRequest,
 } from "../SenderKeyRepair.js";
 import type { SenderKeyDistribution } from "../SenderKey.js";
-import { CHAT_MESSAGE_KIND, MESSAGE_EVENT_KIND, type Rumor } from "../types.js";
+import { CHAT_MESSAGE_KIND, MESSAGE_EVENT_KIND, type Rumor, type NostrPublish } from "../types.js";
+import { createNostrPublisher } from "../publishing.js";
 import { GroupSenderKeys } from "./GroupSenderKeys.js";
 import type { PairwiseSend, PublishOuter } from "../GroupChannel.js";
 
@@ -98,7 +99,10 @@ export abstract class GroupSending extends GroupSenderKeys {
     );
 
     await this.saveSenderKeyState(this.ourDevicePubkey, senderKey);
-    await opts.publishOuter(outer, inner.id);
+    await createNostrPublisher(
+      opts.publishOuter as NostrPublish,
+      this.publicationOptions,
+    )(outer, inner.id);
 
     return { outer, inner };
   }

@@ -76,15 +76,14 @@ it("should receive a message", async () => {
 
     const chatMessage = "Hello Bob from Alice!"
 
-    await managerAlice.sendMessage(bobPubkey, chatMessage)
-
-    expect(publishAlice).toHaveBeenCalled()
-    const bobReceivedMessage = await new Promise((resolve) => {
+    const bobReceivedMessage = new Promise((resolve) => {
       managerBob.onEvent((event) => {
         if (event.content === chatMessage) resolve(true)
       })
     })
-    expect(bobReceivedMessage).toBe(true)
+    await managerAlice.sendMessage(bobPubkey, chatMessage)
+    expect(publishAlice).toHaveBeenCalled()
+    expect(await bobReceivedMessage).toBe(true)
   })
 
 it("reports queued diagnostics for unsendable messages", async () => {
@@ -188,7 +187,7 @@ it("delegates outbound publishing to device records without requiring an active 
     await manager.sendEvent(peerPublicKey, rumor)
 
     expect(prepareOutboundEvent).toHaveBeenCalledWith(rumor)
-    expect(publish).toHaveBeenCalledWith(preparedEvent)
+    expect(publish).toHaveBeenCalledWith(preparedEvent, rumor.id)
   })
 
 it("should bootstrap a linked device session to a single-device peer via that peer's public invite", async () => {

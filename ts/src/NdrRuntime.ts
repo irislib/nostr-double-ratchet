@@ -14,6 +14,7 @@ import { type StorageAdapter } from "./StorageAdapter.js";
 import {
   type NostrFetch,
   type NostrPublish,
+  type NostrPublisherOptions,
   type NostrSubscribe,
 } from "./types.js";
 import { finalizeEvent, type VerifiedEvent } from "nostr-tools";
@@ -26,7 +27,7 @@ export type {
   SendGroupEventOptions,
 } from "./RuntimeGroupController.js";
 
-export interface NdrRuntimeOptions {
+export interface NdrRuntimeOptions extends NostrPublisherOptions {
   nostrSubscribe: NostrSubscribe;
   nostrPublish: NostrPublish;
   nostrFetch?: NostrFetch;
@@ -135,31 +136,36 @@ export class NdrRuntime extends NdrRuntimeRegistration {
   protected attachSessionManagerEvents(manager: SessionManager): void {
     this.clearSessionManagerEvents();
     this.sessionManagerEventsAvailableCleanup = manager.onEventsAvailable(
-      () => {
-        void this.flushSessionManagerEvents().catch(() => {});
-      },
+      () => this.dispatchSessionManagerEvents(),
     );
     void this.flushSessionManagerEvents().catch(() => {});
   }
 
   protected async flushSessionManagerEvents(): Promise<void> {
     // Dispatch in order, without letting a relay acknowledgement hold up
-    // subscriptions or decrypted messages. Explicit callers still await I/O.
+    // subscriptions or decrypted messages. Callers await local handoff only.
     const manager = this.sessionManager;
     while (this.sessionManager === manager) {
-      for (const event of manager?.drainEvents() ?? []) {
-        const pending = Promise.resolve()
-          .then(() => {
-            if (this.sessionManager === manager) {
-              return this.handleSessionManagerEvent(event);
-            }
-          })
-          .finally(() => this.pendingSessionManagerEvents.delete(pending));
-        this.pendingSessionManagerEvents.add(pending);
-      }
+      await this.dispatchSessionManagerEvents();
       if (this.pendingSessionManagerEvents.size === 0) return;
       await Promise.all(this.pendingSessionManagerEvents);
     }
+  }
+
+  private dispatchSessionManagerEvents(): Promise<void> {
+    const manager = this.sessionManager;
+    const dispatched = (manager?.drainEvents() ?? []).map((event) => {
+      const pending = Promise.resolve()
+        .then(() => {
+          if (this.sessionManager === manager) {
+            return this.handleSessionManagerEvent(event);
+          }
+        })
+        .finally(() => this.pendingSessionManagerEvents.delete(pending));
+      this.pendingSessionManagerEvents.add(pending);
+      return pending;
+    });
+    return Promise.all(dispatched).then(() => {});
   }
 
   protected async handleSessionManagerEvent(

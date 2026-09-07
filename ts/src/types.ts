@@ -81,6 +81,26 @@ export type NostrPublish = (
   _innerEventId?: string
 ) => Promise<VerifiedEvent>;
 
+export type NostrSign = (_event: UnsignedEvent) => Promise<VerifiedEvent>;
+
+/** Persist the exact signed envelope before transport starts; do not await relay ACKs. */
+export type NostrEnqueue = (
+  _event: VerifiedEvent,
+  _innerEventId?: string,
+) => Promise<void>;
+
+export interface NostrPublishError {
+  event: VerifiedEvent;
+  innerEventId?: string;
+  error: unknown;
+}
+
+export interface NostrPublisherOptions {
+  nostrSign?: NostrSign;
+  nostrEnqueue?: NostrEnqueue;
+  onPublishError?: (_failure: NostrPublishError) => void;
+}
+
 export type Rumor = UnsignedEvent & { id: string }
 
 /**

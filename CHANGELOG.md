@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## TypeScript 0.0.169 - 2026-09-07
+
+- Separate signed publication from relay acknowledgments across runtime, AppKeys,
+  delegate, and group APIs, with optional signing and durable host-enqueue hooks.
+- Keep local handoff failures observable and queued direct messages retryable, and
+  report background transport errors without unhandled rejections.
+- Await only each event notification's own handoff, preserving incoming message
+  progress and causal work while local storage or relays are slow.
+- Preserve the legacy unsigned callback's signing wait and bounded relay-visible
+  device authorization checks; no wire-format or Rust changes.
+
 ## 0.0.167 - 2026-09-05
 
 - Preserve skipped TypeScript message keys under the previous ratchet sender so delayed

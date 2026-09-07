@@ -82,22 +82,26 @@ describe("Edge Cases", () => {
         }
       })
 
-      await alice.sendMessage(bobPubkey, "init")
-      await new Promise<void>((r) => {
+      const initialized = new Promise<void>((r) => {
         const unsub = bob.onEvent((e) => {
           if (e.content === "init") { unsub(); r() }
         })
       })
 
+      await alice.sendMessage(bobPubkey, "init")
+      await initialized
+
       const existingEventIds = new Set(
         sharedRelay.getAllEvents().map((event) => event.id),
       )
-      await alice.sendMessage(bobPubkey, messageContent)
-      await new Promise<void>((r) => {
+      const received = new Promise<void>((r) => {
         const unsub = bob.onEvent((e) => {
           if (e.content === messageContent) { unsub(); r() }
         })
       })
+
+      await alice.sendMessage(bobPubkey, messageContent)
+      await received
 
       const firstCount = receiveCount
       const messageEvent = sharedRelay.getAllEvents().find(

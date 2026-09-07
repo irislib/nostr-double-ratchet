@@ -17,12 +17,14 @@ import {
   CHAT_MESSAGE_KIND,
   type NostrFetch,
   type NostrPublish,
+  type NostrPublisherOptions,
   type NostrSubscribe,
   type Rumor,
   type Unsubscribe,
 } from "./types.js";
 import type { OnEventMeta } from "./session-manager/types.js";
 import type { VerifiedEvent } from "nostr-tools";
+import { createNostrPublisher } from "./publishing.js";
 
 export interface SendGroupEventOptions {
   nowMs?: number;
@@ -34,7 +36,7 @@ export interface RuntimeGroupEvent {
   tags?: string[][];
 }
 
-interface SessionGroupRuntimeSharedOptions {
+interface SessionGroupRuntimeSharedOptions extends NostrPublisherOptions {
   nostrSubscribe: NostrSubscribe;
   nostrPublish: NostrPublish;
   nostrFetch?: NostrFetch;
@@ -80,7 +82,7 @@ export class SessionGroupRuntime {
 
   constructor(options: SessionGroupRuntimeOptions) {
     this.nostrSubscribe = options.nostrSubscribe;
-    this.nostrPublish = options.nostrPublish;
+    this.nostrPublish = createNostrPublisher(options.nostrPublish, options);
     this.nostrFetch = options.nostrFetch;
     this.groupStorage = options.groupStorage || new InMemoryStorageAdapter();
     if ("sessionManager" in options) {
@@ -244,9 +246,7 @@ export class SessionGroupRuntime {
         const manager = await this.waitForSessionManagerFn();
         await manager.sendEvent(recipientOwnerPubkey, rumor);
       },
-      publishOuter: async (outer, innerEventId) => {
-        await this.nostrPublish(outer, innerEventId);
-      },
+      publishOuter: this.nostrPublish,
     });
   }
 

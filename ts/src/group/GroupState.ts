@@ -7,6 +7,7 @@ import {
 } from "../StorageAdapter.js";
 import type { GroupOptions, GroupDecryptedEvent } from "../GroupChannel.js";
 import { isHex32 } from "./groupInternals.js";
+import type { NostrPublisherOptions } from "../types.js";
 
 export abstract class GroupState {
   public data: GroupData;
@@ -18,6 +19,8 @@ export abstract class GroupState {
   protected memberOwnerPubkeys: string[];
 
   protected readonly storage: StorageAdapter;
+
+  protected readonly publicationOptions: NostrPublisherOptions;
 
   protected readonly oneToMany: OneToManyChannel;
 
@@ -41,6 +44,7 @@ export abstract class GroupState {
     this.ourDevicePubkey = opts.ourDevicePubkey;
     this.memberOwnerPubkeys = [...opts.data.members];
     this.storage = opts.storage || new InMemoryStorageAdapter();
+    this.publicationOptions = opts;
     this.oneToMany = opts.oneToMany || OneToManyChannel.default();
     // Storage namespace shared with the earlier BroadcastChannel prototype for compatibility.
     this.versionPrefix = `v${this.storageVersion}/broadcast-channel`;

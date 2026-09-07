@@ -19,6 +19,7 @@ import {
 } from "../types.js";
 import { type VerifiedEvent } from "nostr-tools";
 import { SessionGroupRuntime } from "../RuntimeGroupController.js";
+import { createNostrPublisher } from "../publishing.js";
 import type { NdrRuntimeOptions, NdrRuntimeState } from "../NdrRuntime.js";
 import {
   cloneAppKeys,
@@ -114,7 +115,7 @@ export abstract class NdrRuntimeCore {
 
   constructor(options: NdrRuntimeOptions) {
     this.nostrSubscribe = options.nostrSubscribe;
-    this.nostrPublish = options.nostrPublish;
+    this.nostrPublish = createNostrPublisher(options.nostrPublish, options);
     this.nostrFetch = options.nostrFetch;
     this.storage = options.storage || new InMemoryStorageAdapter();
     this.sessionStorage = options.sessionStorage || this.storage;

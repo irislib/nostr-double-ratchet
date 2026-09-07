@@ -2,6 +2,7 @@ import {
   IdentityKey,
   NostrSubscribe,
   NostrPublish,
+  type NostrPublisherOptions,
   Unsubscribe,
   INVITE_RESPONSE_KIND,
 } from "../types.js";
@@ -13,6 +14,7 @@ import { DeviceRecordActor } from "./DeviceRecordActor.js";
 import { ExpirationSettings } from "./expirationSettings.js";
 import { UserRecordActor } from "./UserRecordActor.js";
 import { UserRecordStorage } from "./userRecordStorage.js";
+import { createNostrPublisher } from "../publishing.js";
 import type {
   AcceptInviteResult,
   InviteCredentials,
@@ -103,10 +105,11 @@ export abstract class SessionManagerCore {
     ownerPublicKey: string,
     inviteKeys: InviteCredentials,
     storage?: StorageAdapter,
+    publicationOptions?: NostrPublisherOptions,
   ) {
     this.userRecords = new Map();
     this.legacyNostrSubscribe = nostrSubscribe;
-    this.legacyNostrPublish = nostrPublish;
+    this.legacyNostrPublish = createNostrPublisher(nostrPublish, publicationOptions);
     this.ourPublicKey = ourPublicKey;
     this.identityKey = identityKey;
     this.deviceId = deviceId;
@@ -153,14 +156,22 @@ export abstract class SessionManagerCore {
   protected async emitEvent(event: SessionManagerEvent): Promise<void> {
     this.emittedEvents.push(event);
     const legacy = this.handleLegacyEmittedEvent(event);
+    const handoffs: Promise<void>[] = legacy ? [legacy] : [];
     for (const callback of this.eventsAvailableCallbacks) {
       try {
-        void callback();
-      } catch {
-        // Event-availability observers should not break core state changes.
+        const pending = callback();
+        if (pending) {
+          if (event.type === "publish") handoffs.push(pending);
+          else void pending.catch(() => {});
+        }
+      } catch (error) {
+        if (event.type === "publish") handoffs.push(Promise.reject(error));
+        // Other event observers do not acknowledge durable handoff.
       }
     }
-    if (legacy) await legacy;
+    // Publish observers acknowledge local durable handoff, never relay receipt.
+    // Keep retry rows until the host has safely accepted their envelopes.
+    await Promise.all(handoffs);
   }
 
   protected handleLegacyEmittedEvent(
@@ -193,7 +204,7 @@ export abstract class SessionManagerCore {
     }
 
     if (!this.legacyNostrPublish) return;
-    return this.legacyNostrPublish(event.event).then(() => {});
+    return this.legacyNostrPublish(event.event, event.innerEventId).then(() => {});
   }
 
   protected emitSubscribe(

@@ -102,6 +102,43 @@ console.log(groupManager.managedGroupIds());
 `NdrRuntime` does not own your relay client. It still relies on your `nostrSubscribe`,
 `nostrFetch`, and `nostrPublish` functions.
 
+
+Signed publication waits for local signing and `nostrEnqueue`, then starts `nostrPublish`
+in the background. Relay acknowledgments never delay signed sends, setup, invite rotation,
+or incoming events. Configure the optional hooks for a durable web integration:
+
+```typescript
+const runtime = new NdrRuntime({
+  nostrSubscribe,
+  nostrFetch,
+  storage,
+  nostrSign: signOwnerEvent,
+  nostrEnqueue: (event, innerEventId) => outbox.persist(event, innerEventId),
+  nostrPublish: (event, innerEventId) => outbox.publish(event, innerEventId),
+  onPublishError: ({ error }) => reportDeliveryFailure(error),
+});
+```
+
+`nostrSign` returns the signed owner event. `nostrEnqueue` must resolve only after saving
+that exact signed envelope durably; it must not wait for a relay. The host retries stored
+envelopes after restart or connectivity changes and deletes them only after delivery is
+acknowledged. A failed enqueue rejects the local handoff and retains queued direct messages;
+a transport rejection is observed by `onPublishError`, whose exceptions are isolated.
+Without an enqueue hook, transport failures have no library-owned durable retry guarantee.
+
+For compatibility, an **unsigned** event without `nostrSign` still awaits the legacy
+`nostrPublish` result because that callback also supplies its signature. Supply a separate
+signer (or `ownerIdentityKey`) to remove this remaining combined signing/transport wait.
+The same hooks are available on standalone AppKeys/delegate/group options; legacy
+`SessionManager` accepts them as the final optional constructor argument.
+`createNostrPublisher` exposes the same boundary for custom integrations.
+
+Adding a device still performs bounded discovery of the relay-visible AppKeys roster.
+That authorization/roster check is separate from publication acknowledgment and prevents
+an unconfirmed local roster from being treated as established multi-device state.
+Runtime event consumers must return a Promise from `onEventsAvailable` for durable local
+handoffs; void observers keep their existing notification-only behavior.
+
 `initForOwner(...)` initializes the runtime for a specific owner/device identity. For owner-key
 logins that should participate in multi-device fanout, call
 `ensureCurrentDeviceRegistered(...)` or `registerCurrentDevice(...)` before treating private

@@ -232,9 +232,8 @@ export class SessionManager extends SessionManagerInvites {
       ensureMsTag: false,
     });
 
-    // Use sendEvent for actual sending (includes queueing).
-    // Note: sendEvent is not awaited to maintain backward compatibility.
-    this.sendEvent(recipientPublicKey, rumor).catch(() => {});
+    // Wait for local queue/state persistence and handoff, never relay ACKs.
+    await this.sendEvent(recipientPublicKey, rumor);
 
     return rumor;
   }

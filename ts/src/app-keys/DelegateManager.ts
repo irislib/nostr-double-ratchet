@@ -4,6 +4,7 @@ import { Invite } from "../Invite.js";
 import { NostrSubscribe, NostrPublish, Unsubscribe } from "../types.js";
 import { StorageAdapter, InMemoryStorageAdapter } from "../StorageAdapter.js";
 import { SessionManager } from "../SessionManager.js";
+import { createNostrPublisher } from "../publishing.js";
 import type {
   DelegateManagerOptions,
   DelegatePayload,
@@ -33,7 +34,7 @@ export class DelegateManager {
 
   constructor(options: DelegateManagerOptions) {
     this.nostrSubscribe = options.nostrSubscribe;
-    this.nostrPublish = options.nostrPublish;
+    this.nostrPublish = createNostrPublisher(options.nostrPublish, options);
     this.storage = options.storage || new InMemoryStorageAdapter();
   }
 

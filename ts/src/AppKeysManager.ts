@@ -5,7 +5,8 @@ import {
   DeviceEntry,
   DeviceLabels,
 } from "./AppKeys.js";
-import { NostrSubscribe, NostrPublish } from "./types.js";
+import { NostrSubscribe, NostrPublish, type NostrPublisherOptions } from "./types.js";
+import { createNostrPublisher } from "./publishing.js";
 import { StorageAdapter, InMemoryStorageAdapter } from "./StorageAdapter.js";
 
 export interface DelegatePayload {
@@ -17,7 +18,7 @@ export interface DelegatePayload {
 /**
  * Options for AppKeysManager (authority for AppKeys)
  */
-export interface AppKeysManagerOptions {
+export interface AppKeysManagerOptions extends NostrPublisherOptions {
   nostrPublish: NostrPublish;
   storage?: StorageAdapter;
   ownerIdentityKey?: Uint8Array;
@@ -27,7 +28,7 @@ export interface AppKeysManagerOptions {
 /**
  * Options for DelegateManager (device identity)
  */
-export interface DelegateManagerOptions {
+export interface DelegateManagerOptions extends NostrPublisherOptions {
   nostrSubscribe: NostrSubscribe;
   nostrPublish: NostrPublish;
   storage?: StorageAdapter;
@@ -55,7 +56,7 @@ export class AppKeysManager {
   }
 
   constructor(options: AppKeysManagerOptions) {
-    this.nostrPublish = options.nostrPublish;
+    this.nostrPublish = createNostrPublisher(options.nostrPublish, options);
     this.storage = options.storage || new InMemoryStorageAdapter();
     this.ownerIdentityKey = options.ownerIdentityKey;
     const keyPubkey = options.ownerIdentityKey

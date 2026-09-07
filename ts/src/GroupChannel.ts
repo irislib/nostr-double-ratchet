@@ -15,7 +15,7 @@ import { parseSenderKeyRepairRequestRumor } from "./SenderKeyRepair.js";
 import type { SenderKeyStateSerialized } from "./SenderKey.js";
 import { parseSenderKeyDistribution, SenderKeyState } from "./SenderKey.js";
 import { type StorageAdapter } from "./StorageAdapter.js";
-import { CHAT_MESSAGE_KIND, MESSAGE_EVENT_KIND, type Rumor } from "./types.js";
+import { CHAT_MESSAGE_KIND, MESSAGE_EVENT_KIND, type Rumor, type NostrPublisherOptions } from "./types.js";
 import { GroupSending } from "./group/GroupSending.js";
 import { isHex32 } from "./group/groupInternals.js";
 
@@ -28,7 +28,7 @@ export type PublishOuter = (
   innerEventId?: string,
 ) => Promise<unknown>;
 
-export interface GroupOptions {
+export interface GroupOptions extends NostrPublisherOptions {
   data: GroupData;
   /** Owner pubkey for *this* device (group membership is expressed in owner pubkeys). */
   ourOwnerPubkey: string;
