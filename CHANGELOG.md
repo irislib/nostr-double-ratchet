@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## TypeScript 0.0.171 - 2026-09-21
+
+- Rotate group sender keys before sending whenever the membership differs from
+  the key's recorded recipients, including after restart or an interrupted write.
+- Reject sends and key rotation by a removed local owner, and abort sends if
+  membership changes while keys are being distributed.
+- Preserve recipient-scoped historical key repair so remaining members and linked
+  devices can recover missed messages; document its forward-secrecy tradeoff.
+- Preserve the message wire format and Rust 0.0.167 compatibility.
+
 ## TypeScript 0.0.170 / Rust 0.0.167 - 2026-09-07
 
 - Authenticate shared-channel event authors, kinds, IDs, and signatures before
