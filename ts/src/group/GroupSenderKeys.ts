@@ -256,6 +256,29 @@ export abstract class GroupSenderKeys extends GroupState {
     return { state, created: true };
   }
 
+  protected async senderKeyMatchesRecipients(
+    senderKey: SenderKeyState,
+    senderEventPubkey: string,
+    recipients: string[],
+  ): Promise<boolean> {
+    const snapshots = await this.loadSenderKeyRepairSnapshots(this.ourDevicePubkey);
+    const distributions = snapshots.filter((snapshot) =>
+      snapshot.keyId === senderKey.keyId || snapshot.distribution.keyId === senderKey.keyId,
+    );
+    // Repair snapshots also record who has already received this chain. Check all
+    // distributions, including ones under an older outer author, across restarts.
+    // Missing evidence (e.g. an older store) must result in a fresh key.
+    return distributions.some((snapshot) =>
+      snapshot.distribution.senderEventPubkey === senderEventPubkey,
+    ) && distributions.every((snapshot) => {
+      const audience = new Set(snapshot.recipients);
+      return snapshot.keyId === senderKey.keyId &&
+        snapshot.distribution.keyId === senderKey.keyId &&
+        snapshot.distribution.groupId === this.groupId() &&
+        audience.size === recipients.length && recipients.every((recipient) => audience.has(recipient));
+    });
+  }
+
   protected buildDistribution(
     nowSeconds: number,
     senderEventPubkey: string,

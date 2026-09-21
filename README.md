@@ -76,6 +76,8 @@ events and does not own chat features such as reactions, typing, receipts, or ex
 - Double Ratchet gives forward secrecy for 1:1 sessions.
 - After compromise of a current chain key, future secrecy recovers after fresh ratchet steps (assuming attacker no longer controls endpoints).
 - Group sender keys rotate and are redistributed to handle membership and key changes.
+- TypeScript group sends compare the current membership with the stored key-distribution recipients and rotate before sending if they differ, including after restart. Applications must apply authenticated roster updates before sending; a sender that has not learned about a removal cannot enforce it.
+- Group repair retains recipient-scoped historical chain seeds so members and linked devices can recover missed key distributions after the sender advances. This deliberately trades forward secrecy under later compromise of those retained seeds for message recovery; it does not provide the same past-message protection as deleting every old chain seed. Repair remains limited to current members who were authorized recipients of the corresponding distribution.
 
 ### Author And Device Verification
 

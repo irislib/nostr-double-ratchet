@@ -20,6 +20,16 @@ export abstract class GroupSending extends GroupSenderKeys {
     );
   }
 
+  private assertCurrentRecipients(recipients: string[]): void {
+    const current = this.senderKeyRecipientOwnerPubkeys();
+    if (!current.includes(this.ourOwnerPubkey)) {
+      throw new Error("Cannot send group messages or keys: local owner is not a member");
+    }
+    if (current.length !== recipients.length || current.some((member) => !recipients.includes(member))) {
+      throw new Error("Group membership changed while preparing the send; retry with current members");
+    }
+  }
+
   /**
    * Rotate our sender key (new keyId + chain key) and distribute it to group members.
    */
@@ -27,6 +37,8 @@ export abstract class GroupSending extends GroupSenderKeys {
     sendPairwise: PairwiseSend;
     nowMs?: number;
   }): Promise<SenderKeyDistribution> {
+    const recipients = this.senderKeyRecipientOwnerPubkeys();
+    this.assertCurrentRecipients(recipients);
     await this.init();
 
     const nowMs = opts.nowMs ?? Date.now();
@@ -40,11 +52,12 @@ export abstract class GroupSending extends GroupSenderKeys {
 
     // Include our owner so sibling devices on the same account can decrypt
     // subsequent outer messages in self-only and multi-device group chats.
-    const recipients = this.senderKeyRecipientOwnerPubkeys();
     await this.recordSenderKeyRepairSnapshot(dist, recipients);
+    this.assertCurrentRecipients(recipients);
     await Promise.allSettled(
       recipients.map((pk) => opts.sendPairwise(pk, rumor)),
     );
+    this.assertCurrentRecipients(recipients);
 
     return dist;
   }
@@ -61,6 +74,8 @@ export abstract class GroupSending extends GroupSenderKeys {
       nowMs?: number;
     },
   ): Promise<{ outer: VerifiedEvent; inner: Rumor }> {
+    const recipients = this.senderKeyRecipientOwnerPubkeys();
+    this.assertCurrentRecipients(recipients);
     await this.init();
 
     const nowMs = opts.nowMs ?? Date.now();
@@ -71,10 +86,14 @@ export abstract class GroupSending extends GroupSenderKeys {
       senderEventPubkey,
       changed: senderEventKeysChanged,
     } = await this.ensureOurSenderEventKeys();
-    const { state: senderKey, created: senderKeyCreated } =
+    let { state: senderKey, created: senderKeyCreated } =
       await this.ensureOurSenderKeyState(false);
+    if (!senderKeyCreated && !await this.senderKeyMatchesRecipients(senderKey, senderEventPubkey, recipients)) {
+      ({ state: senderKey, created: senderKeyCreated } = await this.ensureOurSenderKeyState(true));
+    }
 
-    // Distribute if we just created the sender key, or if our sender-event pubkey changed.
+    // A membership change gets a fresh chain before any new ciphertext is sent.
+    // Keep historical repair snapshots so eligible members can recover old messages.
     if (senderKeyCreated || senderEventKeysChanged) {
       const dist = this.buildDistribution(
         nowSeconds,
@@ -82,13 +101,14 @@ export abstract class GroupSending extends GroupSenderKeys {
         senderKey,
       );
       const rumor = this.buildDistributionRumor(nowSeconds, nowMs, dist);
-      const recipients = this.senderKeyRecipientOwnerPubkeys();
       await this.recordSenderKeyRepairSnapshot(dist, recipients);
+      this.assertCurrentRecipients(recipients);
       await Promise.allSettled(
         recipients.map((pk) => opts.sendPairwise(pk, rumor)),
       );
     }
 
+    this.assertCurrentRecipients(recipients);
     const inner = this.buildGroupInnerRumor(nowSeconds, nowMs, event);
     const innerJson = JSON.stringify(inner);
     const outer = this.oneToMany.encryptToOuterEvent(
@@ -99,6 +119,7 @@ export abstract class GroupSending extends GroupSenderKeys {
     );
 
     await this.saveSenderKeyState(this.ourDevicePubkey, senderKey);
+    this.assertCurrentRecipients(recipients);
     await createNostrPublisher(
       opts.publishOuter as NostrPublish,
       this.publicationOptions,
