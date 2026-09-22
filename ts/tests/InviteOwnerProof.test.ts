@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { finalizeEvent, generateSecretKey, getPublicKey, nip44, type VerifiedEvent } from 'nostr-tools'
 import { AppKeys } from '../src/AppKeys'
 import { Invite } from '../src/Invite'
@@ -29,6 +29,26 @@ function fixture() {
 }
 
 describe('encrypted handshake owner proof', () => {
+  it.each([true, false])('accepts a proofless handshake with separate registration first=%s', async proofFirst => {
+    const { owner, device, deviceSecret, invite, receiver, proof } = fixture()
+    await receiver.init()
+    try {
+      // The original three-argument API produces the original wire format.
+      const { event, session } = await invite.accept(device, deviceSecret, owner)
+      expect(event.tags.some(tag => tag[0] === 'owner-proof')).toBe(false)
+      if (proofFirst) await receiver.receiveProof(proof)
+      expect(await receiver.receiveHandshake(event)).toBe(true)
+      const received: string[] = []
+      receiver.onEvent((rumor, sender) => received.push(`${sender}:${rumor.content}`))
+      receiver.feedEvent(session.sendEvent(buildTextRumor('legacy message', { pubkey: owner })).event)
+      if (!proofFirst) {
+        expect(received).toEqual([])
+        receiver.feedEvent(proof)
+      }
+      await vi.waitFor(() => expect(received).toEqual([`${owner}:legacy message`]))
+    } finally { receiver.close() }
+  })
+
   it('authorizes a linked sender without delivering a separate registration', async () => {
     const { owner, device, deviceSecret, invite, receiver, proof } = fixture()
     await receiver.init()
