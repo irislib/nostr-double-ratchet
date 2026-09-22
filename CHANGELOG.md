@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## TypeScript 0.0.172 - 2026-09-22
+
+- Carry existing account-signed device approval in an optional encrypted invite
+  response field, allowing recipients to verify a sender without receiving its
+  separate registration first.
+- Persist exact signed approval so linked devices can include it after restart
+  without possessing the account secret key.
+- Preserve known revocations and reject forged, mismatched, or conflicting proof.
+- Preserve existing handshake and message formats; verify bidirectional delivery
+  with TypeScript 0.0.171 and compatibility with the Rust 0.0.167 handshake parser.
+
 ## TypeScript 0.0.171 - 2026-09-21
 
 - Rotate group sender keys before sending whenever the membership differs from
