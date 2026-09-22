@@ -1,3 +1,4 @@
+import { decryptInviteOwnerProof, validInviteOwnerProof } from "../inviteOwnerProof.js";
 import {
   ExpirationOptions,
   MESSAGE_EVENT_KIND,
@@ -198,6 +199,17 @@ export abstract class SessionManagerLifecycle extends SessionManagerRecords {
         sharedSecret: this.inviteKeys.sharedSecret,
       };
 
+      const proof = decryptInviteOwnerProof(event, ephemeralPrivkey);
+      if (proof && validInviteOwnerProof(proof, claimedOwner, decrypted.inviteeIdentity)) {
+        const current = this.userRecords.get(claimedOwner);
+        const devices = (keys?: AppKeys) => keys?.getAllDevices().map(d => d.identityPubkey).sort().join(',');
+        // An in-band proof may not merge a conflicting equal-time head into a
+        // cached revocation. Newer records still use normal roster ingestion.
+        if (!current?.appKeys || proof.created_at !== current.appKeysCreatedAt ||
+            devices(current.appKeys) === devices(AppKeys.fromEvent(proof))) {
+          await this.getOrCreateUserRecord(claimedOwner).processAppKeysEvent(proof, decrypted.inviteeIdentity);
+        }
+      }
       const persistedAppKeys = this.userRecords.get(claimedOwner)?.appKeys;
       if (
         this.installInviteResponseSession(pendingResponse, persistedAppKeys)

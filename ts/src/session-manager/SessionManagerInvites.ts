@@ -168,6 +168,7 @@ export abstract class SessionManagerInvites extends SessionManagerLifecycle {
       this.ourPublicKey,
       encryptor,
       inviteeOwnerClaim,
+      this.userRecords.get(this.ownerPublicKey)?.ownerProofForDevice(this.deviceId),
     );
 
     const deviceRecord = this.upsertDeviceRecord(userRecord, deviceId);

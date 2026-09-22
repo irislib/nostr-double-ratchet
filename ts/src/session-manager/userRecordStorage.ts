@@ -37,6 +37,7 @@ export class UserRecordStorage {
       })),
       appKeys: userRecord?.appKeys?.serialize(),
       appKeysCreatedAt: userRecord?.appKeysCreatedAt,
+      appKeysEvent: userRecord?.appKeysEvent,
     }
 
     const key = this.userRecordKey(publicKey)

@@ -68,6 +68,7 @@ export interface StoredUserRecord {
   devices: StoredDeviceRecord[]
   appKeys?: string
   appKeysCreatedAt?: number
+  appKeysEvent?: VerifiedEvent
 }
 
 export type UserSetupState =
@@ -126,6 +127,7 @@ export interface DeviceRecordUserHooks {
 }
 
 export interface DeviceRecordDeps {
+  localOwnerProof?(): VerifiedEvent | undefined
   ownerPubkey: string
   user: DeviceRecordUserHooks
   nostr: NostrFacade
@@ -137,6 +139,7 @@ export interface DeviceRecordDeps {
 }
 
 export interface UserRecordManagerHooks {
+  localOwnerProof?(): VerifiedEvent | undefined
   updateDelegateMapping(ownerPubkey: string, appKeys: AppKeys): void
   removeDelegateMapping(deviceId: string): void
   handleDeviceRumor(

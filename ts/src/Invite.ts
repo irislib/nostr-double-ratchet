@@ -1,3 +1,4 @@
+import { encryptInviteOwnerProof, validInviteOwnerProof, INVITE_OWNER_PROOF_TAG } from "./inviteOwnerProof.js";
 import { finalizeEvent, VerifiedEvent, UnsignedEvent, verifyEvent, Filter } from "nostr-tools";
 import { INVITE_EVENT_KIND, NostrSubscribe, Unsubscribe, EncryptFunction, DecryptFunction, INVITE_RESPONSE_KIND } from "./types.js";
 import { Session } from "./Session.js";
@@ -384,6 +385,7 @@ export class Invite {
         inviteePublicKey: string,
         encryptor: Uint8Array | EncryptFunction,
         ownerPublicKey?: string,
+        ownerProof?: VerifiedEvent,
     ): Promise<{ session: Session, event: VerifiedEvent }> {
         const inviteeSessionKeypair = generateEphemeralKeypair();
         const inviterPublicKey = this.inviter || this.inviterEphemeralPublicKey;
@@ -410,6 +412,13 @@ export class Invite {
             encrypt,
         });
 
+        if (ownerProof) {
+            if (!validInviteOwnerProof(ownerProof, ownerPublicKey, inviteePublicKey)) {
+                throw new Error("Owner proof does not authorize this device");
+            }
+            encrypted.envelope.tags.push([INVITE_OWNER_PROOF_TAG,
+                encryptInviteOwnerProof(ownerProof, encrypted.randomSenderPrivateKey, this.inviterEphemeralPublicKey)]);
+        }
         return { session, event: finalizeEvent(encrypted.envelope, encrypted.randomSenderPrivateKey) };
     }
 

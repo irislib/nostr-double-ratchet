@@ -1,3 +1,4 @@
+import { validInviteOwnerProof } from "../inviteOwnerProof.js"
 import {
   AppKeys,
   applyAppKeysSnapshotPreservingLabels,
@@ -17,6 +18,7 @@ export class UserRecordActor implements UserRecordShape {
   private static readonly RECENT_OWN_DEVICE_SESSION_GRACE_MS = 5 * 60 * 1000
 
   public appKeys?: AppKeys
+  public appKeysEvent?: VerifiedEvent
   public state: UserSetupState = "new"
   public devices: Map<string, DeviceRecordActor> = new Map()
   public setupPromise?: Promise<void>
@@ -50,6 +52,7 @@ export class UserRecordActor implements UserRecordShape {
       ourOwnerPubkey: this.deps.ourOwnerPubkey,
       identityKey: this.deps.identityKey,
       createdAt,
+      localOwnerProof: () => this.deps.manager.localOwnerProof?.(),
     })
     this.devices.set(deviceId, device)
     return device
@@ -65,6 +68,14 @@ export class UserRecordActor implements UserRecordShape {
   ): void {
     this.appKeys = appKeys
     this.latestAppKeysCreatedAt = createdAt
+  }
+
+  ownerProofForDevice(deviceId: string): VerifiedEvent | undefined {
+    const proof = this.appKeysEvent
+    if (!proof || proof.created_at !== this.latestAppKeysCreatedAt ||
+        !validInviteOwnerProof(proof, this.publicKey, deviceId)) return undefined
+    const devices = (keys: AppKeys | undefined) => keys?.getAllDevices().map(d => d.identityPubkey).sort().join(',')
+    return devices(AppKeys.fromEvent(proof)) === devices(this.appKeys) ? proof : undefined
   }
 
   async queueOutboundMessage(rumor: Rumor): Promise<void> {
@@ -120,7 +131,7 @@ export class UserRecordActor implements UserRecordShape {
     this.setState("ready")
   }
 
-  async onAppKeys(appKeys: AppKeys, createdAt = 0): Promise<void> {
+  async onAppKeys(appKeys: AppKeys, createdAt = 0, handshakingDevice?: string): Promise<void> {
     this.appKeys = appKeys
     this.latestAppKeysCreatedAt = Math.max(this.latestAppKeysCreatedAt, createdAt)
     this.setState("appkeys-known")
@@ -163,7 +174,7 @@ export class UserRecordActor implements UserRecordShape {
     await this.expandDiscoveryQueue()
 
     await Promise.all(
-      this.getTargetDeviceIds().map((deviceId) =>
+      this.getTargetDeviceIds().filter(id => id !== handshakingDevice).map((deviceId) =>
         this.devices.get(deviceId)?.ensureSetup().catch(() => {})
       )
     )
@@ -209,7 +220,7 @@ export class UserRecordActor implements UserRecordShape {
     )
   }
 
-  async processAppKeysEvent(event: VerifiedEvent): Promise<boolean> {
+  async processAppKeysEvent(event: VerifiedEvent, handshakingDevice?: string): Promise<boolean> {
     if (event.pubkey !== this.publicKey) return false
     try {
       const appKeys = AppKeys.fromEvent(event)
@@ -222,7 +233,8 @@ export class UserRecordActor implements UserRecordShape {
       if (next.decision === "stale") {
         return false
       }
-      await this.onAppKeys(next.appKeys, next.createdAt)
+      this.appKeysEvent = event
+      await this.onAppKeys(next.appKeys, next.createdAt, handshakingDevice)
       return true
     } catch {
       return false

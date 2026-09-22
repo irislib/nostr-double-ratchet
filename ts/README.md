@@ -133,6 +133,25 @@ The same hooks are available on standalone AppKeys/delegate/group options; legac
 `SessionManager` accepts them as the final optional constructor argument.
 `createNostrPublisher` exposes the same boundary for custom integrations.
 
+Invite responses can carry the sender's existing account-signed device authorization
+in a single `owner-proof` tag. Its value is the JSON signed AppKeys event encrypted
+with NIP-44 v2 using the response envelope's random sender key and the inviter's
+ephemeral key. The original response content is unchanged for older parsers.
+`SessionManager` retains the exact signed event through restart and includes it
+when available; a linked device needs only its own secret key and the public signed
+proof, never the account secret key. `Invite.accept` also accepts an optional
+fourth `ownerProof` argument for applications managing their own approval storage.
+
+Receivers validate the original handshake, the bundled signature, matching account
+and device membership, and the normal roster ordering rules before authorizing the
+session. A proof cannot override a newer known revocation or a conflicting
+same-time roster. Proofs are limited to 32 KiB, 64 devices, and five minutes of
+future clock skew. The receiver can authorize the handshake without receiving a
+standalone AppKeys event first. Older responses without the extension retain the
+existing discovery path. This removes the separate registration-delivery
+requirement for updated handshakes; it does not retroactively attach proof to
+previously sent handshakes or guarantee knowledge of an unseen revocation.
+
 Adding a device still performs bounded discovery of the relay-visible AppKeys roster.
 That authorization/roster check is separate from publication acknowledgment and prevents
 an unconfirmed local roster from being treated as established multi-device state.

@@ -26,6 +26,7 @@ export abstract class SessionManagerRecords extends SessionManagerCore {
     if (!rec) {
       rec = new UserRecordActor(userPubkey, {
         manager: {
+          localOwnerProof: () => this.userRecords.get(this.ownerPublicKey)?.ownerProofForDevice(this.deviceId),
           updateDelegateMapping: (ownerPubkey, appKeys) => {
             this.updateDelegateMapping(ownerPubkey, appKeys);
           },

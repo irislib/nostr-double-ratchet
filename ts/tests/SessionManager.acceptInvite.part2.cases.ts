@@ -1,3 +1,4 @@
+import { UserRecordActor } from "../src/session-manager/UserRecordActor"
 import { describe, expect, it, vi } from "vitest"
 import {
   finalizeEvent,
@@ -342,8 +343,10 @@ it("installs a deferred invite response once the sender AppKeys become available
 
     const invite = extractInviteForOwner(relay, bob.publicKey)
 
-    // Simulate a real race where the invite response arrives before the sender's AppKeys
-    // are fetchable from the relay.
+    // A legacy sender omits the new bundled proof. Keep coverage for its
+    // deferred response when the standalone registration arrives later.
+    const linkedOwnerRecord = aliceLinked.manager.getUserRecords().get(aliceOwner.publicKey) as UserRecordActor
+    const legacyProof = vi.spyOn(linkedOwnerRecord, "ownerProofForDevice").mockReturnValue(undefined)
     relay.clearEvents()
 
     await aliceLinked.manager.acceptInvite(invite, {
@@ -381,6 +384,7 @@ it("installs a deferred invite response once the sender AppKeys become available
       expect(authorChanges.mock.calls.length).toBeGreaterThan(initialAuthorChangeCalls)
     })
     unsubscribeAuthorChanges()
+    legacyProof.mockRestore()
   }, 15_000)
 
 it("installs a deferred owner-claimed invite response once the claimed owner AppKeys authorize the device", async () => {

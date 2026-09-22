@@ -172,7 +172,8 @@ export class DeviceRecordActor implements DeviceRecordShape {
       const { session, event } = await invite.accept(
         this.deps.ourDeviceId,
         encryptor,
-        this.deps.ourOwnerPubkey
+        this.deps.ourOwnerPubkey,
+        this.deps.localOwnerProof?.()
       )
       this.installSession(session, false, { preferActive: true })
       await this.deps.nostr.publish(event)
