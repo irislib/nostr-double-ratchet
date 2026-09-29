@@ -180,7 +180,7 @@ export class UserRecordActor implements UserRecordShape {
     )
 
     this.setState("ready")
-    this.onDeviceDirty()
+    void this.onDeviceDirty().catch(() => {})
   }
 
   private async migrateQueuedMessagesFromDevice(
@@ -295,8 +295,8 @@ export class UserRecordActor implements UserRecordShape {
     this.deps.manager.handleDeviceRumor(this.publicKey, deviceId, rumor, outerEvent)
   }
 
-  onDeviceDirty(): void {
-    this.deps.manager.persistUserRecord(this.publicKey)
+  async onDeviceDirty(): Promise<void> {
+    await this.deps.manager.persistUserRecord(this.publicKey)
   }
 
   deactivateCurrentSessions(): void {

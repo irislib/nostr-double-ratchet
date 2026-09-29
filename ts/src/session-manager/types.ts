@@ -123,7 +123,7 @@ export interface NostrFacade {
 export interface DeviceRecordUserHooks {
   isDeviceAuthorized(deviceId: string): boolean
   onDeviceRumor(deviceId: string, rumor: Rumor, outerEvent?: VerifiedEvent): void
-  onDeviceDirty(): void
+  onDeviceDirty(): void | Promise<void>
 }
 
 export interface DeviceRecordDeps {
@@ -148,7 +148,7 @@ export interface UserRecordManagerHooks {
     rumor: Rumor,
     outerEvent?: VerifiedEvent,
   ): void
-  persistUserRecord(ownerPubkey: string): void
+  persistUserRecord(ownerPubkey: string): void | Promise<void>
 }
 
 export interface UserRecordDeps {

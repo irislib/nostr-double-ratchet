@@ -42,6 +42,10 @@ export class DeviceRecordActor implements DeviceRecordShape {
     session.close()
   }
 
+  private markDirty(): void {
+    void Promise.resolve(this.deps.user.onDeviceDirty()).catch(() => {})
+  }
+
   private pruneDuplicateSessions(session: Session): void {
     if (this.activeSession && this.activeSession !== session && this.activeSession.name === session.name) {
       const staleActive = this.activeSession
@@ -176,7 +180,8 @@ export class DeviceRecordActor implements DeviceRecordShape {
         this.deps.ourOwnerPubkey,
         this.deps.localOwnerProof?.()
       )
-      this.installSession(session, false, { preferActive: true })
+      this.installSession(session, false, { preferActive: true, persist: false })
+      await this.deps.user.onDeviceDirty()
       await this.deps.nostr.publish(event)
       await this.publishInviteBootstrap(session)
       this.state = "session-ready"
@@ -196,6 +201,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
         }),
         [["p", this.deviceId]],
       )
+      await this.deps.user.onDeviceDirty()
       await this.deps.nostr.publish(event)
     } catch {
       // Invite acceptance itself already established the session. If the bootstrap
@@ -305,7 +311,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
     this.deps.user.onDeviceRumor(this.deviceId, event, outerEvent)
     this.state = "session-ready"
     this.flushMessageQueue().catch(() => {})
-    this.deps.user.onDeviceDirty()
+    this.markDirty()
     return true
   }
 
@@ -383,7 +389,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
     }
 
     if (persist) {
-      this.deps.user.onDeviceDirty()
+      this.markDirty()
     }
   }
 
@@ -413,6 +419,9 @@ export class DeviceRecordActor implements DeviceRecordShape {
         continue
       }
       try {
+        // A restart after publication must never restore the sending key that
+        // the peer just consumed. Keep the queue entry if persistence fails.
+        await this.deps.user.onDeviceDirty()
         await this.deps.nostr.publish(event)
         await this.deps.messageQueue.removeByTargetAndEventId(this.deviceId, entry.event.id)
       } catch {
@@ -420,7 +429,6 @@ export class DeviceRecordActor implements DeviceRecordShape {
       }
     }
 
-    this.deps.user.onDeviceDirty()
   }
 
   deactivateCurrentSession(): void {
@@ -428,7 +436,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
     this.inactiveSessions.push(this.activeSession)
     this.activeSession = undefined
     this.state = "waiting-for-invite"
-    this.deps.user.onDeviceDirty()
+    this.markDirty()
   }
 
   async revoke(): Promise<void> {
@@ -437,7 +445,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
     this.activeSession = undefined
     this.inactiveSessions = []
     await this.deps.messageQueue.removeForTarget(this.deviceId).catch(() => {})
-    this.deps.user.onDeviceDirty()
+    this.markDirty()
   }
 
   close(): void {

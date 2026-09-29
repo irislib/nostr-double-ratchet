@@ -42,8 +42,9 @@ export abstract class SessionManagerRecords extends SessionManagerCore {
             this.handleDeviceRumor(ownerPubkey, deviceId, rumor, outerEvent);
           },
           persistUserRecord: (ownerPubkey) => {
-            this.storeUserRecord(ownerPubkey).catch(() => {});
+            const persisted = this.storeUserRecord(ownerPubkey);
             this.notifyMessagePushAuthorsChanged();
+            return persisted;
           },
         },
         nostr: this.nostrFacade,
