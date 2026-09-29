@@ -21,7 +21,11 @@ import {
   type PendingInviteResponse,
 } from "./managerInternals.js";
 
+const MAX_DECRYPTED_EVENT_IDS = 4096;
+
 export abstract class SessionManagerRecords extends SessionManagerCore {
+  protected readonly decryptedEventIds = new Set<string>();
+
   protected getOrCreateUserRecord(userPubkey: string): UserRecordActor {
     let rec = this.userRecords.get(userPubkey);
     if (!rec) {
@@ -181,6 +185,10 @@ export abstract class SessionManagerRecords extends SessionManagerCore {
   }
 
   protected processDirectMessageEvent(event: VerifiedEvent): boolean {
+    // Separate relay subscriptions can supply new objects for the same envelope.
+    // Only successfully delivered plaintext is deduplicated; missing keys remain retryable.
+    if (this.decryptedEventIds.has(event.id)) return true;
+
     const knownAuthors: DeviceRecordActor[] = [];
     const otherDevices: DeviceRecordActor[] = [];
     for (const userRecord of this.userRecords.values()) {
@@ -197,6 +205,11 @@ export abstract class SessionManagerRecords extends SessionManagerCore {
     // ratchet authors first, retaining the full fallback for new peer keys.
     for (const device of [...knownAuthors, ...otherDevices]) {
       if (device.processReceivedEvent(event)) {
+        this.decryptedEventIds.add(event.id);
+        if (this.decryptedEventIds.size > MAX_DECRYPTED_EVENT_IDS) {
+          const oldest = this.decryptedEventIds.values().next().value;
+          if (oldest) this.decryptedEventIds.delete(oldest);
+        }
         this.syncLegacyDirectMessageSubscription();
         this.pendingDirectMessages.delete(event.id);
         return true;

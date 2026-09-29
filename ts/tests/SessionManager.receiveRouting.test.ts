@@ -4,13 +4,30 @@ import { Session } from "../src/Session";
 import { SessionManager } from "../src/SessionManager";
 import { InMemoryStorageAdapter } from "../src/StorageAdapter";
 import { generateEphemeralKeypair, generateSharedSecret } from "../src/inviteUtils";
+import type { StoredUserRecord } from "../src/session-manager/types";
 
 class RoutingManager extends SessionManager {
-  installPeer(session: Session): void {
+  retryPending(): void {
+    this.retryPendingDirectMessages();
+  }
+
+  async snapshotPeer(owner: string): Promise<StoredUserRecord> {
+    await this.storeUserRecord(owner);
+    return structuredClone((await this.storage.get<StoredUserRecord>(`v1/user/${owner}`))!);
+  }
+
+  async restorePeer(owner: string, data: StoredUserRecord): Promise<void> {
+    await this.storeUserRecord(owner);
+    await this.storage.put(`v1/user/${owner}`, data);
+    await this.loadUserRecord(owner);
+  }
+
+  installPeer(session: Session): string {
     const owner = getPublicKey(generateSecretKey());
     this.getOrCreateUserRecord(owner).ensureDevice(owner).installSession(
       session, false, { persist: false },
     );
+    return owner;
   }
 }
 
@@ -31,7 +48,7 @@ async function manager() {
 function pair() {
   const alice = generateSecretKey();
   const bob = generateSecretKey();
-  const secret = generateSharedSecret();
+  const secret = generateSecretKey();
   return {
     alice: Session.init(getPublicKey(bob), alice, true, secret),
     bob: Session.init(getPublicKey(alice), bob, false, secret),
@@ -58,6 +75,11 @@ describe("incoming session routing", () => {
         expect.any(String), expect.any(Object),
       );
       expect(attempts.reduce((total, attempt) => total + attempt.mock.calls.length, 0)).toBe(0);
+      // Overlapping subscriptions recreate the event object for the same signed envelope.
+      const replayHandled = receiver.processReceivedEvent(structuredClone(event));
+      expect(attempts.reduce((total, attempt) => total + attempt.mock.calls.length, 0)).toBe(0);
+      expect(replayHandled).toBe(true);
+      expect(received).toHaveBeenCalledTimes(1);
     } finally {
       receiver.close();
     }
@@ -85,4 +107,54 @@ describe("incoming session routing", () => {
       receiver.close();
     }
   });
+
+  it("retries an undeciphered envelope after its session becomes available", async () => {
+    const receiver = await manager();
+    receiver.installPeer(pair().alice);
+    const { alice, bob } = pair();
+    const event = alice.sendEvent({ kind: 14, content: "waiting for session" }).event;
+    const received = vi.fn();
+    receiver.onEvent(received);
+    try {
+      expect(receiver.processReceivedEvent(event)).toBe(false);
+      expect(receiver.processReceivedEvent(structuredClone(event))).toBe(false);
+      expect(received).not.toHaveBeenCalled();
+      receiver.installPeer(bob);
+      receiver.retryPending();
+      expect(received).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "waiting for session" }),
+        expect.any(String), expect.any(Object),
+      );
+      expect(receiver.processReceivedEvent(structuredClone(event))).toBe(true);
+      expect(received).toHaveBeenCalledTimes(1);
+    } finally {
+      receiver.close();
+    }
+  });
+
+
+  it("replays envelopes into a restored ratchet instead of retaining the old dedup epoch", async () => {
+    const receiver = await manager();
+    const { alice, bob } = pair();
+    const owner = receiver.installPeer(bob);
+    const before = await receiver.snapshotPeer(owner);
+    const first = alice.sendEvent({ kind: 14, content: "before restore" }).event;
+    const received = vi.fn();
+    receiver.onEvent(received);
+    try {
+      expect(receiver.processReceivedEvent(first)).toBe(true);
+      await receiver.restorePeer(owner, before);
+      expect(receiver.processReceivedEvent(structuredClone(first))).toBe(true);
+      expect(received).toHaveBeenCalledTimes(2);
+      const next = alice.sendEvent({ kind: 14, content: "after restore" }).event;
+      expect(receiver.processReceivedEvent(next)).toBe(true);
+      expect(received).toHaveBeenLastCalledWith(
+        expect.objectContaining({ content: "after restore" }),
+        expect.any(String), expect.any(Object),
+      );
+    } finally {
+      receiver.close();
+    }
+  });
+
 });

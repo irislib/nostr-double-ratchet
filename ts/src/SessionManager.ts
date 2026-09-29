@@ -308,6 +308,8 @@ export class SessionManager extends SessionManagerInvites {
       .loadUserRecord(publicKey)
       .then((data) => {
         if (!data) return;
+        // A restored ratchet may need an envelope accepted by its previous state.
+        this.decryptedEventIds.clear();
         hydrateUserRecord({
           data,
           publicKey,

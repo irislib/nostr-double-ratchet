@@ -290,6 +290,7 @@ export abstract class SessionManagerLifecycle extends SessionManagerRecords {
     this.legacyDirectMessageSubscription = null;
     this.legacyDirectMessageAuthors = [];
     this.pendingDirectMessages.clear();
+    this.decryptedEventIds.clear();
     for (const unsubscribe of this.legacyRuntimeSubscriptions.values()) {
       unsubscribe();
     }
@@ -313,6 +314,7 @@ export abstract class SessionManagerLifecycle extends SessionManagerRecords {
     const ownerPubkey = this.resolveToOwner(userPubkey);
     if (ownerPubkey === this.ownerPublicKey) return;
 
+    this.decryptedEventIds.clear();
     const userRecord = this.userRecords.get(ownerPubkey);
 
     if (userRecord) {
