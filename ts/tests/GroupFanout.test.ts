@@ -7,7 +7,7 @@ import { MockRelay } from "./helpers/mockRelay";
 import { createRuntime } from "./helpers/runtime";
 
 describe("group pairwise fanout", () => {
-  it("retries a key distribution after its durable queue write fails, including after restart", async () => {
+  it.each(["current", "legacy"] as const)("retries a failed key handoff after restart from %s snapshots", async (format) => {
     class FailingStorage extends InMemoryStorageAdapter {
       failTarget = "";
       override async put<T = unknown>(key: string, value: T): Promise<void> {
@@ -43,6 +43,14 @@ describe("group pairwise fanout", () => {
       await alice.sendGroupMessage(created.group.id, "before queue recovered");
       expect(received).not.toContain("before queue recovered");
       alice.close();
+      if (format === "legacy") {
+        for (const key of await storage.list()) {
+          if (!key.endsWith("/repair-snapshots")) continue;
+          const snapshots = await storage.get<Array<{ pendingRecipients?: string[] }>>(key);
+          for (const snapshot of snapshots ?? []) delete snapshot.pendingRecipients;
+          await storage.put(key, snapshots);
+        }
+      }
       storage.failTarget = "";
       alice = createRuntime({ relay, ownerPrivateKey: aliceKey, storage });
       await alice.initForOwner(aliceOwner);

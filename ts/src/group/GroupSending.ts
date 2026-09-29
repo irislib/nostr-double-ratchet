@@ -35,8 +35,10 @@ export abstract class GroupSending extends GroupSenderKeys {
       .map((snapshot) => ({ ...snapshot }));
     let changed = false;
     for (const snapshot of snapshots) {
-      if (!snapshot.pendingRecipients?.length) continue;
-      const recipients = snapshot.pendingRecipients.filter((recipient) =>
+      // Older snapshots did not track handoff success; retry their original recipients once.
+      const pending = snapshot.pendingRecipients ?? snapshot.recipients;
+      if (!pending.length) continue;
+      const recipients = pending.filter((recipient) =>
         snapshot.recipients.includes(recipient) && this.isMemberOwnerPubkey(recipient),
       );
       const dist = snapshot.distribution;

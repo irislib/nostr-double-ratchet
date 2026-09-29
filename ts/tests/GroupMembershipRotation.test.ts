@@ -185,7 +185,7 @@ describe("group membership sender-key rotation", () => {
     expect(await dave.handleOuterEvent(first.outer)).toBeNull();
   });
 
-  it("retries failed key handoffs only to still-eligible recipients without resending completed handoffs", async () => {
+  it.each(["current", "legacy"] as const)("retries %s key handoffs only to eligible recipients, once", async (format) => {
     const f = fixture();
     let alice = f.sender();
     const first = await alice.sendMessage("missed while queue failed", {
@@ -195,6 +195,14 @@ describe("group membership sender-key rotation", () => {
         f.sent.push({ to, rumor });
       },
     });
+    if (format === "legacy") {
+      for (const key of await f.storage.list()) {
+        if (!key.endsWith("/repair-snapshots")) continue;
+        const snapshots = await f.storage.get<Array<{ pendingRecipients?: string[] }>>(key);
+        for (const snapshot of snapshots ?? []) delete snapshot.pendingRecipients;
+        await f.storage.put(key, snapshots);
+      }
+    }
     const daveOwner = getPublicKey(generateSecretKey());
     const next = { ...f.data, members: [f.alice, f.carol, daveOwner] };
     const carol = f.receiver(f.carol);
@@ -204,7 +212,7 @@ describe("group membership sender-key rotation", () => {
     f.sent.length = 0;
     const second = await alice.sendMessage("after membership changed", f.options);
     expect(f.sent.filter(entry => entry.to === f.bob)).toHaveLength(0);
-    expect(f.sent.filter(entry => entry.to === f.alice)).toHaveLength(1);
+    expect(f.sent.filter(entry => entry.to === f.alice)).toHaveLength(format === "legacy" ? 2 : 1);
     expect(f.sent.filter(entry => entry.to === f.carol)).toHaveLength(2);
     expect(f.sent.filter(entry => entry.to === daveOwner)).toHaveLength(1);
     const recovered = [];
