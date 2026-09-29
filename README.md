@@ -6,6 +6,10 @@
 
 End-to-end encrypted messaging primitives for Nostr, implemented in TypeScript and Rust.
 
+**How does NDR compare with Marmot / MLS?** See the
+[protocol comparison](./MARMOT_COMPARISON.md) for differences in coordination,
+membership, recovery, and scaling.
+
 Reference integrations:
 [`iris-client`](https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-client),
 [`iris-chat`](https://git.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/iris-chat),
