@@ -201,6 +201,9 @@ export class Group extends GroupSending {
       );
       return null;
     }
+    // The local sending chain has already advanced past its own relay echoes.
+    if (senderDevicePubkey === this.ourDevicePubkey &&
+        await this.storage.get(this.senderEventSecretKeyKey(senderDevicePubkey))) return null;
     if (!this.isSenderDeviceActive(senderDevicePubkey)) {
       await this.removeSenderDeviceState(senderDevicePubkey);
       return null;

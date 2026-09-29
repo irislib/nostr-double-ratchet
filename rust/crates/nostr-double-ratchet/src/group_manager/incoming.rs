@@ -149,7 +149,13 @@ where
                 message_number: known_position.map(|(_, message_number)| message_number),
             });
         };
-        if id.group_id != message.group_id {
+        if id.group_id != message.group_id
+            || self
+                .sender_keys
+                .get(&id)
+                .is_some_and(|record| record.sender_event_secret_key.is_some())
+        {
+            // Our sending chain has already advanced; relay echoes cannot be decrypted.
             return Ok(GroupSenderKeyHandleResult::Ignored);
         }
 

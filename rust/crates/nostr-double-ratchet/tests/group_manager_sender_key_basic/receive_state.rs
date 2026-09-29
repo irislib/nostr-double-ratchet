@@ -1,6 +1,36 @@
 use super::*;
 
 #[test]
+fn sender_key_ignores_own_relay_echo_before_blind_decryption() -> Result<()> {
+    for hidden_counter in [true, false] {
+        let mut fixture = established_sender_key_fixture(54, 1_900_039_000)?;
+        let prepared = fixture.alice_groups.send_message(
+            &mut fixture.alice_manager,
+            &mut context(1_900_039_010, 1_900_039_010),
+            &fixture.group_id,
+            b"relay echo".to_vec(),
+        )?;
+        let mut message = sender_key_message_from_envelope(&prepared.remote.sender_key_messages[0]);
+        if hidden_counter {
+            message.encrypted_header = Some(String::new());
+        }
+        let before = snapshot(&fixture.alice_groups.snapshot());
+        let mut restored = GroupManager::from_snapshot(fixture.alice_groups.snapshot())?;
+        assert!(matches!(
+            restored.handle_sender_key_message(message.clone())?,
+            GroupSenderKeyHandleResult::Ignored
+        ));
+        assert_eq!(snapshot(&restored.snapshot()), before);
+        assert!(matches!(
+            fixture.bob_groups.handle_sender_key_message(message)?,
+            GroupSenderKeyHandleResult::Event(GroupIncomingEvent::Message(received))
+                if received.body == b"relay echo"
+        ));
+    }
+    Ok(())
+}
+
+#[test]
 fn sender_key_corrupted_outer_message_does_not_advance_receiver() -> Result<()> {
     let mut fixture = established_sender_key_fixture(10, 1_900_040_000)?;
 
