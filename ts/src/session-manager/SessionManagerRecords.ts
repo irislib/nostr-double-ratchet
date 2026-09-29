@@ -13,6 +13,7 @@ import {
 } from "../MessageOrigin.js";
 import { DeviceRecordActor } from "./DeviceRecordActor.js";
 import { UserRecordActor } from "./UserRecordActor.js";
+import { sessionMessageAuthorPubkeys } from "./messageAuthors.js";
 import type { OnEventCallback, OnEventMeta } from "./types.js";
 import { SessionManagerCore } from "./SessionManagerCore.js";
 import {
@@ -180,16 +181,27 @@ export abstract class SessionManagerRecords extends SessionManagerCore {
   }
 
   protected processDirectMessageEvent(event: VerifiedEvent): boolean {
+    const knownAuthors: DeviceRecordActor[] = [];
+    const otherDevices: DeviceRecordActor[] = [];
     for (const userRecord of this.userRecords.values()) {
       for (const device of userRecord.devices.values()) {
-        if (device.processReceivedEvent(event)) {
-          this.syncLegacyDirectMessageSubscription();
-          this.pendingDirectMessages.delete(event.id);
-          return true;
-        }
+        const sessions = [device.activeSession, ...device.inactiveSessions];
+        const knowsAuthor = sessions.some((session) =>
+          session && sessionMessageAuthorPubkeys(session).includes(event.pubkey),
+        );
+        (knowsAuthor ? knownAuthors : otherDevices).push(device);
       }
     }
 
+    // Cold handshakes can attempt header decryption for any author. Try known
+    // ratchet authors first, retaining the full fallback for new peer keys.
+    for (const device of [...knownAuthors, ...otherDevices]) {
+      if (device.processReceivedEvent(event)) {
+        this.syncLegacyDirectMessageSubscription();
+        this.pendingDirectMessages.delete(event.id);
+        return true;
+      }
+    }
     return false;
   }
 
