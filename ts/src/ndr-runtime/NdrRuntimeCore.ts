@@ -68,6 +68,8 @@ export abstract class NdrRuntimeCore {
 
   protected directMessageSubscriptionCleanup: Unsubscribe | null = null;
 
+  protected directMessageRecipientSubscriptionCleanup: Unsubscribe | null = null;
+
   protected directMessageSubscriptionAuthors: string[] = [];
 
   protected directMessageSubscriptionRecipient: string | null = null;

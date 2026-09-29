@@ -10,7 +10,6 @@ import {
   MESSAGE_EVENT_KIND,
   type ReceiptType,
   type Rumor,
-  type Unsubscribe,
 } from "../types.js";
 import { type VerifiedEvent } from "nostr-tools";
 import { NdrRuntimeCore } from "./NdrRuntimeCore.js";
@@ -224,6 +223,21 @@ export abstract class NdrRuntimeMessaging extends NdrRuntimeCore {
   }
 
   protected syncDirectMessageSubscription(): void {
+    // The local recipient does not rotate with peer ratchets. Keep its history
+    // subscription open, and apply identity changes independently of throttling.
+    const nextRecipient = this.delegateManager?.getIdentityPublicKey() ?? null;
+    if (nextRecipient !== this.directMessageSubscriptionRecipient) {
+      this.directMessageRecipientSubscriptionCleanup?.();
+      this.directMessageRecipientSubscriptionCleanup = null;
+      this.directMessageSubscriptionRecipient = nextRecipient;
+      if (nextRecipient) {
+        this.directMessageRecipientSubscriptionCleanup = this.nostrSubscribe(
+          { kinds: [MESSAGE_EVENT_KIND], "#p": [nextRecipient] },
+          (event) => { this.processReceivedEvent(event); },
+        );
+      }
+    }
+
     // The relay REQ for direct messages is filtered by author pubkeys, but
     // the double-ratchet rotates `theirCurrentNostrPublicKey` /
     // `theirNextNostrPublicKey` every step. Without throttling, every
@@ -244,15 +258,13 @@ export abstract class NdrRuntimeMessaging extends NdrRuntimeCore {
     const nextAuthors = [
       ...new Set(this.sessionManager?.getAllMessagePushAuthorPubkeys() ?? []),
     ].sort();
-    const nextRecipient = this.delegateManager?.getIdentityPublicKey() ?? null;
 
     if (
       nextAuthors.length === this.directMessageSubscriptionAuthors.length &&
       nextAuthors.every(
         (author, index) =>
           author === this.directMessageSubscriptionAuthors[index],
-      ) &&
-      nextRecipient === this.directMessageSubscriptionRecipient
+      )
     ) {
       return;
     }
@@ -281,45 +293,16 @@ export abstract class NdrRuntimeMessaging extends NdrRuntimeCore {
     this.directMessageSubscriptionCleanup?.();
     this.directMessageSubscriptionCleanup = null;
     this.directMessageSubscriptionAuthors = nextAuthors;
-    this.directMessageSubscriptionRecipient = nextRecipient;
     this.directMessageSubscriptionLastChangeMs = now;
 
-    if (nextAuthors.length === 0 && !nextRecipient) {
+    if (nextAuthors.length === 0) {
       return;
     }
 
-    const cleanups: Unsubscribe[] = [];
-    if (nextAuthors.length > 0) {
-      cleanups.push(
-        this.nostrSubscribe(
-          {
-            kinds: [MESSAGE_EVENT_KIND],
-            authors: nextAuthors,
-          },
-          (event) => {
-            this.processReceivedEvent(event);
-          },
-        ),
-      );
-    }
-    if (nextRecipient) {
-      cleanups.push(
-        this.nostrSubscribe(
-          {
-            kinds: [MESSAGE_EVENT_KIND],
-            "#p": [nextRecipient],
-          },
-          (event) => {
-            this.processReceivedEvent(event);
-          },
-        ),
-      );
-    }
-    this.directMessageSubscriptionCleanup = () => {
-      for (const cleanup of cleanups) {
-        cleanup();
-      }
-    };
+    this.directMessageSubscriptionCleanup = this.nostrSubscribe(
+      { kinds: [MESSAGE_EVENT_KIND], authors: nextAuthors },
+      (event) => { this.processReceivedEvent(event); },
+    );
   }
 
   async refreshOwnAppKeysFromRelay(
