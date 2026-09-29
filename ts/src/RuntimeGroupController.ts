@@ -229,7 +229,7 @@ export class SessionGroupRuntime {
       nowMs: opts.nowMs,
       sendPairwise: async (recipientOwnerPubkey, rumor) => {
         const manager = await this.waitForSessionManagerFn();
-        await manager.sendEvent(recipientOwnerPubkey, rumor);
+        await manager.sendEvent(recipientOwnerPubkey, rumor, { includeLocalSiblings: false });
       },
     });
   }
@@ -244,7 +244,7 @@ export class SessionGroupRuntime {
       nowMs: opts.nowMs,
       sendPairwise: async (recipientOwnerPubkey, rumor) => {
         const manager = await this.waitForSessionManagerFn();
-        await manager.sendEvent(recipientOwnerPubkey, rumor);
+        await manager.sendEvent(recipientOwnerPubkey, rumor, { includeLocalSiblings: false });
       },
       publishOuter: this.nostrPublish,
     });

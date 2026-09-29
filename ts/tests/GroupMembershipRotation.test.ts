@@ -185,6 +185,42 @@ describe("group membership sender-key rotation", () => {
     expect(await dave.handleOuterEvent(first.outer)).toBeNull();
   });
 
+  it("retries failed key handoffs only to still-eligible recipients without resending completed handoffs", async () => {
+    const f = fixture();
+    let alice = f.sender();
+    const first = await alice.sendMessage("missed while queue failed", {
+      ...f.options,
+      sendPairwise: async (to, rumor) => {
+        if (to !== f.alice) throw new Error("queue unavailable");
+        f.sent.push({ to, rumor });
+      },
+    });
+    const daveOwner = getPublicKey(generateSecretKey());
+    const next = { ...f.data, members: [f.alice, f.carol, daveOwner] };
+    const carol = f.receiver(f.carol);
+    const dave = new Group({ data: next, ourOwnerPubkey: daveOwner, ourDevicePubkey: getPublicKey(generateSecretKey()) });
+    expect(await carol.handleOuterEvent(first.outer)).toBeNull();
+    alice = f.sender(next);
+    f.sent.length = 0;
+    const second = await alice.sendMessage("after membership changed", f.options);
+    expect(f.sent.filter(entry => entry.to === f.bob)).toHaveLength(0);
+    expect(f.sent.filter(entry => entry.to === f.alice)).toHaveLength(1);
+    expect(f.sent.filter(entry => entry.to === f.carol)).toHaveLength(2);
+    expect(f.sent.filter(entry => entry.to === daveOwner)).toHaveLength(1);
+    const recovered = [];
+    for (const entry of f.sent.filter(entry => entry.to === f.carol)) {
+      recovered.push(...await carol.handleIncomingSessionEvent(entry.rumor, f.alice, f.aliceDevice));
+    }
+    expect(recovered.map(event => event.inner.content)).toContain(first.inner.content);
+    await f.install(dave, daveOwner);
+    expect(await dave.handleOuterEvent(first.outer)).toBeNull();
+    expect((await dave.handleOuterEvent(second.outer))?.inner.content).toBe(second.inner.content);
+    alice = f.sender(next);
+    f.sent.length = 0;
+    await alice.sendMessage("no more retries needed", f.options);
+    expect(f.sent).toEqual([]);
+  });
+
   it("aborts if membership changes during key distribution and rekeys on retry", async () => {
     const f = fixture();
     const alice = f.sender();

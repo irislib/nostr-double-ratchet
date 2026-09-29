@@ -30,6 +30,24 @@ export abstract class GroupSending extends GroupSenderKeys {
     }
   }
 
+  private async flushSenderKeyDistributions(sendPairwise: PairwiseSend): Promise<void> {
+    const snapshots = (await this.loadSenderKeyRepairSnapshots(this.ourDevicePubkey))
+      .map((snapshot) => ({ ...snapshot }));
+    let changed = false;
+    for (const snapshot of snapshots) {
+      if (!snapshot.pendingRecipients?.length) continue;
+      const recipients = snapshot.pendingRecipients.filter((recipient) =>
+        snapshot.recipients.includes(recipient) && this.isMemberOwnerPubkey(recipient),
+      );
+      const dist = snapshot.distribution;
+      const rumor = this.buildDistributionRumor(dist.createdAt, dist.createdAt * 1000, dist);
+      const results = await Promise.allSettled(recipients.map((recipient) => sendPairwise(recipient, rumor)));
+      snapshot.pendingRecipients = recipients.filter((_, index) => results[index].status === "rejected");
+      changed = true;
+    }
+    if (changed) await this.saveSenderKeyRepairSnapshots(this.ourDevicePubkey, snapshots);
+  }
+
   /**
    * Rotate our sender key (new keyId + chain key) and distribute it to group members.
    */
@@ -48,15 +66,12 @@ export abstract class GroupSending extends GroupSenderKeys {
     const { state } = await this.ensureOurSenderKeyState(true);
 
     const dist = this.buildDistribution(nowSeconds, senderEventPubkey, state);
-    const rumor = this.buildDistributionRumor(nowSeconds, nowMs, dist);
 
     // Include our owner so sibling devices on the same account can decrypt
     // subsequent outer messages in self-only and multi-device group chats.
     await this.recordSenderKeyRepairSnapshot(dist, recipients);
     this.assertCurrentRecipients(recipients);
-    await Promise.allSettled(
-      recipients.map((pk) => opts.sendPairwise(pk, rumor)),
-    );
+    await this.flushSenderKeyDistributions(opts.sendPairwise);
     this.assertCurrentRecipients(recipients);
 
     return dist;
@@ -100,14 +115,11 @@ export abstract class GroupSending extends GroupSenderKeys {
         senderEventPubkey,
         senderKey,
       );
-      const rumor = this.buildDistributionRumor(nowSeconds, nowMs, dist);
       await this.recordSenderKeyRepairSnapshot(dist, recipients);
-      this.assertCurrentRecipients(recipients);
-      await Promise.allSettled(
-        recipients.map((pk) => opts.sendPairwise(pk, rumor)),
-      );
     }
 
+    this.assertCurrentRecipients(recipients);
+    await this.flushSenderKeyDistributions(opts.sendPairwise);
     this.assertCurrentRecipients(recipients);
     const inner = this.buildGroupInnerRumor(nowSeconds, nowMs, event);
     const innerJson = JSON.stringify(inner);

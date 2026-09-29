@@ -82,17 +82,17 @@ export class SessionManager extends SessionManagerInvites {
   async sendEvent(
     recipientIdentityKey: string,
     event: Partial<Rumor>,
+    options: { includeLocalSiblings?: boolean } = {},
   ): Promise<Rumor | undefined> {
     await this.init();
 
-    await Promise.allSettled([
-      this.setupUser(recipientIdentityKey),
-      this.setupUser(this.ownerPublicKey),
-    ]);
+    const targets = new Set([recipientIdentityKey]);
+    // Group fanout includes our owner explicitly, so it needs only one self-copy.
+    if (options.includeLocalSiblings !== false) targets.add(this.ownerPublicKey);
+    await Promise.allSettled(Array.from(targets, (target) => this.setupUser(target)));
 
     // Queue event for devices that don't have sessions yet
     const completeEvent = event as Rumor;
-    const targets = new Set([recipientIdentityKey, this.ownerPublicKey]);
     const queuedDeviceIds = new Set<string>();
     for (const target of targets) {
       const userRecord = this.userRecords.get(target);
@@ -122,20 +122,10 @@ export class SessionManager extends SessionManagerInvites {
       }
     }
 
-    const userRecord = this.getOrCreateUserRecord(recipientIdentityKey);
-    // Use ownerPublicKey to find sibling devices (important for delegates)
-    const ourUserRecord = this.getOrCreateUserRecord(this.ownerPublicKey);
-
-    const recipientDevices = Array.from(userRecord.devices.values());
-    const ownDevices = Array.from(ourUserRecord.devices.values());
-
-    // Merge and deduplicate by deviceId, excluding our own sending device
-    // This fixes the self-message bug where sending to yourself would duplicate devices
     const deviceMap = new Map<string, DeviceRecord>();
-    for (const d of [...recipientDevices, ...ownDevices]) {
-      if (d.deviceId !== this.deviceId) {
-        // Exclude sender's own device
-        deviceMap.set(d.deviceId, d);
+    for (const target of targets) {
+      for (const device of this.getOrCreateUserRecord(target).devices.values()) {
+        if (device.deviceId !== this.deviceId) deviceMap.set(device.deviceId, device);
       }
     }
     const devices = Array.from(deviceMap.values());
@@ -165,11 +155,8 @@ export class SessionManager extends SessionManagerInvites {
       sentDeviceIds.push(device.deviceId);
     }
 
-    // Persist recipient + owner records before publishing (best-effort).
-    await this.storeUserRecord(recipientIdentityKey).catch(() => {});
-    if (this.ownerPublicKey !== recipientIdentityKey) {
-      await this.storeUserRecord(this.ownerPublicKey).catch(() => {});
-    }
+    // Persist each target's ratchet state before publishing (best-effort).
+    await Promise.all(Array.from(targets, (target) => this.storeUserRecord(target).catch(() => {})));
 
     await Promise.allSettled(
       toPublish.map((evt, i) =>

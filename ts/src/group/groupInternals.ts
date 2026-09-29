@@ -4,6 +4,8 @@ export interface SenderKeyRepairSnapshot {
   keyId: number;
   distribution: SenderKeyDistribution;
   recipients: string[];
+  /** Recipients whose key distribution has not reached the durable pairwise queue. */
+  pendingRecipients?: string[];
 }
 
 export function randomU32(): number {

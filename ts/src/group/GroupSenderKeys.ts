@@ -152,6 +152,7 @@ export abstract class GroupSenderKeys extends GroupState {
       keyId: dist.keyId >>> 0,
       distribution: { ...dist },
       recipients: uniqueRecipients,
+      pendingRecipients: uniqueRecipients,
     });
     await this.saveSenderKeyRepairSnapshots(this.ourDevicePubkey, snapshots);
   }
