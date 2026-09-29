@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { generateSecretKey, getPublicKey, verifyEvent, type VerifiedEvent } from "nostr-tools";
 import { Session } from "../src/Session";
 import { SessionManager } from "../src/SessionManager";
+import { Invite } from "../src/Invite";
+import { buildTextRumor } from "../src/messageBuilders";
 import { InMemoryStorageAdapter } from "../src/StorageAdapter";
 import { generateEphemeralKeypair, generateSharedSecret } from "../src/inviteUtils";
 import type { StoredUserRecord } from "../src/session-manager/types";
@@ -10,6 +12,15 @@ class RoutingManager extends SessionManager {
   get localOwner(): string { return this.ownerPublicKey; }
 
   get pendingCount(): number { return this.pendingDirectMessages.size; }
+
+  get invite(): Invite {
+    return new Invite(this.inviteKeys.ephemeralKeypair.publicKey, this.inviteKeys.sharedSecret,
+      this.ourPublicKey, this.inviteKeys.ephemeralKeypair.privateKey, this.deviceId);
+  }
+
+  receiveInviteResponse(event: VerifiedEvent): Promise<boolean> {
+    return this.processInviteResponseEvent(event);
+  }
 
   queuePreviousEvent(event: VerifiedEvent): void {
     this.queuePendingDirectMessage(event);
@@ -64,6 +75,30 @@ function pair() {
 }
 
 describe("incoming session routing", () => {
+  it("keeps an established session when concurrent copies of its invite response finish", async () => {
+    const receiver = await manager();
+    const peerKey = generateSecretKey();
+    const peerId = getPublicKey(peerKey);
+    const { session: peer, event: response } = await receiver.invite.accept(peerId, peerKey);
+    const received = vi.fn();
+    receiver.onEvent(received);
+    try {
+      const first = peer.sendEvent(buildTextRumor("first contact"), [["p", receiver.getDeviceId()]]).event;
+      expect(receiver.processReceivedEvent(first)).toBe(false);
+      await Promise.all([
+        receiver.receiveInviteResponse(response),
+        receiver.receiveInviteResponse(structuredClone(response)),
+      ]);
+      expect(received).toHaveBeenCalledTimes(1);
+      const device = receiver.getUserRecords().get(peerId)!.devices.get(peerId)!;
+      const reply = device.prepareOutboundEvent(buildTextRumor("reply to contact"));
+      expect(reply).toBeDefined();
+      expect(peer.receiveEvent(reply!)?.content).toBe("reply to contact");
+    } finally {
+      receiver.close();
+    }
+  });
+
   it("ignores another device's signed envelope without decrypting or retaining it", async () => {
     const owner = getPublicKey(generateSecretKey());
     const receiver = await manager(owner);

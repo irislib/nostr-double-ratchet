@@ -240,6 +240,10 @@ export abstract class SessionManagerRecords extends SessionManagerCore {
     response: PendingInviteResponse,
     appKeys?: AppKeys | null,
   ): boolean {
+    // Duplicate relay deliveries can pass the caller's check before its awaits.
+    // Never replace an established ratchet with the same handshake's initial state.
+    if (this.processedInviteResponses.has(response.eventId)) return true;
+
     const isSingleDevice = response.deviceId === response.ownerPublicKey;
     const isAuthorized =
       isSingleDevice ||

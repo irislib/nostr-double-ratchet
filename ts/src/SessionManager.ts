@@ -155,8 +155,8 @@ export class SessionManager extends SessionManagerInvites {
       sentDeviceIds.push(device.deviceId);
     }
 
-    // Persist each target's ratchet state before publishing (best-effort).
-    await Promise.all(Array.from(targets, (target) => this.storeUserRecord(target).catch(() => {})));
+    // Keep queued messages unpublished if saving their sending keys fails.
+    await Promise.all(Array.from(targets, (target) => this.storeUserRecord(target)));
 
     await Promise.allSettled(
       toPublish.map((evt, i) =>
