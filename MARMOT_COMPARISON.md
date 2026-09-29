@@ -78,6 +78,52 @@ A sender that has not learned a removal can still use older state in either
 design. Neither protocol makes revocation instantaneous across a network partition.
 See [MLS application-message restrictions][mls-restrictions].
 
+## Multiple devices for one account
+
+Both designs distinguish an account identity from each device's cryptographic
+state. A phone and laptop can represent the same user while maintaining separate
+session state. Sharing the account identity does not mean copying one live
+ratchet state between devices.
+
+| Dimension | NDR | Marmot / MLS |
+| --- | --- | --- |
+| Device identity | AppKeys authorizes device keys under one account. Devices maintain separate pairwise sessions and group sender chains. | Each device is a separate MLS leaf in each group. Multiple leaves can carry the same account identity, with separate MLS keys and local state. |
+| Direct-message delivery | Session managers provide fanout to the recipient's authorized devices and the sender's other devices, excluding the sending device. Each delivery uses its own session. | All admitted device leaves can decrypt the group's application messages, including the sender's other devices, once they receive the messages and required group state. A conversation between two accounts can therefore have more than two leaves. |
+| Adding a device | Publish account-level device authorization, discover/establish sessions, and deliver the needed group keys. There is no shared group epoch to advance. | Admit a new device leaf to each relevant group through the authorized Add/Commit/Welcome flow. Each admission changes that group's epoch. |
+
+NDR's fanout is implemented in the
+[TypeScript session manager](./ts/src/SessionManager.ts) and
+[Rust sending path](./rust/crates/nostr-double-ratchet/src/session_manager/sending.rs).
+Applications must use the corresponding multi-device integration; the smaller
+Rust pairwise runtime is explicitly for single-device use. See
+[integration modes](./README.md#integration-modes).
+
+Marmot's [adopted identity model][marmot-identity] already permits multiple device
+leaves for one account. Its dedicated [device-pairing feature][marmot-devices],
+including a proposed External Commit join flow, is still a **branch draft** at
+the reviewed revision. That draft does not establish an interoperable pairing
+flow or bypass [current admin authorization][marmot-admin] for adding members.
+This distinction describes specification status, not which device-linking
+features a particular White Noise release ships.
+
+Device removal has different coordination boundaries. NDR's AppKeys update
+revokes future pairwise routing as peers learn it; excluding a device from future
+group ciphertexts also requires replacing sender keys it already holds. Stopping
+pairwise delivery alone does not revoke those keys. Marmot removes a device leaf
+through a membership commit in each affected group; removing one leaf does not
+remove the account's other leaves. Neither approach retracts previously learned
+secrets. See [NDR authorization handling](./rust/crates/nostr-double-ratchet/src/session_manager/rosters.rs)
+and [Marmot account/leaf identity rules][marmot-identity].
+
+History synchronization is separate from delivery to currently linked devices.
+A fresh NDR pairwise session does not recreate old session keys; applications need
+history transfer or, for applicable group messages, authorized sender-key repair.
+A newly admitted Marmot leaf does not obtain pre-join epoch secrets, and the
+pairing draft leaves history synchronization out of scope. Neither account login
+nor device admission alone promises complete message history. See
+[NDR repair storage](./ts/src/group/GroupSenderKeys.ts) and
+[Marmot's multi-device draft][marmot-devices].
+
 ## Recovery and secret retention
 
 For NDR direct messages, fresh Diffie-Hellman ratchet exchanges can restore future
@@ -140,3 +186,6 @@ membership coordination versus shared group state with explicit commit convergen
 [marmot-convergence]: https://github.com/marmot-protocol/marmot/blob/26fa6a6972d7b4325cb3d105ffdd41a1ceda2bb0/protocol-core/convergence.md
 [marmot-history]: https://github.com/marmot-protocol/marmot/blob/26fa6a6972d7b4325cb3d105ffdd41a1ceda2bb0/protocol-core/retained-history.md
 [marmot-joining]: https://github.com/marmot-protocol/marmot/blob/26fa6a6972d7b4325cb3d105ffdd41a1ceda2bb0/protocol-core/joining.md
+[marmot-identity]: https://github.com/marmot-protocol/marmot/blob/26fa6a6972d7b4325cb3d105ffdd41a1ceda2bb0/foundation/identity.md
+[marmot-devices]: https://github.com/marmot-protocol/marmot/blob/26fa6a6972d7b4325cb3d105ffdd41a1ceda2bb0/features/multi-device.md
+[marmot-admin]: https://github.com/marmot-protocol/marmot/blob/26fa6a6972d7b4325cb3d105ffdd41a1ceda2bb0/app-components/admin-policy-v1.md
