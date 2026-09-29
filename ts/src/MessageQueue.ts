@@ -28,6 +28,7 @@ export class MessageQueue {
     const keys = await this.storage.list(this.prefix)
     const entries: QueueEntry[] = []
     for (const key of keys) {
+      if (!key.endsWith(`/${targetKey}`)) continue
       const entry = await this.storage.get<QueueEntry>(key)
       if (entry && entry.targetKey === targetKey) {
         entries.push(entry)
@@ -52,6 +53,7 @@ export class MessageQueue {
   async removeForTarget(targetKey: string): Promise<void> {
     const keys = await this.storage.list(this.prefix)
     for (const key of keys) {
+      if (!key.endsWith(`/${targetKey}`)) continue
       const entry = await this.storage.get<QueueEntry>(key)
       if (entry && entry.targetKey === targetKey) {
         await this.storage.del(key)

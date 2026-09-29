@@ -13,6 +13,35 @@ const makeRumor = (id: string, content = "test"): Rumor => ({
 })
 
 describe("MessageQueue", () => {
+  it("reads only the requested device's persisted backlog in a 182-device fanout", async () => {
+    class CountingStorage extends InMemoryStorageAdapter {
+      reads = 0
+      override async get<T = unknown>(key: string): Promise<T | undefined> {
+        this.reads += 1
+        return super.get<T>(key)
+      }
+    }
+    const storage = new CountingStorage()
+    const prefix = "v1/message-queue/"
+    const queue = new MessageQueue(storage, prefix)
+    const targets = Array.from({ length: 182 }, (_, i) => i.toString(16).padStart(64, "0"))
+    for (const target of targets) {
+      for (let message = 0; message < 3; message += 1) {
+        await queue.add(target, makeRumor(`message-${message}`))
+      }
+    }
+
+    // Recreate the queue to exercise persistent data rather than an in-memory index.
+    const restored = new MessageQueue(storage, prefix)
+    for (const target of targets) expect(await restored.getForTarget(target)).toHaveLength(3)
+    expect(storage.reads).toBe(182 * 3)
+    storage.reads = 0
+    await restored.removeForTarget(targets[0])
+    expect(storage.reads).toBe(3)
+    expect(await restored.getForTarget(targets[0])).toEqual([])
+    expect(await restored.getForTarget(targets[1])).toHaveLength(3)
+  })
+
   const createQueue = (prefix = "v1/test-queue/") => {
     const storage = new InMemoryStorageAdapter()
     const queue = new MessageQueue(storage, prefix)
@@ -71,14 +100,14 @@ describe("MessageQueue", () => {
       const { queue, storage } = createQueue()
 
       // Manually insert with controlled timestamps
-      await storage.put("v1/test-queue/z-late", {
-        id: "z-late",
+      await storage.put("v1/test-queue/evt2/device-a", {
+        id: "evt2/device-a",
         targetKey: "device-a",
         event: makeRumor("evt2", "second"),
         createdAt: 2000,
       })
-      await storage.put("v1/test-queue/a-early", {
-        id: "a-early",
+      await storage.put("v1/test-queue/evt1/device-a", {
+        id: "evt1/device-a",
         targetKey: "device-a",
         event: makeRumor("evt1", "first"),
         createdAt: 1000,
@@ -125,8 +154,8 @@ describe("MessageQueue", () => {
         event: makeRumor("evt2", "second"),
         createdAt: 2000,
       })
-      await storage.put("v1/test-queue/a-early", {
-        id: "a-early",
+      await storage.put("v1/test-queue/evt1/device-a", {
+        id: "evt1/device-a",
         targetKey: "device-a",
         event: makeRumor("evt1", "first"),
         createdAt: 1000,
