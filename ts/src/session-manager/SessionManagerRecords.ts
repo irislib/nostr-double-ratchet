@@ -186,6 +186,10 @@ export abstract class SessionManagerRecords extends SessionManagerCore {
   }
 
   protected processDirectMessageEvent(event: VerifiedEvent): boolean {
+    // Relay copies of a pending envelope must share the existing per-session
+    // failed-attempt memo. Changed/new session keys still retry normally.
+    event = this.pendingDirectMessages.get(event.id) ?? event;
+
     // Shared ratchet authors can deliver another device's encrypted copy. The
     // signed outer recipient is routing metadata; p-less legacy messages and
     // owner-addressed copies still need the normal authenticated decrypt path.

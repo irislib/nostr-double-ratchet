@@ -4,6 +4,7 @@ import { Session } from "../src/Session";
 import { SessionManager } from "../src/SessionManager";
 import { Invite } from "../src/Invite";
 import { buildTextRumor } from "../src/messageBuilders";
+import { deepCopyState } from "../src/utils";
 import { InMemoryStorageAdapter } from "../src/StorageAdapter";
 import { generateEphemeralKeypair, generateSharedSecret } from "../src/inviteUtils";
 import type { StoredUserRecord } from "../src/session-manager/types";
@@ -211,7 +212,9 @@ describe("incoming session routing", () => {
 
   it("retries an undeciphered envelope after its session becomes available", async () => {
     const receiver = await manager();
-    receiver.installPeer(pair().alice);
+    const unrelated = pair().alice;
+    receiver.installPeer(unrelated);
+    const attempt = vi.spyOn(unrelated, "receiveEvent");
     const { alice, bob } = pair();
     const event = alice.sendEvent({ kind: 14, content: "waiting for session" }).event;
     const received = vi.fn();
@@ -219,6 +222,8 @@ describe("incoming session routing", () => {
     try {
       expect(receiver.processReceivedEvent(event)).toBe(false);
       expect(receiver.processReceivedEvent(structuredClone(event))).toBe(false);
+      expect(receiver.processReceivedEvent(structuredClone(event))).toBe(false);
+      expect(attempt).toHaveBeenCalledTimes(1);
       expect(received).not.toHaveBeenCalled();
       receiver.installPeer(bob);
       receiver.retryPending();
@@ -253,6 +258,29 @@ describe("incoming session routing", () => {
         expect.objectContaining({ content: "after restore" }),
         expect.any(String), expect.any(Object),
       );
+    } finally {
+      receiver.close();
+    }
+  });
+
+  it("retries relay copies of a pending envelope after the same session's keys change", async () => {
+    const receiver = await manager();
+    const session = pair().alice;
+    receiver.installPeer(session);
+    const attempt = vi.spyOn(session, "receiveEvent");
+    const { alice, bob } = pair();
+    const event = alice.sendEvent(buildTextRumor("recovered pending message")).event;
+    const received = vi.fn();
+    receiver.onEvent(received);
+    try {
+      expect(receiver.processReceivedEvent(event)).toBe(false);
+      expect(receiver.processReceivedEvent(structuredClone(event))).toBe(false);
+      expect(attempt).toHaveBeenCalledTimes(1);
+      session.state = deepCopyState(bob.state);
+      expect(receiver.processReceivedEvent(structuredClone(event))).toBe(true);
+      expect(attempt).toHaveBeenCalledTimes(2);
+      expect(received).toHaveBeenCalledTimes(1);
+      expect(receiver.pendingCount).toBe(0);
     } finally {
       receiver.close();
     }
