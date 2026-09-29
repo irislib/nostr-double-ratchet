@@ -185,6 +185,17 @@ export abstract class SessionManagerRecords extends SessionManagerCore {
   }
 
   protected processDirectMessageEvent(event: VerifiedEvent): boolean {
+    // Shared ratchet authors can deliver another device's encrypted copy. The
+    // signed outer recipient is routing metadata; p-less legacy messages and
+    // owner-addressed copies still need the normal authenticated decrypt path.
+    const recipients = event.tags.filter((tag) => tag[0] === "p" && tag[1]);
+    if (recipients.length > 0 && !recipients.some((tag) =>
+      tag[1] === this.deviceId || tag[1] === this.ourPublicKey || tag[1] === this.ownerPublicKey,
+    )) {
+      this.pendingDirectMessages.delete(event.id);
+      return true;
+    }
+
     // Separate relay subscriptions can supply new objects for the same envelope.
     // Only successfully delivered plaintext is deduplicated; missing keys remain retryable.
     if (this.decryptedEventIds.has(event.id)) return true;

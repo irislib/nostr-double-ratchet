@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { generateSecretKey, getPublicKey, type VerifiedEvent } from "nostr-tools";
+import { generateSecretKey, getPublicKey, verifyEvent, type VerifiedEvent } from "nostr-tools";
 import { Session } from "../src/Session";
 import { SessionManager } from "../src/SessionManager";
 import { InMemoryStorageAdapter } from "../src/StorageAdapter";
@@ -7,6 +7,14 @@ import { generateEphemeralKeypair, generateSharedSecret } from "../src/inviteUti
 import type { StoredUserRecord } from "../src/session-manager/types";
 
 class RoutingManager extends SessionManager {
+  get localOwner(): string { return this.ownerPublicKey; }
+
+  get pendingCount(): number { return this.pendingDirectMessages.size; }
+
+  queuePreviousEvent(event: VerifiedEvent): void {
+    this.queuePendingDirectMessage(event);
+  }
+
   retryPending(): void {
     this.retryPendingDirectMessages();
   }
@@ -31,13 +39,13 @@ class RoutingManager extends SessionManager {
   }
 }
 
-async function manager() {
+async function manager(ownerPubkey?: string) {
   const key = generateSecretKey();
   const owner = getPublicKey(key);
   const manager = new RoutingManager(
     owner, key, owner, () => () => {},
     async (event) => event as VerifiedEvent,
-    owner,
+    ownerPubkey ?? owner,
     { ephemeralKeypair: generateEphemeralKeypair(), sharedSecret: generateSharedSecret() },
     new InMemoryStorageAdapter(),
   );
@@ -56,6 +64,64 @@ function pair() {
 }
 
 describe("incoming session routing", () => {
+  it("ignores another device's signed envelope without decrypting or retaining it", async () => {
+    const owner = getPublicKey(generateSecretKey());
+    const receiver = await manager(owner);
+    const sibling = await manager(owner);
+    const { alice, bob } = pair();
+    receiver.installPeer(bob);
+    const siblingSession = pair().bob;
+    sibling.installPeer(siblingSession);
+    const wrongDeviceAttempt = vi.spyOn(siblingSession, "receiveEvent");
+    const received = vi.fn();
+    receiver.onEvent(received);
+    try {
+      const event = alice.sendEvent(
+        { kind: 14, content: "one device's encrypted copy" },
+        [["p", receiver.getDeviceId()]],
+      ).event;
+      expect(verifyEvent(event)).toBe(true);
+      expect(sibling.processReceivedEvent(structuredClone(event))).toBe(true);
+      expect(wrongDeviceAttempt).not.toHaveBeenCalled();
+      expect(sibling.pendingCount).toBe(0);
+      // Existing pending queues must also stop retrying a foreign recipient.
+      sibling.queuePreviousEvent(event);
+      sibling.retryPending();
+      expect(wrongDeviceAttempt).not.toHaveBeenCalled();
+      expect(sibling.pendingCount).toBe(0);
+      expect(receiver.processReceivedEvent(event)).toBe(true);
+      expect(received).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "one device's encrypted copy" }),
+        expect.any(String), expect.any(Object),
+      );
+    } finally {
+      receiver.close();
+      sibling.close();
+    }
+  });
+
+  it.each(["owner", "device", "multiple"])("retains %s recipient compatibility", async (alias) => {
+    const receiver = await manager(getPublicKey(generateSecretKey()));
+    const { alice, bob } = pair();
+    receiver.installPeer(bob);
+    const recipient = alias === "owner" ? receiver.localOwner : receiver.getDeviceId();
+    const tags = alias === "multiple"
+      ? [["p", getPublicKey(generateSecretKey())], ["p", recipient]]
+      : [["p", recipient]];
+    const received = vi.fn();
+    receiver.onEvent(received);
+    try {
+      const event = alice.sendEvent({ kind: 14, content: alias }, tags).event;
+      expect(receiver.processReceivedEvent(event)).toBe(true);
+      expect(received).toHaveBeenCalledWith(
+        expect.objectContaining({ content: alias }),
+        expect.any(String), expect.any(Object),
+      );
+    } finally {
+      receiver.close();
+    }
+  });
+
   it("tries the known author before unrelated cold handshakes", async () => {
     const receiver = await manager();
     const unrelated = Array.from({ length: 100 }, () => pair().alice);
