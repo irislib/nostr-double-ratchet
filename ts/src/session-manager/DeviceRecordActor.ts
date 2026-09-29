@@ -29,6 +29,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
   private ensurePromise?: Promise<void>
   private inviteSubscription?: Unsubscribe
   private inviteAcceptancePromise?: Promise<Session>
+  private failedReceiveAttempts = new WeakMap<VerifiedEvent, WeakMap<Session, string>>()
 
   constructor(
     public readonly deviceId: string,
@@ -316,18 +317,39 @@ export class DeviceRecordActor implements DeviceRecordShape {
     sessions.push(...this.inactiveSessions)
 
     const seenSessionNames = new Set<string>()
+    let failedSessions = this.failedReceiveAttempts.get(event)
+    if (!failedSessions) {
+      failedSessions = new WeakMap()
+      this.failedReceiveAttempts.set(event, failedSessions)
+    }
     for (const session of sessions) {
       if (seenSessionNames.has(session.name)) {
         continue
       }
       seenSessionNames.add(session.name)
 
+      // Startup replays pending envelopes after many independent roster/storage
+      // callbacks. A rejected envelope cannot decrypt with unchanged receive
+      // keys. Keep weak references so removing pending events or sessions also
+      // removes this memo; new sessions and ratchet advances are retried.
+      const state = session.state
+      const receiveState = [
+        state.ourCurrentNostrKey?.publicKey,
+        state.ourNextNostrKey.publicKey,
+        state.theirCurrentNostrPublicKey,
+        state.theirNextNostrPublicKey,
+        state.receivingChainMessageNumber,
+      ].join(":")
+      if (failedSessions.get(session) === receiveState) continue
+
       let rumor: Rumor | undefined
       try {
         rumor = session.receiveEvent(event)
       } catch {
+        failedSessions.set(session, receiveState)
         continue
       }
+      if (!rumor) failedSessions.set(session, receiveState)
       if (rumor && this.handleSessionRumor(session, rumor, event)) {
         return true
       }
