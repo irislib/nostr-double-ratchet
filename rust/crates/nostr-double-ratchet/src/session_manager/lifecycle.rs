@@ -440,6 +440,7 @@ impl SessionManager {
             return Ok(None);
         };
 
+        let mut first_error = None;
         let device_pubkeys: Vec<DevicePubkey> = user.devices.keys().copied().collect();
         for device_pubkey in device_pubkeys {
             let record = user
@@ -456,18 +457,24 @@ impl SessionManager {
 
             if let Some(active_session) = record.active_session.as_ref() {
                 if active_session.matches_sender(envelope.sender) {
-                    let plan = active_session.plan_receive(ctx, envelope)?;
-                    let outcome = record
-                        .active_session
-                        .as_mut()
-                        .expect("active session must still exist")
-                        .apply_receive(plan);
-                    record.last_activity = Some(ctx.now);
-                    return Ok(Some(ReceivedMessage {
-                        owner_pubkey: sender_owner,
-                        device_pubkey,
-                        payload: outcome.payload,
-                    }));
+                    match active_session.plan_receive(ctx, envelope) {
+                        Ok(plan) => {
+                            let outcome = record
+                                .active_session
+                                .as_mut()
+                                .expect("active session must still exist")
+                                .apply_receive(plan);
+                            record.last_activity = Some(ctx.now);
+                            return Ok(Some(ReceivedMessage {
+                                owner_pubkey: sender_owner,
+                                device_pubkey,
+                                payload: outcome.payload,
+                            }));
+                        }
+                        Err(error) => {
+                            first_error.get_or_insert(error);
+                        }
+                    }
                 }
             }
 
@@ -476,9 +483,15 @@ impl SessionManager {
                 if !session.matches_sender(envelope.sender) {
                     continue;
                 }
-                let plan = session.plan_receive(ctx, envelope)?;
-                matched_inactive = Some((index, plan));
-                break;
+                match session.plan_receive(ctx, envelope) {
+                    Ok(plan) => {
+                        matched_inactive = Some((index, plan));
+                        break;
+                    }
+                    Err(error) => {
+                        first_error.get_or_insert(error);
+                    }
+                }
             }
 
             if let Some((index, plan)) = matched_inactive {
@@ -494,7 +507,12 @@ impl SessionManager {
             }
         }
 
-        Ok(None)
+        // Different acceptances of one invite can share a reply author. Only
+        // a successfully authenticated plan identifies the receiving session.
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(None),
+        }
     }
 
     pub fn prune_stale(&mut self, _now: UnixSeconds) -> PruneReport {
