@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## TypeScript 0.0.173 / Rust 0.0.168 - 2026-09-30
+
+- Try every matching Rust receive session before rejecting a message, preserving
+  delayed replies when repeated invitation handshakes share a message author.
+- Skip local group-message echoes and redundant decryption attempts without
+  changing the message format or advancing unsuccessful receive state.
+- Persist TypeScript group-key distribution, queued-send ratchets, and pending
+  deliveries before publishing; recover interrupted handoffs after restart.
+- Preserve established TypeScript sessions across duplicate invitation responses
+  and failed saves, and send each group-key handoff to linked devices only once.
+- Keep TypeScript recipient subscriptions stable as contacts change, deduplicate
+  relay copies, and skip encrypted envelopes addressed to another device.
+- Avoid unrelated device-queue reads and prioritize known message authors during
+  TypeScript catch-up, reducing work in large multi-device groups.
+
 ## TypeScript 0.0.172 - 2026-09-22
 
 - Carry existing account-signed device approval in an optional encrypted invite
