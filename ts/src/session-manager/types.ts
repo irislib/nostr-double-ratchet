@@ -5,6 +5,7 @@ import type { Session } from "../Session.js"
 import type {
   IdentityKey,
   Rumor,
+  NostrPublishContext,
   Unsubscribe,
 } from "../types.js"
 import type { MessageOrigin } from "../MessageOrigin.js"
@@ -100,6 +101,7 @@ export type SessionManagerEvent =
       type: "publish"
       event: UnsignedEvent | VerifiedEvent
       innerEventId?: string
+      context?: NostrPublishContext
     }
   | {
       type: "decryptedMessage"
@@ -117,7 +119,7 @@ export interface NostrFacade {
     filter: Filter,
     onEvent?: (event: VerifiedEvent) => void,
   ): Unsubscribe
-  publish(event: UnsignedEvent | VerifiedEvent, innerEventId?: string): Promise<void>
+  publish(event: UnsignedEvent | VerifiedEvent, innerEventId?: string, context?: NostrPublishContext): Promise<void>
 }
 
 export interface DeviceRecordUserHooks {

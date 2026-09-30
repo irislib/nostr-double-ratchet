@@ -3,6 +3,7 @@ import {
   NostrSubscribe,
   NostrPublish,
   type NostrPublisherOptions,
+  type NostrPublishContext,
   Unsubscribe,
   INVITE_RESPONSE_KIND,
 } from "../types.js";
@@ -130,7 +131,7 @@ export abstract class SessionManagerCore {
     this.nostrFacade = {
       subscribe: (subid, filter, onEvent) =>
         this.emitSubscribe(subid, filter, onEvent),
-      publish: (event, innerEventId) => this.emitPublish(event, innerEventId),
+      publish: (event, innerEventId, context) => this.emitPublish(event, innerEventId, context),
     };
   }
 
@@ -204,7 +205,7 @@ export abstract class SessionManagerCore {
     }
 
     if (!this.legacyNostrPublish) return;
-    return this.legacyNostrPublish(event.event, event.innerEventId).then(() => {});
+    return this.legacyNostrPublish(event.event, event.innerEventId, event.context).then(() => {});
   }
 
   protected emitSubscribe(
@@ -233,8 +234,9 @@ export abstract class SessionManagerCore {
   protected emitPublish(
     event: Parameters<NostrFacade["publish"]>[0],
     innerEventId?: string,
+    context?: NostrPublishContext,
   ): Promise<void> {
-    return this.emitEvent({ type: "publish", event, innerEventId });
+    return this.emitEvent({ type: "publish", event, innerEventId, ...(context && { context }) });
   }
 
   async init() {

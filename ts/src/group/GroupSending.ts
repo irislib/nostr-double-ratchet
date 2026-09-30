@@ -137,7 +137,7 @@ export abstract class GroupSending extends GroupSenderKeys {
     await createNostrPublisher(
       opts.publishOuter as NostrPublish,
       this.publicationOptions,
-    )(outer, inner.id);
+    )(outer, inner.id, { groupId: this.groupId() });
 
     return { outer, inner };
   }

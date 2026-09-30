@@ -76,9 +76,15 @@ export type DecryptFunction = (_ciphertext: string, _pubkey: string) => Promise<
  */
 export type IdentityKey = Uint8Array | { encrypt: EncryptFunction; decrypt: DecryptFunction };
 
+/** Local publication policy metadata; never added to the signed wire event. */
+export interface NostrPublishContext {
+  groupId: string;
+}
+
 export type NostrPublish = (
   _event: UnsignedEvent | VerifiedEvent,
-  _innerEventId?: string
+  _innerEventId?: string,
+  _context?: NostrPublishContext,
 ) => Promise<VerifiedEvent>;
 
 export type NostrSign = (_event: UnsignedEvent) => Promise<VerifiedEvent>;
@@ -87,6 +93,7 @@ export type NostrSign = (_event: UnsignedEvent) => Promise<VerifiedEvent>;
 export type NostrEnqueue = (
   _event: VerifiedEvent,
   _innerEventId?: string,
+  _context?: NostrPublishContext,
 ) => Promise<void>;
 
 export interface NostrPublishError {

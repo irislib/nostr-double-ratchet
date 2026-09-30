@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest"
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools"
-import { createNostrPublisher } from "../src/publishing"
+import { createNostrPublisher, groupPublicationContext } from "../src/publishing"
 
 const secret = generateSecretKey()
 const unsigned = { pubkey: getPublicKey(secret), kind: 1, created_at: 1, content: "hello", tags: [] }
@@ -18,12 +18,12 @@ it("awaits durable handoff before dispatch, but never awaits relay acknowledgeme
     finished = true
     return event
   })
-  await vi.waitFor(() => expect(enqueue).toHaveBeenCalledWith(signed, "inner-id"))
+  await vi.waitFor(() => expect(enqueue).toHaveBeenCalledWith(signed, "inner-id", undefined))
   expect(transport).not.toHaveBeenCalled()
   expect(finished).toBe(false)
   persist()
   await expect(pending).resolves.toBe(signed)
-  expect(transport).toHaveBeenCalledWith(signed, "inner-id")
+  expect(transport).toHaveBeenCalledWith(signed, "inner-id", undefined)
 })
 
 it("signs unsigned owner events before handing off their exact signed envelope", async () => {
@@ -33,8 +33,8 @@ it("signs unsigned owner events before handing off their exact signed envelope",
   const publish = createNostrPublisher(transport, { nostrSign: sign, nostrEnqueue: enqueue })
   await expect(publish(unsigned)).resolves.toBe(signed)
   expect(sign).toHaveBeenCalledWith(unsigned)
-  expect(enqueue).toHaveBeenCalledWith(signed, undefined)
-  expect(transport).toHaveBeenCalledWith(signed, undefined)
+  expect(enqueue).toHaveBeenCalledWith(signed, undefined, undefined)
+  expect(transport).toHaveBeenCalledWith(signed, undefined, undefined)
 })
 
 it("keeps awaiting a legacy unsigned callback that also provides signing", async () => {
@@ -79,4 +79,24 @@ it("keeps one durable handoff when managers share an already wrapped publisher",
   const publish = createNostrPublisher(never, { nostrEnqueue: enqueue })
   await createNostrPublisher(publish)(signed)
   expect(enqueue).toHaveBeenCalledTimes(1)
+})
+
+it("keeps local group scope through signing, durable handoff, and transport without adding wire tags", async () => {
+  const transport = vi.fn(async () => signed)
+  const enqueue = vi.fn(async () => {})
+  const context = { groupId: "removed-group" }
+  const publish = createNostrPublisher(transport, { nostrSign: async () => signed, nostrEnqueue: enqueue })
+  await publish(unsigned, "group-inner", context)
+  expect(enqueue).toHaveBeenCalledWith(signed, "group-inner", context)
+  expect(transport).toHaveBeenCalledWith(signed, "group-inner", context)
+  expect(signed.tags).toEqual([])
+})
+
+
+it("scopes messages, reactions, receipts and key handoffs but preserves roster controls", () => {
+  for (const kind of [14, 7, 15, 10446, 10447]) {
+    expect(groupPublicationContext({ kind, tags: [["l", "group-a"]] })).toEqual({ groupId: "group-a" })
+  }
+  expect(groupPublicationContext({ kind: 37368, tags: [["l", "group-a"]] })).toBeUndefined()
+  expect(groupPublicationContext({ kind: 14, tags: [["p", "peer"]] })).toBeUndefined()
 })

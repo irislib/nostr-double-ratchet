@@ -1,3 +1,4 @@
+import { groupPublicationContext } from "../publishing.js"
 import { Invite } from "../Invite.js"
 import { Session } from "../Session.js"
 import type { VerifiedEvent } from "nostr-tools"
@@ -422,7 +423,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
         // A restart after publication must never restore the sending key that
         // the peer just consumed. Keep the queue entry if persistence fails.
         await this.deps.user.onDeviceDirty()
-        await this.deps.nostr.publish(event)
+        await this.deps.nostr.publish(event, entry.event.id, groupPublicationContext(entry.event))
         await this.deps.messageQueue.removeByTargetAndEventId(this.deviceId, entry.event.id)
       } catch {
         // Keep entry for future retry.

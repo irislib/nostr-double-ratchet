@@ -69,7 +69,9 @@ describe("queued message durability", () => {
       },
       nostr: {
         subscribe: () => () => {},
-        publish: async (event) => {
+        publish: async (event, innerEventId, context) => {
+          expect(innerEventId).toBe(queued.id);
+          expect(context).toEqual({ groupId: "removed-group" });
           expect(bob.receiveEvent(event as VerifiedEvent)?.content).toBe("before interruption");
           // The network accepted the message, then this process lost its storage handle.
           stopped = true;
@@ -77,7 +79,7 @@ describe("queued message durability", () => {
       },
     });
     actor.installSession(alice, false, { persist: false });
-    const queued = buildTextRumor("before interruption");
+    const queued = buildTextRumor("before interruption", { tags: [["l", "removed-group"]] });
     await queue.add(getPublicKey(bobKey), queued);
     await actor.flushMessageQueue();
 

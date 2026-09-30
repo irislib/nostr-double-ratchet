@@ -187,7 +187,7 @@ export class NdrRuntime extends NdrRuntimeRegistration {
     }
 
     if (event.type === "publish") {
-      await this.nostrPublish(event.event, event.innerEventId);
+      await this.nostrPublish(event.event, event.innerEventId, event.context);
       return;
     }
 

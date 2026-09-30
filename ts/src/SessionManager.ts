@@ -1,3 +1,4 @@
+import { groupPublicationContext } from "./publishing.js";
 import {
   IdentityKey,
   NostrSubscribe,
@@ -160,7 +161,7 @@ export class SessionManager extends SessionManagerInvites {
 
     await Promise.allSettled(
       toPublish.map((evt, i) =>
-        this.emitPublish(evt, (event as Rumor).id).then(() => {
+        this.emitPublish(evt, completeEvent.id, groupPublicationContext(completeEvent)).then(() => {
           const deviceId = sentDeviceIds[i];
           this.messageQueue
             .removeByTargetAndEventId(deviceId, (event as Rumor).id)

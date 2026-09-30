@@ -1,5 +1,15 @@
 import { type VerifiedEvent } from "nostr-tools";
-import { type NostrPublish, type NostrPublisherOptions } from "./types.js";
+import { type NostrPublish, type NostrPublisherOptions, type NostrPublishContext, type Rumor } from "./types.js";
+
+import { GROUP_ROSTER_FACT_KIND } from "./GroupMeta.js";
+
+/** Recover policy scope from queued plaintext without changing durable queue formats. */
+export function groupPublicationContext(event: Pick<Rumor, "kind" | "tags">): NostrPublishContext | undefined {
+  // Membership controls must reach recipients even when removing the sender.
+  if (event.kind === GROUP_ROSTER_FACT_KIND) return undefined;
+  const groupId = event.tags?.find((tag) => tag[0] === "l")?.[1];
+  return groupId ? { groupId } : undefined;
+}
 
 const localPublishers = new WeakSet<NostrPublish>();
 
@@ -13,7 +23,7 @@ export function createNostrPublisher(
 ): NostrPublish {
   if (localPublishers.has(publish)) return publish;
 
-  const localPublish: NostrPublish = async (event, innerEventId) => {
+  const localPublish: NostrPublish = async (event, innerEventId, context) => {
     let signed: VerifiedEvent;
     if ("sig" in event && event.sig) {
       signed = event as VerifiedEvent;
@@ -22,7 +32,7 @@ export function createNostrPublisher(
     } else {
       // Legacy combined callbacks also provide the signed owner event. Without
       // a separate signer their result must still be awaited for compatibility.
-      return publish(event, innerEventId);
+      return publish(event, innerEventId, context);
     }
 
     const report = (error: unknown) => {
@@ -33,13 +43,13 @@ export function createNostrPublisher(
       }
     };
     try {
-      if (options.nostrEnqueue) await options.nostrEnqueue(signed, innerEventId);
+      if (options.nostrEnqueue) await options.nostrEnqueue(signed, innerEventId, context);
     } catch (error) {
       report(error);
       throw error;
     }
     try {
-      void publish(signed, innerEventId).catch(report);
+      void publish(signed, innerEventId, context).catch(report);
     } catch (error) {
       report(error);
     }

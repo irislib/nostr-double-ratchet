@@ -1,3 +1,4 @@
+import type { NostrPublishContext } from "./types.js";
 import { getEventHash, verifyEvent, type VerifiedEvent } from "nostr-tools";
 import {
   GROUP_SENDER_KEY_DISTRIBUTION_KIND,
@@ -26,6 +27,7 @@ export type PairwiseSend = (
 export type PublishOuter = (
   outer: VerifiedEvent,
   innerEventId?: string,
+  context?: NostrPublishContext,
 ) => Promise<unknown>;
 
 export interface GroupOptions extends NostrPublisherOptions {

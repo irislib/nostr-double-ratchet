@@ -4,7 +4,7 @@ import { NdrRuntime } from "../src/NdrRuntime"
 import { InMemoryStorageAdapter } from "../src/StorageAdapter"
 import { MessageQueue } from "../src/MessageQueue"
 import { type SessionManagerEvent } from "../src/SessionManager"
-import { APP_KEYS_EVENT_KIND } from "../src/types"
+import { APP_KEYS_EVENT_KIND, type NostrPublishContext } from "../src/types"
 import { MockRelay } from "./helpers/mockRelay"
 
 it.each(["resolves", "rejects"])("keeps receiving and discovering peers before a publish acknowledgement %s", async (outcome) => {
@@ -147,10 +147,11 @@ it("initializes, registers, sends direct and group messages while every relay AC
     const secret = generateSecretKey()
     const owner = getPublicKey(secret)
     const enqueued: string[] = []
+    const contexts = new Map<string, NostrPublishContext | undefined>()
     const runtime = new NdrRuntime({
       nostrSubscribe: (filter, onEvent) => relay.subscribe(filter, onEvent).close,
       nostrSign: async (event) => finalizeEvent(event, secret),
-      nostrEnqueue: async (event) => { enqueued.push(event.id) },
+      nostrEnqueue: async (event, _innerEventId, context) => { enqueued.push(event.id); contexts.set(event.id, context) },
       nostrPublish: async (event) => {
         expect(enqueued).toContain((event as { id: string }).id)
         relay.storeAndDeliver(event as ReturnType<typeof finalizeEvent>)
@@ -161,7 +162,7 @@ it("initializes, registers, sends direct and group messages while every relay AC
     })
     const received: string[] = []
     runtime.onSessionEvent((event) => { received.push(event.content) })
-    return { runtime, owner, received }
+    return { runtime, owner, received, contexts }
   }
   const alice = createParticipant()
   const bob = createParticipant()
@@ -185,6 +186,8 @@ it("initializes, registers, sends direct and group messages while every relay AC
     bob.runtime.onGroupEvent((event) => { groups.push(event.inner.content) })
     const groupMessage = await alice.runtime.sendGroupMessage(created.group.id, "group without ACK")
     expect(groupMessage.inner.content).toBe("group without ACK")
+    expect(alice.contexts.get(groupMessage.outer.id)).toEqual({ groupId: created.group.id })
+    expect([...alice.contexts.values()].filter(context => context?.groupId === created.group.id).length).toBeGreaterThanOrEqual(2)
     await vi.waitFor(() => expect(groups).toContain("group without ACK"))
     await alice.runtime.rotateInvite()
   } finally {
