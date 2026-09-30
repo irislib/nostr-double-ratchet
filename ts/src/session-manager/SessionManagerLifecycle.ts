@@ -59,6 +59,7 @@ export abstract class SessionManagerLifecycle extends SessionManagerRecords {
         ownerPubkey: record.publicKey,
         appKeys: new AppKeys(
           record.appKeys.getAllDevices().map((device) => ({ ...device })),
+          record.appKeys.getAllDeviceLabels().map((labels) => ({ ...labels })),
         ),
         createdAt: record.appKeysCreatedAt,
       }))

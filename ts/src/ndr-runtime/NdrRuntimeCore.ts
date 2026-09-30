@@ -205,9 +205,7 @@ export abstract class NdrRuntimeCore {
     if (ownerPubkey && ownAppKeys) {
       snapshots.set(ownerPubkey, {
         ownerPubkey,
-        appKeys: new AppKeys(
-          ownAppKeys.getAllDevices().map((device) => ({ ...device })),
-        ),
+        appKeys: cloneAppKeys(ownAppKeys),
         createdAt: this.state.lastAppKeysCreatedAt,
       });
     }

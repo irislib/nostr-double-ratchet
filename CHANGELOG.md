@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## TypeScript 0.0.175 - 2026-09-30
+
+- Retain device names and client descriptions in owner and peer AppKeys snapshots.
+- Return independent snapshot copies so callers cannot mutate stored membership
+  or labels, avoiding repeated metadata refreshes during device synchronization.
+
 ## TypeScript 0.0.173 / Rust 0.0.168 - 2026-09-30
 
 - Try every matching Rust receive session before rejecting a message, preserving

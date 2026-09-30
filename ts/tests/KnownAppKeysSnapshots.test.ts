@@ -175,9 +175,15 @@ describe("known AppKeys snapshots", () => {
         clientLabel: "Iris desktop",
         updatedAt: 70,
       })
-    expect(runtime.getKnownAppKeysSnapshots().every(
-      (snapshot) => snapshot.appKeys.getAllDeviceLabels().length === 0,
-    )).toBe(true)
+    const snapshots = runtime.getKnownAppKeysSnapshots()
+    expect(snapshots.find(snapshot => snapshot.ownerPubkey === ownerPubkey)
+      ?.appKeys.getDeviceLabels(ownerDevice)).toEqual(
+      runtime.getAppKeysManager()?.getDeviceLabels(ownerDevice),
+    )
+    expect(snapshots.find(snapshot => snapshot.ownerPubkey === peerPubkey)
+      ?.appKeys.getDeviceLabels(peerDevice)).toEqual({
+        deviceLabel: undefined, clientLabel: "Iris desktop", updatedAt: 70,
+      })
   })
 
   it("treats pre-timestamp persisted peer rosters as created at zero", async () => {
