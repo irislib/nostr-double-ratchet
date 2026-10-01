@@ -1,3 +1,4 @@
+import { legacyAppKeysEvent } from "./helpers/legacyAppKeys"
 import { describe, expect, it, vi } from "vitest"
 import {
   finalizeEvent,
@@ -242,12 +243,7 @@ it("decrypts encrypted AppKeys labels from owner-key runtime subscriptions", asy
       deviceLabel: "Sirius MacBook",
       clientLabel: "NDR Desktop",
     })
-    const event = appKeys.getEvent({
-      ownerPrivateKey,
-      ownerPubkey,
-      createdAt: 200,
-    })
-    relay.storeAndDeliver(finalizeEvent(event, ownerPrivateKey) as VerifiedEvent)
+    relay.storeAndDeliver(legacyAppKeysEvent(appKeys, ownerPrivateKey))
     await tick()
 
     expect(

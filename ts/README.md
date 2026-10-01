@@ -290,6 +290,30 @@ and edge cases.
 - `tests/SessionManager.acceptInvite.test.ts`: invite acceptance and owner/device routing rules
 - `tests/directMessageSubscriptions.test.ts`: direct-message subscription/backfill helpers
 
+## Durable Private Controls
+
+Register `runtime.onDurableSessionEvent([10449, 10450, 10452, 10453], async (event, sender, meta) => { ... })`
+before initializing the runtime. These kinds are journaled by default, even with no handler, and
+are excluded from `onSessionEvent`. The journal and advanced receive ratchet share one atomic
+storage record. Resolve the handler only after durable application storage succeeds. Handlers
+must be idempotent by event ID: failed callbacks or failed journal acknowledgements replay after
+restart, with bounded retry while running. Throw while the active account or sibling authorization
+is not yet known; a return acknowledges the event. Authenticate sender owner/device metadata
+against the application's current authorized sibling set before applying private controls.
+
+When upgrading legacy contact sync, first save the migrated V2 registers, then await
+`runtime.retireLegacyPrivateContactSync(ownerPubkey)` **before** `initForOwner`. Retirement touches
+only identifiable plaintext kind-10451 V1 contact documents in the account's pending queues.
+It never removes opaque already-encrypted envelopes. App-owned signed outboxes must separately
+prevent legacy static contact snapshots or AppKeys with `encrypted_device_labels` from publishing;
+replace public authorization safely before retiring a queued signed roster.
+
+`sendEvent(recipient, event, owner, { includeLocalSiblings: false })` allows recipient-only fanout.
+Successful durable handoff means queued for delivery, not acknowledged by every recipient.
+AppKeys producers now emit public authorization only, even through the compatibility APIs taking
+an owner key. Legacy static encrypted device labels remain readable for local migration, but new
+private labels should travel in ratcheted sibling controls.
+
 ## Runtime Catch-Up
 
 The runtime/session manager decides which AppKeys authors, invite-response recipients, and message

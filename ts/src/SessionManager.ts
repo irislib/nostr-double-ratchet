@@ -37,6 +37,7 @@ export type {
   DeviceRecord,
   InviteCredentials,
   OnEventCallback,
+  OnDurableEventCallback,
   OnEventMeta,
   SessionManagerEvent,
   SessionManagerEventsAvailableCallback,

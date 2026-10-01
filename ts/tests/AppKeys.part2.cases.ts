@@ -1,3 +1,4 @@
+import { legacyAppKeysEvent } from "./helpers/legacyAppKeys"
 import { describe, it, expect } from 'vitest'
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools'
 import {
@@ -84,7 +85,7 @@ describe('waitFor', () => {
         deviceLabel: 'Sirius MacBook',
         clientLabel: 'NDR Desktop',
       })
-      const event = finalizeEvent(list.getEvent(ownerPrivateKey), ownerPrivateKey)
+      const event = legacyAppKeysEvent(list, ownerPrivateKey)
 
       const nostrSubscribe: NostrSubscribe = (_filter, onEvent) => {
         setTimeout(() => onEvent(event), 0)

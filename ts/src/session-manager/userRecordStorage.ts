@@ -27,6 +27,7 @@ export class UserRecordStorage {
 
     const data: StoredUserRecord = {
       publicKey,
+      pendingDurableEvents: structuredClone([...userRecord?.pendingDurableEvents.values() ?? []]),
       devices: devices.map(([, device]) => ({
         deviceId: device.deviceId,
         activeSession: device.activeSession

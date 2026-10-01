@@ -21,10 +21,14 @@ export abstract class NdrRuntimeMessaging extends NdrRuntimeCore {
     recipientPubkey: string,
     event: Partial<Rumor>,
     ownerPubkey?: string,
+    options?: { includeLocalSiblings?: boolean },
   ): Promise<Rumor | undefined> {
     return this.withSessionManager(
       this.resolveActiveOwnerPubkey(ownerPubkey),
-      (manager) => manager.sendEvent(recipientPubkey, event),
+      (manager) =>
+        options
+          ? manager.sendEvent(recipientPubkey, event, options)
+          : manager.sendEvent(recipientPubkey, event),
     );
   }
 
@@ -140,6 +144,7 @@ export abstract class NdrRuntimeMessaging extends NdrRuntimeCore {
     timeoutMs: number = this.appKeysFetchTimeoutMs,
   ): Promise<AppKeys> {
     const initialTimeoutMs = Math.min(this.appKeysFastTimeoutMs, timeoutMs);
+    let fetchError: unknown;
     try {
       const existingKeys = await AppKeys.waitFor(
         ownerPubkey,
@@ -150,8 +155,8 @@ export abstract class NdrRuntimeMessaging extends NdrRuntimeCore {
       if (existingKeys) {
         return existingKeys;
       }
-    } catch {
-      // Ignore relay fetch failures and fall back to local state.
+    } catch (error) {
+      fetchError = error;
     }
 
     const localKeys = this.appKeysManager?.getAppKeys();
@@ -171,11 +176,12 @@ export abstract class NdrRuntimeMessaging extends NdrRuntimeCore {
         if (existingKeys) {
           return existingKeys;
         }
-      } catch {
-        // Ignore relay fetch failures.
+      } catch (error) {
+        fetchError = error;
       }
     }
 
+    if (fetchError) throw fetchError;
     return new AppKeys();
   }
 
@@ -233,7 +239,9 @@ export abstract class NdrRuntimeMessaging extends NdrRuntimeCore {
       if (nextRecipient) {
         this.directMessageRecipientSubscriptionCleanup = this.nostrSubscribe(
           { kinds: [MESSAGE_EVENT_KIND], "#p": [nextRecipient] },
-          (event) => { this.processReceivedEvent(event); },
+          (event) => {
+            this.processReceivedEvent(event);
+          },
         );
       }
     }
@@ -301,7 +309,9 @@ export abstract class NdrRuntimeMessaging extends NdrRuntimeCore {
 
     this.directMessageSubscriptionCleanup = this.nostrSubscribe(
       { kinds: [MESSAGE_EVENT_KIND], authors: nextAuthors },
-      (event) => { this.processReceivedEvent(event); },
+      (event) => {
+        this.processReceivedEvent(event);
+      },
     );
   }
 

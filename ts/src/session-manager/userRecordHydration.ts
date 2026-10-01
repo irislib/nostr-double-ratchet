@@ -27,6 +27,12 @@ export function hydrateUserRecord(input: HydrateUserRecordInput): void {
   const userRecord = getOrCreateUserRecord(publicKey)
   userRecord.close()
   userRecord.devices.clear()
+  userRecord.pendingDurableEvents.clear()
+  for (const entry of data.pendingDurableEvents ?? []) {
+    if (entry.sender === publicKey && entry.event?.id && entry.meta?.senderOwnerPubkey === publicKey) {
+      userRecord.pendingDurableEvents.set(entry.id, structuredClone(entry))
+    }
+  }
 
   const appKeys = deserializeAppKeys(data.appKeys)
   userRecord.setAppKeys(appKeys, validTimestamp(data.appKeysCreatedAt))

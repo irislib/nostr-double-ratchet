@@ -36,7 +36,6 @@ import {
   type DeviceEntry,
   type DeviceLabels,
   type DeviceLabelsEntry,
-  type EncryptedAppKeysContent,
   type LegacyEncryptedAppKeysContent,
   type ParsedAppKeysSnapshot,
 } from "./app-keys/AppKeysEvents.js";
@@ -154,33 +153,6 @@ export class AppKeys {
     );
   }
 
-  private getEncryptedContent(ownerPrivateKey?: Uint8Array): string {
-    const deviceLabels = this.getAllDeviceLabels().filter(
-      ({ identityPubkey }) => this.devices.has(identityPubkey),
-    );
-
-    if (deviceLabels.length === 0) {
-      return "";
-    }
-
-    if (!ownerPrivateKey) {
-      return "";
-    }
-
-    const ownerPublicKey = getPublicKey(ownerPrivateKey);
-    const conversationKey = nip44.v2.utils.getConversationKey(
-      ownerPrivateKey,
-      ownerPublicKey,
-    );
-    const plaintext: EncryptedAppKeysContent = {
-      type: "app-keys-labels",
-      v: 1,
-      deviceLabels,
-    };
-
-    return nip44.v2.encrypt(JSON.stringify(plaintext), conversationKey);
-  }
-
   private loadEncryptedContent(
     content: string,
     ownerPrivateKey: Uint8Array,
@@ -246,14 +218,8 @@ export class AppKeys {
           ),
         ),
     ];
-    const encryptedLabels = this.getEncryptedContent(
-      normalized.ownerPrivateKey,
-    );
-    if (encryptedLabels) {
-      facts.push(
-        factTag(APP_KEYS_ENCRYPTED_DEVICE_LABELS_FACT, encryptedLabels),
-      );
-    }
+    // Device labels belong in authenticated ratcheted sibling controls. Keep
+    // ownerPrivateKey only as an API compatibility input, never an encryption key.
 
     return {
       kind: APP_KEYS_SNAPSHOT_KIND,
@@ -430,31 +396,37 @@ export class AppKeys {
     return new Promise((resolve) => {
       let latest: { list: AppKeys; createdAt: number } | null = null;
 
-      setTimeout(() => {
+      let unsubscribe: Unsubscribe = () => {};
+      const timer = setTimeout(() => {
         unsubscribe();
         resolve(
           latest ? { appKeys: latest.list, createdAt: latest.createdAt } : null,
         );
       }, timeoutMs);
 
-      const unsubscribe = subscribe(buildAppKeysFilter(user), (event) => {
-        if (event.pubkey !== user) return;
-        try {
-          const list = AppKeys.fromEvent(event, ownerPrivateKey);
-          const next = applyAppKeysSnapshot({
-            currentAppKeys: latest?.list,
-            currentCreatedAt: latest?.createdAt,
-            incomingAppKeys: list,
-            incomingCreatedAt: event.created_at,
-          });
-          if (next.decision === "stale") {
-            return;
+      try {
+        unsubscribe = subscribe(buildAppKeysFilter(user), (event) => {
+          if (event.pubkey !== user) return;
+          try {
+            const list = AppKeys.fromEvent(event, ownerPrivateKey);
+            const next = applyAppKeysSnapshot({
+              currentAppKeys: latest?.list,
+              currentCreatedAt: latest?.createdAt,
+              incomingAppKeys: list,
+              incomingCreatedAt: event.created_at,
+            });
+            if (next.decision === "stale") {
+              return;
+            }
+            latest = { list: next.appKeys, createdAt: next.createdAt };
+          } catch {
+            // Invalid event
           }
-          latest = { list: next.appKeys, createdAt: next.createdAt };
-        } catch {
-          // Invalid event
-        }
-      });
+        });
+      } catch (error) {
+        clearTimeout(timer);
+        throw error;
+      }
     });
   }
 }

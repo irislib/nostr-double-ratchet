@@ -125,7 +125,7 @@ describe("addDevice()", () => {
       expect(device?.identityPubkey).toBe(delegateIdentityPubkey)
     })
 
-    it("publishes encrypted device labels instead of plaintext when ownerIdentityKey is available", async () => {
+    it("publishes only public device authorization even when ownerIdentityKey is available", async () => {
       const ownerIdentityKey = generateSecretKey()
       const manager = new AppKeysManager({
         nostrPublish,
@@ -148,8 +148,8 @@ describe("addDevice()", () => {
         publishedEvents[0].tags.some(
           (tag: string[]) => tag[0] === APP_KEYS_ENCRYPTED_DEVICE_LABELS_FACT && !!tag[1]
         )
-      ).toBe(true)
-      expect(publishedEvents[0].content).not.toContain("Sirius MacBook")
+      ).toBe(false)
+      expect(JSON.stringify(publishedEvents[0])).not.toContain("Sirius MacBook")
       expect(publishedEvents[0].content).not.toContain("NDR Desktop")
     })
   })

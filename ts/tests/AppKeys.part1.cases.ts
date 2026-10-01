@@ -1,3 +1,4 @@
+import { legacyAppKeysEvent } from "./helpers/legacyAppKeys"
 import { describe, it, expect } from 'vitest'
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools'
 import {
@@ -212,7 +213,7 @@ describe('event serialization', () => {
       expect(() => AppKeys.fromEvent(unsignedEvent)).toThrow('Event is not signed')
     })
 
-    it('encrypts device labels into event content instead of plaintext', () => {
+    it('keeps labels local even when the owner key is supplied', () => {
       const ownerPrivateKey = generateSecretKey()
       const device = createTestDevice()
       const list = new AppKeys([device])
@@ -229,8 +230,8 @@ describe('event serialization', () => {
         event.tags.some(
           (tag) => tag[0] === APP_KEYS_ENCRYPTED_DEVICE_LABELS_FACT && !!tag[1]
         )
-      ).toBe(true)
-      expect(event.content).not.toContain('Sirius MacBook')
+      ).toBe(false)
+      expect(JSON.stringify(event)).not.toContain('Sirius MacBook')
       expect(event.content).not.toContain('NDR Desktop')
     })
 
@@ -249,7 +250,7 @@ describe('event serialization', () => {
       expect(list.getEvent({ ownerPubkey }).content).toBe('')
     })
 
-    it('roundtrips encrypted device labels for owner-key devices only', () => {
+    it('still reads legacy encrypted labels for local migration', () => {
       const ownerPrivateKey = generateSecretKey()
       const device = createTestDevice()
       const list = new AppKeys([device])
@@ -259,7 +260,7 @@ describe('event serialization', () => {
         clientLabel: 'NDR Desktop',
       })
 
-      const signedEvent = finalizeEvent(list.getEvent(ownerPrivateKey), ownerPrivateKey)
+      const signedEvent = legacyAppKeysEvent(list, ownerPrivateKey)
 
       const parsedWithoutKey = AppKeys.fromEvent(signedEvent)
       expect(parsedWithoutKey.getDeviceLabels(device.identityPubkey)).toBeUndefined()

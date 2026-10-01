@@ -21,6 +21,14 @@ export type OnEventMeta = {
 }
 
 export type OnEventCallback = (event: Rumor, from: string, meta?: OnEventMeta) => void
+/** Resolve only after the app durably applied or idempotently accepted the control. */
+export type OnDurableEventCallback = (event: Rumor, from: string, meta?: OnEventMeta) => Promise<void>
+export interface StoredDurableSessionEvent {
+  id: string
+  event: Rumor
+  sender: string
+  meta: OnEventMeta
+}
 
 export interface InviteCredentials {
   ephemeralKeypair: { publicKey: string; privateKey: Uint8Array }
@@ -65,6 +73,7 @@ export interface StoredDeviceRecord {
 }
 
 export interface StoredUserRecord {
+  pendingDurableEvents?: StoredDurableSessionEvent[]
   publicKey: string
   devices: StoredDeviceRecord[]
   appKeys?: string

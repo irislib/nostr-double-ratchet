@@ -99,6 +99,13 @@ export abstract class SessionManagerRecords extends SessionManagerCore {
       isCrossDeviceSelf: isCrossDeviceSelfOrigin(origin),
     };
 
+    if (this.durableSessionEvents.handles(event.kind) && userRecord) {
+      this.durableSessionEvents.enqueue(userRecord, {
+        id: `${deviceId}:${event.id}`, event, sender: ownerPubkey, meta,
+      });
+      return;
+    }
+
     void this.emitEvent({
       type: "decryptedMessage",
       event,

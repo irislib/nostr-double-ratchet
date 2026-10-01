@@ -276,6 +276,7 @@ export abstract class SessionManagerLifecycle extends SessionManagerRecords {
   }
 
   close() {
+    this.durableSessionEvents.close();
     for (const timeout of this.bootstrapRetryTimeouts) {
       clearTimeout(timeout);
     }

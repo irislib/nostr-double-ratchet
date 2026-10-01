@@ -49,7 +49,7 @@ fn test_app_keys_roundtrip_and_merge() -> Result<()> {
 }
 
 #[test]
-fn test_app_keys_encrypts_labels_in_event_content() -> Result<()> {
+fn test_app_keys_never_publishes_static_encrypted_labels() -> Result<()> {
     let owner_keys = Keys::generate();
     let device = Keys::generate();
 
@@ -64,7 +64,7 @@ fn test_app_keys_encrypts_labels_in_event_content() -> Result<()> {
     let event = app_keys.get_encrypted_event(&owner_keys)?;
 
     assert!(event.content.is_empty());
-    assert!(event.tags.iter().any(|tag| {
+    assert!(!event.tags.iter().any(|tag| {
         let values = tag.clone().to_vec();
         values.first().map(|value| value.as_str()) == Some(APP_KEYS_ENCRYPTED_DEVICE_LABELS_FACT)
             && values.get(1).is_some_and(|value| !value.is_empty())
@@ -88,9 +88,22 @@ fn test_app_keys_owner_can_decrypt_labels_but_public_parsing_cannot() -> Result<
         Some(200),
     );
 
-    let signed = app_keys
-        .get_encrypted_event(&owner_keys)?
-        .sign_with_keys(&owner_keys)?;
+    // Construct the retired format only in the test to preserve migration coverage.
+    use base64::Engine;
+    let key = nostr::nips::nip44::v2::ConversationKey::derive(
+        owner_keys.secret_key(),
+        &owner_keys.public_key(),
+    )?;
+    let bytes = nostr::nips::nip44::v2::encrypt_to_bytes(&key, serde_json::json!({
+        "type": "app-keys-labels", "v": 1,
+        "deviceLabels": [{ "identityPubkey": device.public_key().to_hex(), "deviceLabel": "Office Laptop", "clientLabel": "NDR Mobile", "updatedAt": 200 }]
+    }).to_string().as_bytes())?;
+    let mut legacy = app_keys.get_event(owner_keys.public_key());
+    legacy.tags.push(nostr::Tag::parse([
+        APP_KEYS_ENCRYPTED_DEVICE_LABELS_FACT,
+        &base64::engine::general_purpose::STANDARD.encode(bytes),
+    ])?);
+    let signed = legacy.sign_with_keys(&owner_keys)?;
 
     let parsed_public = AppKeys::from_event(&signed)?;
     assert!(parsed_public

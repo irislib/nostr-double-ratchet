@@ -1,3 +1,4 @@
+import { retireLegacyPrivateContactSync } from "../session-manager/retiredPrivateControls.js";
 import { AppKeys } from "../AppKeys.js";
 import { AppKeysManager, DelegateManager } from "../AppKeysManager.js";
 import { GroupManager, type GroupDecryptedEvent } from "../Group.js";
@@ -6,7 +7,11 @@ import {
   type KnownAppKeysSnapshot,
   type SessionUserRecordsLike,
 } from "../multiDevice.js";
-import { SessionManager, type OnEventCallback } from "../SessionManager.js";
+import {
+  SessionManager,
+  type OnEventCallback,
+  type OnDurableEventCallback,
+} from "../SessionManager.js";
 import {
   InMemoryStorageAdapter,
   type StorageAdapter,
@@ -68,7 +73,8 @@ export abstract class NdrRuntimeCore {
 
   protected directMessageSubscriptionCleanup: Unsubscribe | null = null;
 
-  protected directMessageRecipientSubscriptionCleanup: Unsubscribe | null = null;
+  protected directMessageRecipientSubscriptionCleanup: Unsubscribe | null =
+    null;
 
   protected directMessageSubscriptionAuthors: string[] = [];
 
@@ -96,6 +102,12 @@ export abstract class NdrRuntimeCore {
   >();
 
   protected readonly sessionEventCallbacks = new Set<OnEventCallback>();
+  private readonly durableSessionCallbacks = new Set<{
+    kinds: readonly number[];
+    callback: OnDurableEventCallback;
+    cleanup?: Unsubscribe;
+  }>();
+  private legacyRetirementPromise: Promise<number> | null = null;
 
   protected state: NdrRuntimeState = {
     ownerPubkey: null,
@@ -164,6 +176,83 @@ export abstract class NdrRuntimeCore {
     return () => {
       this.sessionEventCallbacks.delete(callback);
     };
+  }
+
+  /** Resolve only after the application has durably and idempotently applied the control. */
+  onDurableSessionEvent(
+    kinds: readonly number[],
+    callback: OnDurableEventCallback,
+  ): Unsubscribe {
+    if (
+      !kinds.length ||
+      kinds.some((kind) => !Number.isSafeInteger(kind) || kind < 0)
+    )
+      throw new Error("Invalid durable event kinds");
+    const registration = {
+      kinds: [...kinds],
+      callback,
+      cleanup: undefined as Unsubscribe | undefined,
+    };
+    this.durableSessionCallbacks.add(registration);
+    if (this.sessionManager)
+      this.attachDurableSessionCallback(this.sessionManager, registration);
+    return () => {
+      registration.cleanup?.();
+      this.durableSessionCallbacks.delete(registration);
+    };
+  }
+
+  protected attachDurableSessionEvents(manager: SessionManager): void {
+    for (const registration of this.durableSessionCallbacks)
+      this.attachDurableSessionCallback(manager, registration);
+  }
+
+  private attachDurableSessionCallback(
+    manager: SessionManager,
+    registration: {
+      kinds: readonly number[];
+      callback: OnDurableEventCallback;
+      cleanup?: Unsubscribe;
+    },
+  ): void {
+    registration.cleanup?.();
+    registration.cleanup = manager.onDurableEvent(
+      registration.kinds,
+      async (event, sender, meta) => {
+        if (
+          this.sessionManager !== manager ||
+          !this.durableSessionCallbacks.has(registration)
+        )
+          throw new Error("Inactive durable event handler");
+        await registration.callback(event, sender, meta);
+        if (
+          this.sessionManager !== manager ||
+          !this.durableSessionCallbacks.has(registration)
+        )
+          throw new Error("Inactive durable event handler");
+      },
+    );
+  }
+
+  protected clearDurableSessionEvents(): void {
+    for (const registration of this.durableSessionCallbacks) {
+      registration.cleanup?.();
+      registration.cleanup = undefined;
+    }
+  }
+
+  /** Call after saving the V2 migration, before initForOwner. Never starts a session. */
+  retireLegacyPrivateContactSync(ownerPubkey: string): Promise<number> {
+    if (this.sessionManager || this.sessionManagerInitPromise)
+      return Promise.reject(
+        new Error("Retire legacy controls before initializing sessions"),
+      );
+    if (this.legacyRetirementPromise) return this.legacyRetirementPromise;
+    this.legacyRetirementPromise = retireLegacyPrivateContactSync(
+      this.sessionStorage,
+      ownerPubkey,
+    );
+    return this.legacyRetirementPromise;
   }
 
   getAppKeysManager(): AppKeysManager | null {
@@ -357,6 +446,7 @@ export abstract class NdrRuntimeCore {
     }
 
     this.sessionManagerInitPromise = (async () => {
+      await this.legacyRetirementPromise;
       await this.initDelegateManager();
       if (!this.delegateManager) {
         throw new Error("DelegateManager not initialized");

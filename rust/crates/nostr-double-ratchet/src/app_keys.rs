@@ -281,7 +281,6 @@ impl AppKeys {
     fn build_unsigned_event_at(
         &self,
         owner_pubkey: PublicKey,
-        encrypted_labels: String,
         created_at_secs: u64,
     ) -> UnsignedEvent {
         let profile_id = Uuid::new_v4().to_string();
@@ -306,12 +305,6 @@ impl AppKeys {
                 "device".to_string(),
                 device.identity_pubkey.to_hex(),
                 device.created_at.to_string(),
-            ]);
-        }
-        if !encrypted_labels.is_empty() {
-            fact_tags.push(vec![
-                APP_KEYS_ENCRYPTED_DEVICE_LABELS_FACT.to_string(),
-                encrypted_labels,
             ]);
         }
 
@@ -347,16 +340,16 @@ impl AppKeys {
             .build(owner_pubkey)
     }
 
-    fn build_unsigned_event(&self, owner_pubkey: PublicKey, content: String) -> UnsignedEvent {
-        self.build_unsigned_event_at(owner_pubkey, content, current_unix_timestamp())
+    fn build_unsigned_event(&self, owner_pubkey: PublicKey) -> UnsignedEvent {
+        self.build_unsigned_event_at(owner_pubkey, current_unix_timestamp())
     }
 
     pub fn get_event(&self, owner_pubkey: PublicKey) -> UnsignedEvent {
-        self.build_unsigned_event(owner_pubkey, String::new())
+        self.build_unsigned_event(owner_pubkey)
     }
 
     pub fn get_event_at(&self, owner_pubkey: PublicKey, created_at_secs: u64) -> UnsignedEvent {
-        self.build_unsigned_event_at(owner_pubkey, String::new(), created_at_secs)
+        self.build_unsigned_event_at(owner_pubkey, created_at_secs)
     }
 
     pub fn get_encrypted_event(&self, owner_keys: &Keys) -> Result<UnsignedEvent> {
@@ -368,34 +361,9 @@ impl AppKeys {
         owner_keys: &Keys,
         created_at_secs: u64,
     ) -> Result<UnsignedEvent> {
-        if self.device_labels.is_empty() {
-            return Ok(self.get_event_at(owner_keys.public_key(), created_at_secs));
-        }
-
-        let conversation_key =
-            nip44::v2::ConversationKey::derive(owner_keys.secret_key(), &owner_keys.public_key())?;
-        let payload = EncryptedAppKeysContent {
-            payload_type: "app-keys-labels".to_string(),
-            v: 1,
-            device_labels: self
-                .get_all_device_labels()
-                .into_iter()
-                .filter(|(identity_pubkey, _)| self.devices.contains_key(identity_pubkey))
-                .map(|(identity_pubkey, labels)| StoredDeviceLabels {
-                    identity_pubkey: hex::encode(identity_pubkey.to_bytes()),
-                    device_label: labels.device_label,
-                    client_label: labels.client_label,
-                    updated_at: labels.updated_at,
-                })
-                .collect(),
-        };
-
-        let payload_json = serde_json::to_string(&payload)?;
-        let encrypted_bytes =
-            nip44::v2::encrypt_to_bytes(&conversation_key, payload_json.as_bytes())?;
-        let content = base64::engine::general_purpose::STANDARD.encode(&encrypted_bytes);
-
-        Ok(self.build_unsigned_event_at(owner_keys.public_key(), content, created_at_secs))
+        // Compatibility API: never publish private labels encrypted to a static
+        // owner key. Legacy labels remain readable for local migration.
+        Ok(self.get_event_at(owner_keys.public_key(), created_at_secs))
     }
 
     pub fn from_event(event: &Event) -> Result<Self> {

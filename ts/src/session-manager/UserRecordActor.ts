@@ -12,6 +12,7 @@ import type {
   UserRecord as UserRecordShape,
   UserRecordDeps,
   UserSetupState,
+  StoredDurableSessionEvent,
 } from "./types.js"
 
 export class UserRecordActor implements UserRecordShape {
@@ -21,6 +22,7 @@ export class UserRecordActor implements UserRecordShape {
   public appKeysEvent?: VerifiedEvent
   public state: UserSetupState = "new"
   public devices: Map<string, DeviceRecordActor> = new Map()
+  public pendingDurableEvents = new Map<string, StoredDurableSessionEvent>()
   public setupPromise?: Promise<void>
 
   private appKeysSubscription?: Unsubscribe

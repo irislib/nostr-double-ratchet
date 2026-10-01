@@ -14,6 +14,7 @@ import { type VerifiedEvent } from "nostr-tools";
 import { DeviceRecordActor } from "./DeviceRecordActor.js";
 import { ExpirationSettings } from "./expirationSettings.js";
 import { UserRecordActor } from "./UserRecordActor.js";
+import { DurableSessionEvents } from "./durableSessionEvents.js";
 import { UserRecordStorage } from "./userRecordStorage.js";
 import { createNostrPublisher } from "../publishing.js";
 import type {
@@ -21,6 +22,7 @@ import type {
   InviteCredentials,
   NostrFacade,
   OnEventCallback,
+  OnDurableEventCallback,
   SessionManagerEvent,
   SessionManagerEventsAvailableCallback,
 } from "./types.js";
@@ -28,6 +30,17 @@ import type { PendingInviteResponse } from "./managerInternals.js";
 
 export abstract class SessionManagerCore {
   protected readonly storageVersion = "1";
+  protected readonly durableSessionEvents = new DurableSessionEvents(
+    () => this.userRecords.values(),
+    owner => this.userRecordStorage.storeUserRecord(owner, this.userRecords.get(owner)),
+  );
+
+  onDurableEvent(kinds: readonly number[], callback: OnDurableEventCallback): Unsubscribe {
+    return this.durableSessionEvents.onEvent(kinds, callback);
+  }
+
+  flushDurableSessionEvents(): Promise<void> { return this.durableSessionEvents.flush(); }
+
 
   protected readonly versionPrefix: string;
 
@@ -259,6 +272,8 @@ export abstract class SessionManagerCore {
     // Use ownerPublicKey so delegates are added to the owner's record
     const ourUserRecord = this.getOrCreateUserRecord(this.ownerPublicKey);
     this.upsertDeviceRecord(ourUserRecord, this.deviceId);
+
+    void this.flushDurableSessionEvents();
 
     // Start invite response listener BEFORE setting up users
     // This ensures we're listening when other devices respond to our invites
