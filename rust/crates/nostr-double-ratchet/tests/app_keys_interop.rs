@@ -104,6 +104,8 @@ fn test_generate_rust_app_keys_vectors() -> Result<()> {
         ])
         .expect("valid legacy label test tag"),
     );
+    // The builder cached the public roster ID before the legacy test tag was added.
+    legacy.id = None;
     let signed_event = legacy.sign_with_keys(&owner_keys)?;
 
     let vectors = AppKeysInteropVectors {

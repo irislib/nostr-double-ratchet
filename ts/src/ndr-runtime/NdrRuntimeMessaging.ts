@@ -1,4 +1,8 @@
-import { AppKeys, buildAppKeysFilter } from "../AppKeys.js";
+import {
+  AppKeys,
+  applyAppKeysSnapshotPreservingLabels,
+  buildAppKeysFilter,
+} from "../AppKeys.js";
 import {
   SessionManager,
   type QueuedMessageDiagnostic,
@@ -145,15 +149,30 @@ export abstract class NdrRuntimeMessaging extends NdrRuntimeCore {
   ): Promise<AppKeys> {
     const initialTimeoutMs = Math.min(this.appKeysFastTimeoutMs, timeoutMs);
     let fetchError: unknown;
+    const resolveSnapshot = (snapshot: {
+      appKeys: AppKeys;
+      createdAt: number;
+    }): AppKeys => {
+      // Read current state after the wait: a completed query or live update may
+      // have supplied a newer verified base while this subscription was open.
+      return cloneAppKeys(
+        applyAppKeysSnapshotPreservingLabels({
+          currentAppKeys: this.appKeysManager?.getAppKeys(),
+          currentCreatedAt: this.state.lastAppKeysCreatedAt,
+          incomingAppKeys: snapshot.appKeys,
+          incomingCreatedAt: snapshot.createdAt,
+        }).appKeys,
+      );
+    };
     try {
-      const existingKeys = await AppKeys.waitFor(
+      const existingKeys = await AppKeys.waitForSnapshot(
         ownerPubkey,
         this.nostrSubscribe,
         initialTimeoutMs,
         this.ownerIdentityKey,
       );
       if (existingKeys) {
-        return existingKeys;
+        return resolveSnapshot(existingKeys);
       }
     } catch (error) {
       fetchError = error;
@@ -167,14 +186,14 @@ export abstract class NdrRuntimeMessaging extends NdrRuntimeCore {
     if (timeoutMs > initialTimeoutMs) {
       try {
         const remaining = Math.max(timeoutMs - initialTimeoutMs, 0);
-        const existingKeys = await AppKeys.waitFor(
+        const existingKeys = await AppKeys.waitForSnapshot(
           ownerPubkey,
           this.nostrSubscribe,
           remaining,
           this.ownerIdentityKey,
         );
         if (existingKeys) {
-          return existingKeys;
+          return resolveSnapshot(existingKeys);
         }
       } catch (error) {
         fetchError = error;

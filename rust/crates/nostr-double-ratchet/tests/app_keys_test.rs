@@ -106,6 +106,8 @@ fn test_app_keys_owner_can_decrypt_labels_but_public_parsing_cannot() -> Result<
         ])
         .expect("valid legacy label test tag"),
     );
+    // The builder cached the public roster ID before the legacy test tag was added.
+    legacy.id = None;
     let signed = legacy.sign_with_keys(&owner_keys)?;
 
     let parsed_public = AppKeys::from_event(&signed)?;
