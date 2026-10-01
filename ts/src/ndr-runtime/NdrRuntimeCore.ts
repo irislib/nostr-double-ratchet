@@ -1,3 +1,4 @@
+import { RuntimeDurableSessionHandlers } from "./durableSessionHandlers.js";
 import { retireLegacyPrivateContactSync } from "../session-manager/retiredPrivateControls.js";
 import { AppKeys } from "../AppKeys.js";
 import { AppKeysManager, DelegateManager } from "../AppKeysManager.js";
@@ -102,11 +103,9 @@ export abstract class NdrRuntimeCore {
   >();
 
   protected readonly sessionEventCallbacks = new Set<OnEventCallback>();
-  private readonly durableSessionCallbacks = new Set<{
-    kinds: readonly number[];
-    callback: OnDurableEventCallback;
-    cleanup?: Unsubscribe;
-  }>();
+  protected readonly durableSessionHandlers = new RuntimeDurableSessionHandlers(
+    () => this.sessionManager,
+  );
   private legacyRetirementPromise: Promise<number> | null = null;
 
   protected state: NdrRuntimeState = {
@@ -183,62 +182,7 @@ export abstract class NdrRuntimeCore {
     kinds: readonly number[],
     callback: OnDurableEventCallback,
   ): Unsubscribe {
-    if (
-      !kinds.length ||
-      kinds.some((kind) => !Number.isSafeInteger(kind) || kind < 0)
-    )
-      throw new Error("Invalid durable event kinds");
-    const registration = {
-      kinds: [...kinds],
-      callback,
-      cleanup: undefined as Unsubscribe | undefined,
-    };
-    this.durableSessionCallbacks.add(registration);
-    if (this.sessionManager)
-      this.attachDurableSessionCallback(this.sessionManager, registration);
-    return () => {
-      registration.cleanup?.();
-      this.durableSessionCallbacks.delete(registration);
-    };
-  }
-
-  protected attachDurableSessionEvents(manager: SessionManager): void {
-    for (const registration of this.durableSessionCallbacks)
-      this.attachDurableSessionCallback(manager, registration);
-  }
-
-  private attachDurableSessionCallback(
-    manager: SessionManager,
-    registration: {
-      kinds: readonly number[];
-      callback: OnDurableEventCallback;
-      cleanup?: Unsubscribe;
-    },
-  ): void {
-    registration.cleanup?.();
-    registration.cleanup = manager.onDurableEvent(
-      registration.kinds,
-      async (event, sender, meta) => {
-        if (
-          this.sessionManager !== manager ||
-          !this.durableSessionCallbacks.has(registration)
-        )
-          throw new Error("Inactive durable event handler");
-        await registration.callback(event, sender, meta);
-        if (
-          this.sessionManager !== manager ||
-          !this.durableSessionCallbacks.has(registration)
-        )
-          throw new Error("Inactive durable event handler");
-      },
-    );
-  }
-
-  protected clearDurableSessionEvents(): void {
-    for (const registration of this.durableSessionCallbacks) {
-      registration.cleanup?.();
-      registration.cleanup = undefined;
-    }
+    return this.durableSessionHandlers.onEvent(kinds, callback);
   }
 
   /** Call after saving the V2 migration, before initForOwner. Never starts a session. */

@@ -78,6 +78,31 @@ export function resolveAppKeysOwnerForDevice(
  * Single atomic event containing all device invites for a user.
  * Uses union merge strategy for conflict resolution.
  */
+function compareOptionalLabel(
+  left: string | undefined,
+  right: string | undefined,
+): number {
+  if (left === right) return 0;
+  if (left === undefined) return -1;
+  if (right === undefined) return 1;
+  // Match Rust String ordering, including characters outside the BMP.
+  const encoder = new TextEncoder();
+  const a = encoder.encode(left);
+  const b = encoder.encode(right);
+  for (let index = 0; index < Math.min(a.length, b.length); index += 1) {
+    if (a[index] !== b[index]) return a[index] - b[index];
+  }
+  return a.length - b.length;
+}
+
+function compareDeviceLabels(left: DeviceLabels, right: DeviceLabels): number {
+  return (
+    left.updatedAt - right.updatedAt ||
+    compareOptionalLabel(left.deviceLabel, right.deviceLabel) ||
+    compareOptionalLabel(left.clientLabel, right.clientLabel)
+  );
+}
+
 export class AppKeys {
   private devices: Map<string, DeviceEntry> = new Map();
   private deviceLabels: Map<string, DeviceLabels> = new Map();
@@ -329,7 +354,7 @@ export class AppKeys {
       ...other.deviceLabels.entries(),
     ].reduce((map, [identityPubkey, labels]) => {
       const existing = map.get(identityPubkey);
-      if (!existing || labels.updatedAt > existing.updatedAt) {
+      if (!existing || compareDeviceLabels(labels, existing) > 0) {
         map.set(identityPubkey, labels);
       }
       return map;

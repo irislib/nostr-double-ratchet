@@ -528,7 +528,15 @@ impl AppKeys {
             merged_labels
                 .entry(*identity_pubkey)
                 .and_modify(|existing: &mut DeviceLabels| {
-                    if labels.updated_at > existing.updated_at {
+                    if (
+                        labels.updated_at,
+                        &labels.device_label,
+                        &labels.client_label,
+                    ) > (
+                        existing.updated_at,
+                        &existing.device_label,
+                        &existing.client_label,
+                    ) {
                         *existing = labels.clone();
                     }
                 })

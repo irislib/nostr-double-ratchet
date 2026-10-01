@@ -99,10 +99,13 @@ fn test_app_keys_owner_can_decrypt_labels_but_public_parsing_cannot() -> Result<
         "deviceLabels": [{ "identityPubkey": device.public_key().to_hex(), "deviceLabel": "Office Laptop", "clientLabel": "NDR Mobile", "updatedAt": 200 }]
     }).to_string().as_bytes())?;
     let mut legacy = app_keys.get_event(owner_keys.public_key());
-    legacy.tags.push(nostr::Tag::parse([
-        APP_KEYS_ENCRYPTED_DEVICE_LABELS_FACT,
-        &base64::engine::general_purpose::STANDARD.encode(bytes),
-    ])?);
+    legacy.tags.push(
+        nostr::Tag::parse([
+            APP_KEYS_ENCRYPTED_DEVICE_LABELS_FACT,
+            &base64::engine::general_purpose::STANDARD.encode(bytes),
+        ])
+        .expect("valid legacy label test tag"),
+    );
     let signed = legacy.sign_with_keys(&owner_keys)?;
 
     let parsed_public = AppKeys::from_event(&signed)?;
@@ -242,4 +245,45 @@ fn exact_heads_round_trip_for_restart_recovery() {
     index.ingest(event.clone(), 100).unwrap();
 
     assert_eq!(index.events_for_owner(owner.public_key()), vec![event]);
+}
+
+#[test]
+fn private_labels_converge_with_utf8_ties_and_newer_clears() {
+    let device = Keys::generate().public_key();
+    for (left_device, left_client, left_time, right_device, right_client, right_time) in [
+        (None, Some("client"), 10, Some(""), None, 10),
+        (
+            Some("\u{e000}"),
+            Some("z"),
+            10,
+            Some("\u{10000}"),
+            Some("a"),
+            10,
+        ),
+        (Some("device"), Some("a"), 10, Some("device"), Some("z"), 10),
+        (Some("device"), Some("client"), 10, None, None, 11),
+    ] {
+        let mut left = AppKeys::new(vec![DeviceEntry::new(device, 1)]);
+        let mut right = left.clone();
+        left.set_device_labels(
+            device,
+            left_device.map(str::to_owned),
+            left_client.map(str::to_owned),
+            Some(left_time),
+        );
+        right.set_device_labels(
+            device,
+            right_device.map(str::to_owned),
+            right_client.map(str::to_owned),
+            Some(right_time),
+        );
+        assert_eq!(
+            left.merge(&right).get_device_labels(&device),
+            right.get_device_labels(&device)
+        );
+        assert_eq!(
+            right.merge(&left).get_device_labels(&device),
+            right.get_device_labels(&device)
+        );
+    }
 }

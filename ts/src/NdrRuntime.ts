@@ -138,7 +138,7 @@ export class NdrRuntime extends NdrRuntimeRegistration {
 
   protected attachSessionManagerEvents(manager: SessionManager): void {
     this.clearSessionManagerEvents();
-    this.attachDurableSessionEvents(manager);
+    this.durableSessionHandlers.attach(manager);
     this.sessionManagerEventsAvailableCleanup = manager.onEventsAvailable(
       () => this.dispatchSessionManagerEvents(),
     );
@@ -243,7 +243,7 @@ export class NdrRuntime extends NdrRuntimeRegistration {
   }
 
   protected clearSessionManagerEvents(): void {
-    this.clearDurableSessionEvents();
+    this.durableSessionHandlers.clear();
     this.sessionManagerEventsAvailableCleanup?.();
     this.sessionManagerEventsAvailableCleanup = null;
     for (const cleanup of this.sessionManagerEmittedSubscriptions.values()) {

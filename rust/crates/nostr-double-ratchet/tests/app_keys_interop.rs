@@ -97,10 +97,13 @@ fn test_generate_rust_app_keys_vectors() -> Result<()> {
         ]
     }).to_string().as_bytes())?;
     let mut legacy = app_keys.get_event(owner_keys.public_key());
-    legacy.tags.push(nostr::Tag::parse([
-        nostr_double_ratchet::APP_KEYS_ENCRYPTED_DEVICE_LABELS_FACT,
-        &base64::engine::general_purpose::STANDARD.encode(bytes),
-    ])?);
+    legacy.tags.push(
+        nostr::Tag::parse([
+            nostr_double_ratchet::APP_KEYS_ENCRYPTED_DEVICE_LABELS_FACT,
+            &base64::engine::general_purpose::STANDARD.encode(bytes),
+        ])
+        .expect("valid legacy label test tag"),
+    );
     let signed_event = legacy.sign_with_keys(&owner_keys)?;
 
     let vectors = AppKeysInteropVectors {
