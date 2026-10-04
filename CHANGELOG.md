@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## Rust 0.0.170 - 2026-10-04
+
+- Add resumable group decryption with a caller-supplied trial budget. Searches
+  retain the full recovery window and apply ratchet changes only after validating
+  current sender, membership, revision, and key state.
+- Separate pure receive planning from application so callers can yield without
+  cloning or writing a durable checkpoint on each unfinished search slice.
+- Bound suspended key material to the existing retained-key tail. Existing APIs,
+  stored state, and message formats remain compatible; TypeScript, pairwise
+  runtime, and pairwise codec versions are unchanged.
+
 ## Rust 0.0.169 - 2026-10-04
 
 - Add allocation-free message-sender and borrowed roster lookups, avoiding full

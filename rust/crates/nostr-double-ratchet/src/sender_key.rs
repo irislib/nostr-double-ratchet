@@ -7,6 +7,9 @@ use std::collections::BTreeMap;
 pub const SENDER_KEY_MAX_SKIP: usize = 10_000;
 pub const SENDER_KEY_MAX_STORED_SKIPPED_KEYS: usize = 2_000;
 
+mod blind;
+pub(crate) use blind::{BlindDecryptCursor, BlindDecryptStep};
+
 const SENDER_KEY_KDF_SALT: &[u8] = b"ndr-sender-key-v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -138,47 +141,13 @@ impl SenderKeyState {
     }
 
     pub fn plan_decrypt_blind(&self, ciphertext: &[u8]) -> Result<SenderKeyBlindDecryptPlan> {
-        for (message_number, message_key) in &self.skipped_message_keys {
-            if let Ok(plaintext) = decrypt_with_message_key(message_key, ciphertext) {
-                let mut next_state = self.clone();
-                next_state.skipped_message_keys.remove(message_number);
-                return Ok(SenderKeyBlindDecryptPlan {
-                    next_state,
-                    key_id: self.key_id,
-                    message_number: *message_number,
-                    plaintext,
-                });
-            }
+        let mut remaining = usize::MAX;
+        match BlindDecryptCursor::new(self).advance(ciphertext, &mut remaining)? {
+            BlindDecryptStep::Complete(plan) => Ok(plan),
+            BlindDecryptStep::Exhausted | BlindDecryptStep::Pending => Err(
+                crate::Error::Decryption("sender-key blind decrypt failed".to_string()),
+            ),
         }
-
-        let mut next_state = self.clone();
-        let max_message_number = self.iteration.saturating_add(SENDER_KEY_MAX_SKIP as u32);
-        while next_state.iteration <= max_message_number {
-            let message_number = next_state.iteration;
-            let (next_chain_key, message_key) = derive_message_key(&next_state.chain_key);
-            next_state.chain_key = next_chain_key;
-            next_state.iteration = next_state.iteration.checked_add(1).ok_or_else(|| {
-                crate::Error::Decryption("sender-key iteration overflow".to_string())
-            })?;
-
-            if let Ok(plaintext) = decrypt_with_message_key(&message_key, ciphertext) {
-                prune_skipped(&mut next_state.skipped_message_keys);
-                return Ok(SenderKeyBlindDecryptPlan {
-                    next_state,
-                    key_id: self.key_id,
-                    message_number,
-                    plaintext,
-                });
-            }
-
-            next_state
-                .skipped_message_keys
-                .insert(message_number, message_key);
-        }
-
-        Err(crate::Error::Decryption(
-            "sender-key blind decrypt failed".to_string(),
-        ))
     }
 
     pub fn apply_decrypt(&mut self, plan: SenderKeyDecryptPlan) -> SenderKeyDecryptOutcome {

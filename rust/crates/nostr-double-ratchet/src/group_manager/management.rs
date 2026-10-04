@@ -75,6 +75,31 @@ where
         }
     }
 
+    /// Check the local publishing stream without cloning unrelated group state.
+    pub fn is_local_sender_key_stream(
+        &self,
+        group_id: &str,
+        author: SenderEventPubkey,
+        local_device: DevicePubkey,
+    ) -> bool {
+        self.sender_event_index
+            .get(&author)
+            .and_then(|id| self.sender_keys.get(id))
+            .is_some_and(|record| {
+                record.group_id == group_id
+                    && record.sender_owner == self.local_owner_pubkey
+                    && record.sender_device == local_device
+                    && record.sender_event_secret_key.is_some()
+            })
+    }
+
+    /// Read current membership without allocating a presentation snapshot.
+    pub fn group_has_member(&self, group_id: &str, owner: OwnerPubkey) -> Option<bool> {
+        self.groups
+            .get(group_id)
+            .map(|group| group.members.contains(&owner))
+    }
+
     pub fn group(&self, group_id: &str) -> Option<GroupSnapshot> {
         self.groups.get(group_id).map(GroupRecord::snapshot)
     }

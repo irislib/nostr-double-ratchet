@@ -132,6 +132,55 @@ where
         &mut self,
         message: GroupSenderKeyMessage,
     ) -> Result<GroupSenderKeyHandleResult> {
+        let mut remaining = usize::MAX;
+        self.handle_sender_key_message_with_budget(message, &mut None, &mut remaining)?
+            .ok_or_else(|| group_error("unlimited sender-key search did not finish"))
+    }
+
+    /// Handle one message consuming a shared remaining blind-key trial budget. `None`
+    /// yields without mutating the ratchet; pass the cursor back to continue.
+    /// Current sender authorization and key inputs are revalidated every call.
+    /// If `None` leaves an empty cursor, key inputs changed: requeue fairly and
+    /// start a fresh pass. New key IDs join the next pass, not this frozen workset.
+    /// A caller may drop the cursor at any time to cancel safely.
+    pub fn handle_sender_key_message_with_budget(
+        &mut self,
+        message: GroupSenderKeyMessage,
+        cursor: &mut Option<GroupSenderKeyDecryptCursor>,
+        remaining_key_attempts: &mut usize,
+    ) -> Result<Option<GroupSenderKeyHandleResult>> {
+        self.plan_sender_key_message_with_budget(message, cursor, remaining_key_attempts)?
+            .map(|plan| self.apply_sender_key_receive_plan(plan))
+            .transpose()
+    }
+
+    /// Pure resumable receive planning, for callers that checkpoint only when a
+    /// result is ready. No ratchet/session state is changed by an unfinished slice.
+    pub fn plan_sender_key_message_with_budget(
+        &self,
+        message: GroupSenderKeyMessage,
+        cursor: &mut Option<GroupSenderKeyDecryptCursor>,
+        remaining_key_attempts: &mut usize,
+    ) -> Result<Option<GroupSenderKeyReceivePlan>> {
+        let result = self.plan_sender_key_message_step(message, cursor, remaining_key_attempts);
+        if !matches!(result, Ok(None)) {
+            *cursor = None;
+        }
+        result
+    }
+
+    fn plan_sender_key_message_step(
+        &self,
+        message: GroupSenderKeyMessage,
+        cursor: &mut Option<GroupSenderKeyDecryptCursor>,
+        remaining_key_attempts: &mut usize,
+    ) -> Result<Option<GroupSenderKeyReceivePlan>> {
+        let complete = |result| {
+            Ok(Some(GroupSenderKeyReceivePlan {
+                result,
+                mutation: None,
+            }))
+        };
         let known_position = if message.encrypted_header.is_some() {
             None
         } else {
@@ -142,7 +191,7 @@ where
             .get(&message.sender_event_pubkey)
             .cloned()
         else {
-            return Ok(GroupSenderKeyHandleResult::PendingDistribution {
+            return complete(GroupSenderKeyHandleResult::PendingDistribution {
                 group_id: message.group_id,
                 sender_event_pubkey: message.sender_event_pubkey,
                 key_id: known_position.map(|(key_id, _)| key_id),
@@ -156,82 +205,83 @@ where
                 .is_some_and(|record| record.sender_event_secret_key.is_some())
         {
             // Our sending chain has already advanced; relay echoes cannot be decrypted.
-            return Ok(GroupSenderKeyHandleResult::Ignored);
+            return complete(GroupSenderKeyHandleResult::Ignored);
         }
 
-        let group = self.group_record(&id.group_id)?.clone();
+        let group = self
+            .groups
+            .get(&id.group_id)
+            .ok_or_else(|| group_error(format!("unknown group `{}`", id.group_id)))?;
         if !group.protocol.is_sender_key_v1() || !group.members.contains(&id.sender_owner) {
-            return Ok(GroupSenderKeyHandleResult::Ignored);
+            return complete(GroupSenderKeyHandleResult::Ignored);
         }
 
         if known_position.is_none() {
-            let key_ids = self
+            use crate::sender_key::BlindDecryptStep;
+            let plan =
+                match self.advance_blind_message(&id, &message, cursor, remaining_key_attempts)? {
+                    BlindDecryptStep::Pending => return Ok(None),
+                    BlindDecryptStep::Exhausted => {
+                        return complete(GroupSenderKeyHandleResult::PendingDistribution {
+                            group_id: message.group_id,
+                            sender_event_pubkey: message.sender_event_pubkey,
+                            key_id: None,
+                            message_number: None,
+                        });
+                    }
+                    BlindDecryptStep::Complete(plan) => plan,
+                };
+            let key_id = plan.key_id;
+            let Some(plaintext) = self.payload_codec.decode_sender_key_plaintext(
+                GroupSenderKeyPlaintextDecodeContext {
+                    group_id: &group.group_id,
+                    current_revision: group.revision,
+                },
+                &plan.plaintext,
+            )?
+            else {
+                return complete(GroupSenderKeyHandleResult::Ignored);
+            };
+            if plaintext.group_id != group.group_id {
+                return complete(GroupSenderKeyHandleResult::Ignored);
+            }
+            if plaintext.revision > group.revision {
+                return complete(GroupSenderKeyHandleResult::PendingRevision {
+                    group_id: group.group_id.clone(),
+                    current_revision: group.revision,
+                    required_revision: plaintext.revision,
+                    key_id: plan.key_id,
+                    message_number: plan.message_number,
+                });
+            }
+            if plaintext.revision < group.revision {
+                return complete(GroupSenderKeyHandleResult::Ignored);
+            }
+
+            let state = self
                 .sender_keys
                 .get(&id)
-                .ok_or_else(|| group_error("sender-key index points to missing state"))?
-                .states
-                .keys()
-                .copied()
-                .collect::<Vec<_>>();
-            for key_id in key_ids {
-                let plan = self
-                    .sender_keys
-                    .get(&id)
-                    .and_then(|record| record.states.get(&key_id))
-                    .ok_or_else(|| group_error("sender-key index points to missing state"))?
-                    .plan_decrypt_blind(&message.ciphertext);
-                let Ok(plan) = plan else {
-                    continue;
-                };
-                let Some(plaintext) = self.payload_codec.decode_sender_key_plaintext(
-                    GroupSenderKeyPlaintextDecodeContext {
-                        group_id: &group.group_id,
-                        current_revision: group.revision,
-                    },
-                    &plan.plaintext,
-                )?
-                else {
-                    return Ok(GroupSenderKeyHandleResult::Ignored);
-                };
-                if plaintext.group_id != group.group_id {
-                    return Ok(GroupSenderKeyHandleResult::Ignored);
-                }
-                if plaintext.revision > group.revision {
-                    return Ok(GroupSenderKeyHandleResult::PendingRevision {
-                        group_id: group.group_id,
-                        current_revision: group.revision,
-                        required_revision: plaintext.revision,
-                        key_id: plan.key_id,
-                        message_number: plan.message_number,
-                    });
-                }
-                if plaintext.revision < group.revision {
-                    return Ok(GroupSenderKeyHandleResult::Ignored);
-                }
-
-                let state = self
-                    .sender_keys
-                    .get_mut(&id)
-                    .and_then(|record| record.states.get_mut(&key_id))
-                    .ok_or_else(|| group_error("sender-key index points to missing state"))?;
-                state.clone_from(&plan.next_state);
-
-                return Ok(GroupSenderKeyHandleResult::Event(
-                    GroupIncomingEvent::Message(GroupReceivedMessage {
+                .and_then(|record| record.states.get(&key_id))
+                .ok_or_else(|| group_error("sender-key index points to missing state"))?;
+            return Ok(Some(GroupSenderKeyReceivePlan {
+                mutation: Some(super::decrypt::GroupSenderKeyMutation {
+                    identity: id.clone(),
+                    author: message.sender_event_pubkey,
+                    expected: state.clone(),
+                    next: plan.next_state,
+                    revision: group.revision,
+                    local_member: group.members.contains(&self.local_owner_pubkey),
+                }),
+                result: GroupSenderKeyHandleResult::Event(GroupIncomingEvent::Message(
+                    GroupReceivedMessage {
                         group_id: plaintext.group_id,
                         sender_owner: id.sender_owner,
                         sender_device: Some(id.sender_device),
                         body: plaintext.body,
                         revision: plaintext.revision,
-                    }),
-                ));
-            }
-            return Ok(GroupSenderKeyHandleResult::PendingDistribution {
-                group_id: message.group_id,
-                sender_event_pubkey: message.sender_event_pubkey,
-                key_id: None,
-                message_number: None,
-            });
+                    },
+                )),
+            }));
         }
 
         let (key_id, message_number) = known_position.expect("checked above");
@@ -242,10 +292,10 @@ where
         };
         let record = self
             .sender_keys
-            .get_mut(&id)
+            .get(&id)
             .ok_or_else(|| group_error("sender-key index points to missing state"))?;
-        let Some(state) = record.states.get_mut(&key_id) else {
-            return Ok(GroupSenderKeyHandleResult::PendingDistribution {
+        let Some(state) = record.states.get(&key_id) else {
+            return complete(GroupSenderKeyHandleResult::PendingDistribution {
                 group_id: message.group_id,
                 sender_event_pubkey: message.sender_event_pubkey,
                 key_id: Some(key_id),
@@ -263,14 +313,14 @@ where
             &plaintext,
         )?
         else {
-            return Ok(GroupSenderKeyHandleResult::Ignored);
+            return complete(GroupSenderKeyHandleResult::Ignored);
         };
         if plaintext.group_id != group.group_id {
-            return Ok(GroupSenderKeyHandleResult::Ignored);
+            return complete(GroupSenderKeyHandleResult::Ignored);
         }
         if plaintext.revision > group.revision {
-            return Ok(GroupSenderKeyHandleResult::PendingRevision {
-                group_id: group.group_id,
+            return complete(GroupSenderKeyHandleResult::PendingRevision {
+                group_id: group.group_id.clone(),
                 current_revision: group.revision,
                 required_revision: plaintext.revision,
                 key_id,
@@ -278,20 +328,28 @@ where
             });
         }
         if plaintext.revision < group.revision {
-            return Ok(GroupSenderKeyHandleResult::Ignored);
+            return complete(GroupSenderKeyHandleResult::Ignored);
         }
 
-        state.apply_decrypt(plan);
-
-        Ok(GroupSenderKeyHandleResult::Event(
-            GroupIncomingEvent::Message(GroupReceivedMessage {
-                group_id: plaintext.group_id,
-                sender_owner: id.sender_owner,
-                sender_device: Some(id.sender_device),
-                body: plaintext.body,
-                revision: plaintext.revision,
+        Ok(Some(GroupSenderKeyReceivePlan {
+            mutation: Some(super::decrypt::GroupSenderKeyMutation {
+                identity: id.clone(),
+                author: message.sender_event_pubkey,
+                expected: state.clone(),
+                next: plan.next_state,
+                revision: group.revision,
+                local_member: group.members.contains(&self.local_owner_pubkey),
             }),
-        ))
+            result: GroupSenderKeyHandleResult::Event(GroupIncomingEvent::Message(
+                GroupReceivedMessage {
+                    group_id: plaintext.group_id,
+                    sender_owner: id.sender_owner,
+                    sender_device: Some(id.sender_device),
+                    body: plaintext.body,
+                    revision: plaintext.revision,
+                },
+            )),
+        }))
     }
 
     pub(super) fn local_sibling_sync<R>(
