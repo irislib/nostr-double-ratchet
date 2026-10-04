@@ -15,7 +15,7 @@ license = "MIT"
 repository = "https://files.iris.to/#/npub1xdhnr9mrv47kkrn95k6cwecearydeh8e895990n3acntwvmgk2dsdeeycm/nostr-double-ratchet"
 
 [workspace.dependencies]
-nostr-double-ratchet = { version = "0.0.168", path = "crates/nostr-double-ratchet", default-features = false }
+nostr-double-ratchet = { version = "0.0.169", path = "crates/nostr-double-ratchet", default-features = false }
 nostr-double-ratchet-pairwise = { version = "0.0.168", path = "crates/nostr-double-ratchet-pairwise" }
 nostr-double-ratchet-pairwise-codec = { version = "0.0.168", path = "crates/nostr-double-ratchet-pairwise-codec" }
 nostr = { version = "0.44.7", default-features = false, features = ["std", "nip44"] }

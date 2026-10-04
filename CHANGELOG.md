@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## Rust 0.0.169 - 2026-10-04
+
+- Add allocation-free message-sender and borrowed roster lookups, avoiding full
+  ratchet snapshots during incoming message ownership checks. Routing order,
+  authorization requirements, stored state, and message formats are unchanged.
+- TypeScript, pairwise runtime, and pairwise codec versions are unchanged.
+
 ## TypeScript 0.0.175 - 2026-09-30
 
 - Retain device names and client descriptions in owner and peer AppKeys snapshots.

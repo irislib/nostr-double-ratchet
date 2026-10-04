@@ -104,6 +104,14 @@ pub struct ReceivedMessage {
     pub payload: Vec<u8>,
 }
 
+/// A session routing hint, not proof of the claimed owner's authorization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MessageSenderRecord {
+    pub owner_pubkey: OwnerPubkey,
+    pub device_pubkey: DevicePubkey,
+    pub claimed_owner_pubkey: Option<OwnerPubkey>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RelayGap {
     MissingRoster {
