@@ -102,7 +102,8 @@ pub use session::{
 #[cfg(feature = "full")]
 pub use session_manager::{
     Delivery, DeviceRecordSnapshot, PreparedSend, ProcessedInviteResponse, PruneReport,
-    ReceivedMessage, RelayGap, SessionManager, SessionManagerSnapshot, UserRecordSnapshot,
+    MessageSenderRecord, ReceivedMessage, RelayGap, SessionManager, SessionManagerSnapshot,
+    UserRecordSnapshot,
 };
 #[cfg(feature = "full")]
 pub use shared_channel::SharedChannel;

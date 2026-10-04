@@ -94,6 +94,34 @@ impl SessionManager {
         self.local_device_pubkey
     }
 
+    /// Look up an event author without cloning ratchets or skipped message keys.
+    /// The first matching record follows the same owner/device ordering as
+    /// `snapshot`; callers must still verify owner claims and decrypt the event.
+    pub fn message_sender_record(&self, sender: DevicePubkey) -> Option<MessageSenderRecord> {
+        for user in self.users.values() {
+            for device in user.devices.values() {
+                if device
+                    .active_session
+                    .iter()
+                    .chain(&device.inactive_sessions)
+                    .any(|session| session.matches_sender(sender))
+                {
+                    return Some(MessageSenderRecord {
+                        owner_pubkey: user.owner_pubkey,
+                        device_pubkey: device.device_pubkey,
+                        claimed_owner_pubkey: device.claimed_owner_pubkey,
+                    });
+                }
+            }
+        }
+        None
+    }
+
+    /// Borrow the current roster without copying any session state.
+    pub fn roster(&self, owner: OwnerPubkey) -> Option<&DeviceRoster> {
+        self.users.get(&owner).and_then(|user| user.roster.as_ref())
+    }
+
     pub fn replace_local_invite(&mut self, invite: Invite) {
         self.local_invite = Some(invite);
     }
