@@ -1,7 +1,7 @@
 [package]
 name = "nostr-double-ratchet"
 description = "Nostr double ratchet library for Rust"
-version = "0.0.169"
+version = "0.0.170"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true

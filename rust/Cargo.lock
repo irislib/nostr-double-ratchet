@@ -787,7 +787,7 @@ dependencies = [
 
 [[package]]
 name = "nostr-double-ratchet"
-version = "0.0.169"
+version = "0.0.170"
 dependencies = [
  "base64",
  "hex",

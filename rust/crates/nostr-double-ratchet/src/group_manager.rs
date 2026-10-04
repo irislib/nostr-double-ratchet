@@ -57,7 +57,9 @@ struct SenderKeyRecord {
     repair_snapshots: Vec<GroupSenderKeyRepairSnapshot>,
 }
 
+mod decrypt;
 mod incoming;
+pub use decrypt::{GroupSenderKeyDecryptCursor, GroupSenderKeyReceivePlan};
 mod management;
 mod records;
 mod sender_keys;

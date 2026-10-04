@@ -383,3 +383,6 @@ mod membership;
 mod receive_state;
 #[path = "group_manager_sender_key_basic/repair.rs"]
 mod repair;
+
+#[path = "group_manager_sender_key_basic/bounded_decrypt.rs"]
+mod bounded_decrypt;
