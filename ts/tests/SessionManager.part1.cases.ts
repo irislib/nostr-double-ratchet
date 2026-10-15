@@ -187,7 +187,7 @@ it("delegates outbound publishing to device records without requiring an active 
     await manager.sendEvent(peerPublicKey, rumor)
 
     expect(prepareOutboundEvent).toHaveBeenCalledWith(rumor)
-    expect(publish).toHaveBeenCalledWith(preparedEvent, rumor.id, undefined)
+    expect(publish).toHaveBeenCalledWith(preparedEvent, rumor.id, { recipientOwnerPubkey: rumor.tags.find(tag => tag[0] === "p")![1], createdAt: rumor.created_at })
   })
 
 it("should bootstrap a linked device session to a single-device peer via that peer's public invite", async () => {

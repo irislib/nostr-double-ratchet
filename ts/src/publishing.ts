@@ -3,12 +3,16 @@ import { type NostrPublish, type NostrPublisherOptions, type NostrPublishContext
 
 import { GROUP_ROSTER_FACT_KIND } from "./GroupMeta.js";
 
-/** Recover policy scope from queued plaintext without changing durable queue formats. */
-export function groupPublicationContext(event: Pick<Rumor, "kind" | "tags">): NostrPublishContext | undefined {
+/** Recover group or direct policy scope from queued plaintext without changing durable queue formats. */
+export function groupPublicationContext(event: Pick<Rumor, "kind" | "tags"> & Partial<Pick<Rumor, "created_at">>): NostrPublishContext | undefined {
   // Membership controls must reach recipients even when removing the sender.
   if (event.kind === GROUP_ROSTER_FACT_KIND) return undefined;
   const groupId = event.tags?.find((tag) => tag[0] === "l")?.[1];
-  return groupId ? { groupId } : undefined;
+  if (groupId) return { groupId };
+  const recipientOwnerPubkey = event.tags?.find((tag) => tag[0] === "p")?.[1];
+  return recipientOwnerPubkey && /^[a-f0-9]{64}$/.test(recipientOwnerPubkey) &&
+    Number.isSafeInteger(event.created_at) && event.created_at! >= 0
+    ? { recipientOwnerPubkey, createdAt: event.created_at! } : undefined;
 }
 
 const localPublishers = new WeakSet<NostrPublish>();

@@ -66,6 +66,26 @@ export abstract class SessionManagerLifecycle extends SessionManagerRecords {
       .sort((left, right) => left.ownerPubkey.localeCompare(right.ownerPubkey));
   }
 
+  getKnownAppKeysEvents(): VerifiedEvent[] {
+    return [...this.userRecords.values()].flatMap(record => record.appKeysEvent
+      ? [structuredClone(record.appKeysEvent)] : []);
+  }
+
+  /** Validate original evidence and await its durable projection before acknowledging sync. */
+  async applyVerifiedAppKeysEvent(value: VerifiedEvent): Promise<void> {
+    const event = structuredClone(value);
+    AppKeys.fromEvent(event);
+    const record = this.getOrCreateUserRecord(event.pubkey);
+    await record.ensureSetup();
+    if (event.created_at < record.appKeysCreatedAt) return;
+    if (!await record.processAppKeysEvent(event) && event.created_at >= record.appKeysCreatedAt) {
+      throw new Error("Could not persist AppKeys evidence");
+    }
+    await this.storeUserRecord(event.pubkey);
+    this.syncLegacyDirectMessageSubscription();
+    this.retryPendingDirectMessages();
+  }
+
   async applyTrustedAppKeysSnapshot(
     snapshot: KnownAppKeysSnapshot,
   ): Promise<AppKeysSnapshotDecision> {

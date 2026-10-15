@@ -247,6 +247,22 @@ export abstract class NdrRuntimeCore {
     );
   }
 
+  getKnownAppKeysEvents(): VerifiedEvent[] {
+    return this.sessionManager?.getKnownAppKeysEvents() ?? [];
+  }
+
+  async applyVerifiedAppKeysEvent(value: VerifiedEvent): Promise<void> {
+    const event = structuredClone(value);
+    const appKeys = AppKeys.fromEvent(event);
+    const owner = this.state.ownerPubkey;
+    if (!owner) throw new Error("Owner pubkey required to apply AppKeys evidence");
+    const manager = await this.waitForSessionManager(owner);
+    await manager.applyVerifiedAppKeysEvent(event);
+    if (event.pubkey === owner) await this.applyIncomingAppKeys(appKeys, event.created_at);
+    await this.flushSessionManagerEvents();
+    this.syncDirectMessageSubscription();
+  }
+
   async applyTrustedAppKeysSnapshot(
     snapshot: KnownAppKeysSnapshot,
   ): Promise<AppKeysSnapshotDecision> {

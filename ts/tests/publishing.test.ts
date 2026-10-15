@@ -100,3 +100,13 @@ it("scopes messages, reactions, receipts and key handoffs but preserves roster c
   expect(groupPublicationContext({ kind: 37368, tags: [["l", "group-a"]] })).toBeUndefined()
   expect(groupPublicationContext({ kind: 14, tags: [["p", "peer"]] })).toBeUndefined()
 })
+
+it("recovers direct recipient policy from queued plaintext without exposing it on the wire", async () => {
+  const recipient = getPublicKey(generateSecretKey())
+  const context = groupPublicationContext({ kind: 14, tags: [["p", recipient]], created_at: 123 })
+  expect(context).toEqual({ recipientOwnerPubkey: recipient, createdAt: 123 })
+  const enqueue = vi.fn(async () => {})
+  await createNostrPublisher(async () => signed, { nostrEnqueue: enqueue })(signed, 'inner', context)
+  expect(enqueue).toHaveBeenCalledWith(signed, 'inner', context)
+  expect(JSON.stringify(signed)).not.toContain(recipient)
+})

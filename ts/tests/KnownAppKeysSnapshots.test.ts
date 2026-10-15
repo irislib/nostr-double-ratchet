@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   finalizeEvent,
   generateSecretKey,
@@ -241,4 +241,39 @@ describe("known AppKeys snapshots", () => {
       (snapshot) => snapshot.ownerPubkey === peerPubkey,
     )?.createdAt).toBe(100)
   })
+})
+
+it("awaits signed roster ingestion and retains original evidence across restart", async () => {
+  const storage = new InMemoryStorageAdapter()
+  const owner = publicKey(), secret = generateSecretKey(), peer = getPublicKey(secret), device = publicKey()
+  const event = finalizeEvent(new AppKeys([{ identityPubkey: device, createdAt: 10 }]).getEvent({ ownerPubkey: peer, createdAt: 100 }), secret)
+  const runtime = createRuntime(storage)
+  await runtime.initForOwner(owner)
+  await runtime.applyVerifiedAppKeysEvent(event)
+  expect(runtime.getKnownAppKeysEvents()).toContainEqual(structuredClone(event))
+  expect(runtime.getKnownDeviceIdentityPubkeysForOwner(peer)).toEqual([device])
+  await expect(runtime.applyVerifiedAppKeysEvent({ ...event, sig: '0'.repeat(128) })).rejects.toThrow()
+  runtime.close()
+  const restored = createRuntime(storage)
+  await restored.initForOwner(owner)
+  expect(restored.getKnownAppKeysEvents()).toContainEqual(structuredClone(event))
+})
+
+it("does not acknowledge an imported signed roster until its user record is durable", async () => {
+  const storage = new InMemoryStorageAdapter(), owner = publicKey(), secret = generateSecretKey(), peer = getPublicKey(secret)
+  const runtime = createRuntime(storage)
+  await runtime.initForOwner(owner)
+  const originalPut = storage.put.bind(storage)
+  const failure = vi.spyOn(storage, 'put').mockImplementation(async (key, value) => {
+    if (key.includes(`v1/user/${peer}`)) throw new Error('disk unavailable')
+    return originalPut(key, value)
+  })
+  const event = finalizeEvent(new AppKeys([{identityPubkey:publicKey(),createdAt:10}]).getEvent({ownerPubkey:peer,createdAt:100}), secret)
+  await expect(runtime.applyVerifiedAppKeysEvent(event)).rejects.toThrow('disk unavailable')
+  failure.mockRestore()
+  await runtime.applyVerifiedAppKeysEvent(event)
+  runtime.close()
+  const restored = createRuntime(storage)
+  await restored.initForOwner(owner)
+  expect(restored.getKnownAppKeysEvents()).toContainEqual(structuredClone(event))
 })
