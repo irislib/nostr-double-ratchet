@@ -62,7 +62,7 @@ jobs:
           EXPECTED_VERSION: ${{ inputs.version }}
         run: |
           [[ "$EXPECTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          package="package/nostr-double-ratchet-$EXPECTED_VERSION.tgz"
+          package="$GITHUB_WORKSPACE/package/nostr-double-ratchet-$EXPECTED_VERSION.tgz"
           test -f "$package"
           tar -xOf "$package" package/package.json > "$RUNNER_TEMP/npm-manifest.json"
           node --input-type=module <<'JS'
