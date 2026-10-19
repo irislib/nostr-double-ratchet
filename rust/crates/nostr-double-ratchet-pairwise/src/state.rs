@@ -395,10 +395,25 @@ impl PairwiseState {
         }
         self.seen_event_ids.push(event_id);
         if self.seen_event_ids.len() > limit {
-            let excess = self.seen_event_ids.len() - limit;
-            for removed in self.seen_event_ids.drain(0..excess) {
-                self.response_event_peers.remove(&removed);
-            }
+            // An active initiator session owns its authenticated response
+            // binding for its whole lifetime. Expiring that binding would make
+            // the next state commit invalid and permanently stop reception.
+            let active_responses = self
+                .peers
+                .values()
+                .flat_map(|peer| &peer.sessions)
+                .filter_map(|session| session.accepted_response_event_id.as_deref())
+                .collect::<BTreeSet<_>>();
+            let mut excess = self.seen_event_ids.len() - limit;
+            let response_event_peers = &mut self.response_event_peers;
+            self.seen_event_ids.retain(|seen| {
+                if excess == 0 || active_responses.contains(seen.as_str()) {
+                    return true;
+                }
+                excess -= 1;
+                response_event_peers.remove(seen);
+                false
+            });
         }
     }
 

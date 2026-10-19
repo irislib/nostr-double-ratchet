@@ -74,6 +74,116 @@ fn establish(
         .unwrap();
 }
 
+#[test]
+fn active_response_binding_survives_replay_window_eviction_and_restart() {
+    for window_size in [1, 2] {
+        let alice_keys = Keys::generate();
+        let bob_keys = Keys::generate();
+        let unrelated_keys = Keys::generate();
+        let store = Arc::new(MemoryStore::default());
+        let limits = RuntimeLimits {
+            max_seen_event_ids: window_size,
+            ..RuntimeLimits::default()
+        };
+        let mut alice = PairwiseManager::open(store.clone(), alice_keys.clone(), limits.clone())
+            .expect("initiator");
+        let mut bob = test_manager(&bob_keys);
+        establish(&mut alice, &mut bob, &alice_keys, &bob_keys);
+        let response: Event = bob
+            .state
+            .pending_actions
+            .iter()
+            .find_map(|action| match &action.kind {
+                PairwiseActionKind::OutOfBand { event_json, .. } => {
+                    Some(serde_json::from_str(event_json).unwrap())
+                }
+                _ => None,
+            })
+            .expect("authenticated response");
+
+        for index in 0..6 {
+            let now = 2_000_000_010 + index;
+            let sent = bob
+                .send_text(
+                    alice_keys.public_key(),
+                    "message after replay-window rollover",
+                    None,
+                    now,
+                    now * 1_000,
+                )
+                .unwrap();
+            let event: Event = bob
+                .state
+                .pending_actions
+                .iter()
+                .find_map(|action| match &action.kind {
+                    PairwiseActionKind::Publish { event_json, .. } => {
+                        let event: Event = serde_json::from_str(event_json).unwrap();
+                        (event.id.to_hex() == sent.outer_event_id).then_some(event)
+                    }
+                    _ => None,
+                })
+                .expect("published message");
+            alice
+                .process_event_at(&event, now)
+                .expect("receive after rollover");
+            assert_eq!(
+                alice
+                    .state
+                    .pending_actions
+                    .iter()
+                    .filter(|action| { matches!(action.kind, PairwiseActionKind::Delivery { .. }) })
+                    .count(),
+                1
+            );
+            assert!(alice.state.seen_event_ids.len() <= window_size);
+            assert!(alice.state.response_event_peers.len() <= window_size);
+
+            let action_ids = alice
+                .state
+                .pending_actions
+                .iter()
+                .map(|action| action.id.clone())
+                .collect::<Vec<_>>();
+            alice.ack_actions(&action_ids).unwrap();
+            drop(alice);
+            alice = PairwiseManager::open(store.clone(), alice_keys.clone(), limits.clone())
+                .expect("reopen after replay-window rollover");
+            alice
+                .process_out_of_band_response(&response, bob_keys.public_key(), now)
+                .expect("original response remains idempotent");
+            assert!(matches!(
+                alice.process_out_of_band_response(&response, unrelated_keys.public_key(), now),
+                Err(PairwiseError::PeerMismatch { .. })
+            ));
+            // With a one-entry window the active handshake occupies the entire
+            // cache. Consumed ratchet keys must still prevent message replay.
+            let _ = alice.process_event_at(&event, now);
+            assert!(!alice
+                .state
+                .pending_actions
+                .iter()
+                .any(|action| { matches!(action.kind, PairwiseActionKind::Delivery { .. }) }));
+        }
+
+        alice
+            .retire_peer(bob_keys.public_key())
+            .expect("retire peer");
+        let response_id = response.id.to_hex();
+        assert!(alice.state.response_event_peers.contains_key(&response_id));
+        for index in 0..window_size {
+            alice
+                .state
+                .push_seen_event(format!("{index:064x}"), window_size);
+        }
+        assert!(!alice.state.response_event_peers.contains_key(&response_id));
+        alice
+            .state
+            .validate(alice_keys.public_key(), &limits)
+            .expect("retired response bindings can be evicted");
+    }
+}
+
 fn encrypt_unchecked(
     sender: &mut PairwiseManager,
     peer: PublicKey,
