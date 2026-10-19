@@ -76,9 +76,6 @@ jobs:
           echo "NPM_TARBALL=$package" >> "$GITHUB_ENV"
           echo "NPM_INTEGRITY=sha512-$(openssl dgst -sha512 -binary "$package" | openssl base64 -A)" >> "$GITHUB_ENV"
 
-      - name: Validate publication
-        run: npm publish "$NPM_TARBALL" --dry-run --ignore-scripts --access public --tag latest
-
       - name: Check for an existing identical release
         id: existing
         env:
@@ -98,6 +95,10 @@ jobs:
             console.log('The identical tested package is already published.');
           }
           JS
+
+      - name: Validate publication
+        if: steps.existing.outputs.published != 'true'
+        run: npm publish "$NPM_TARBALL" --dry-run --ignore-scripts --access public --tag latest
 
       - name: Publish with npm trusted publishing
         if: ${{ !inputs.dry_run && steps.existing.outputs.published != 'true' }}
