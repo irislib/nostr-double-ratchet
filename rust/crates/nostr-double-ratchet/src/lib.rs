@@ -101,8 +101,8 @@ pub use session::{
 };
 #[cfg(feature = "full")]
 pub use session_manager::{
-    Delivery, DeviceRecordSnapshot, PreparedSend, ProcessedInviteResponse, PruneReport,
-    MessageSenderRecord, ReceivedMessage, RelayGap, SessionManager, SessionManagerSnapshot,
+    Delivery, DeviceRecordSnapshot, MessageSenderRecord, PreparedSend, ProcessedInviteResponse,
+    PruneReport, ReceivedMessage, RelayGap, SessionManager, SessionManagerSnapshot,
     UserRecordSnapshot,
 };
 #[cfg(feature = "full")]

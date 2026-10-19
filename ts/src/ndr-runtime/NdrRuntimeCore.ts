@@ -35,73 +35,43 @@ import {
 
 export abstract class NdrRuntimeCore {
   protected readonly nostrSubscribe: NostrSubscribe;
-
   protected readonly nostrPublish: NostrPublish;
-
   protected readonly nostrFetch?: NostrFetch;
-
   protected readonly storage: StorageAdapter;
-
   protected readonly sessionStorage: StorageAdapter;
-
   protected readonly groupStorage: StorageAdapter;
-
   protected readonly groupController: SessionGroupRuntime;
-
   protected readonly ownerIdentityKey?: Uint8Array;
-
   protected readonly appKeysFetchTimeoutMs: number;
-
   protected readonly appKeysFastTimeoutMs: number;
-
   protected readonly appKeysProfileIds = new Map<string, string>();
-
   protected appKeysManager: AppKeysManager | null = null;
-
   protected delegateManager: DelegateManager | null = null;
-
   protected sessionManager: SessionManager | null = null;
-
   protected appKeysInitPromise: Promise<void> | null = null;
-
   protected delegateInitPromise: Promise<void> | null = null;
-
   protected sessionManagerInitPromise: Promise<SessionManager> | null = null;
-
   protected appKeysSubscriptionCleanup: Unsubscribe | null = null;
-
   protected appKeysSubscriptionOwnerPubkey: string | null = null;
-
   protected directMessageSubscriptionCleanup: Unsubscribe | null = null;
-
   protected directMessageRecipientSubscriptionCleanup: Unsubscribe | null =
     null;
-
   protected directMessageSubscriptionAuthors: string[] = [];
-
   protected directMessageSubscriptionRecipient: string | null = null;
-
   protected directMessageSubscriptionLastChangeMs = 0;
-
   protected directMessageSubscriptionThrottleTimer: ReturnType<
     typeof setTimeout
   > | null = null;
-
   protected messagePushAuthorCleanup: Unsubscribe | null = null;
-
   protected sessionManagerEventsAvailableCleanup: Unsubscribe | null = null;
-
   protected readonly pendingSessionManagerEvents = new Set<Promise<void>>();
-
   protected readonly sessionManagerEmittedSubscriptions = new Map<
     string,
     Unsubscribe
   >();
-
   protected readonly stateListeners = new Set<
     (state: NdrRuntimeState) => void
   >();
-
   protected readonly sessionEventCallbacks = new Set<OnEventCallback>();
   protected readonly durableSessionHandlers = new RuntimeDurableSessionHandlers(
     () => this.sessionManager,

@@ -1,0 +1,93 @@
+name: Publish npm
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version to publish (must match master)
+        type: string
+        required: true
+      dry_run:
+        description: Validate without publishing
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-npm
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'irislib/nostr-double-ratchet' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - name: Find successful CI for this commit
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=master&event=push&head_sha=$GITHUB_SHA&status=success&per_page=1" --jq '.workflow_runs[0].id // empty')
+          if [[ -z "$run_id" ]]; then
+            echo "CI must pass on this exact master commit before publishing." >&2
+            exit 1
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Download the package tested by CI
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: npm-package-${{ github.sha }}
+          path: package
+          run-id: ${{ steps.ci.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Verify package identity and requested version
+        env:
+          EXPECTED_VERSION: ${{ inputs.version }}
+        run: |
+          [[ "$EXPECTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          package="package/nostr-double-ratchet-$EXPECTED_VERSION.tgz"
+          test -f "$package"
+          tar -xOf "$package" package/package.json > "$RUNNER_TEMP/npm-manifest.json"
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const manifest = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/npm-manifest.json`, 'utf8'));
+          assert.equal(manifest.name, 'nostr-double-ratchet');
+          assert.equal(manifest.version, process.env.EXPECTED_VERSION);
+          assert.equal(manifest.repository.url, `git+https://github.com/${process.env.GITHUB_REPOSITORY}.git`);
+          JS
+          echo "NPM_TARBALL=$package" >> "$GITHUB_ENV"
+
+      - name: Validate publication
+        run: npm publish "$NPM_TARBALL" --dry-run --ignore-scripts --access public --tag latest
+
+      - name: Publish with npm trusted publishing
+        if: ${{ !inputs.dry_run }}
+        run: npm publish "$NPM_TARBALL" --ignore-scripts --provenance --access public --tag latest
+
+      - name: Verify the published package
+        if: ${{ !inputs.dry_run }}
+        env:
+          EXPECTED_VERSION: ${{ inputs.version }}
+        run: |
+          expected=$(openssl dgst -sha512 -binary "$NPM_TARBALL" | openssl base64 -A)
+          actual=$(npm view "nostr-double-ratchet@$EXPECTED_VERSION" dist.integrity --registry=https://registry.npmjs.org)
+          test "$actual" = "sha512-$expected"
+          test "$(npm view nostr-double-ratchet dist-tags.latest --registry=https://registry.npmjs.org)" = "$EXPECTED_VERSION"

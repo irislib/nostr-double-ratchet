@@ -442,6 +442,28 @@ pnpm -C ts test:once
 pnpm -C ts bench:relay-churn
 ```
 
+### Publishing to npm
+
+The `Publish npm` GitHub Actions workflow publishes the exact tarball produced by
+a successful `CI` run on the selected `master` commit. CI installs that tarball in
+a fresh consumer project and checks that automatic publisher failures reach
+`onPublishError` without an unhandled rejection. All CI jobs, including Rust,
+formal checks, and interoperability tests, must pass before publication.
+
+Configure npm trusted publishing for `nostr-double-ratchet` with GitHub owner
+`irislib`, repository `nostr-double-ratchet`, workflow `publish-npm.yml`, and
+environment `npm`, allowing direct `npm publish`. No npm token secret is needed.
+The GitHub `npm` environment should permit deployments from `master` only.
+
+To release, update the version in `ts/package.json`, push `master`, and wait for
+CI. Run `Publish npm` from `master` with that version. Leave `dry_run` enabled to
+validate the package, then disable it to publish. Published versions cannot be
+overwritten; CI artifacts remain available for 30 days. The workflow verifies
+the registry tarball's integrity and `latest` tag after publishing.
+
+The package repository field identifies the GitHub build source for npm
+provenance; its homepage continues to link to the canonical hashtree source.
+
 ## Multi-Device Test Policy
 
 - Keep exactly one explicit same-second AppKeys regression test in the library.
