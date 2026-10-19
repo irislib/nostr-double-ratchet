@@ -118,9 +118,19 @@ re-implementing policy ad hoc.
   bootstrap, not normal startup/reopen.
 - Imported owner-key or `nsec` login on a fresh device must either register the current device or
   remain explicitly single-device.
-- First-device bootstrap can proceed from locally published AppKeys. Adding a new device to an
-  existing owner timeline should wait for relay-visible AppKeys before relying on public-invite
-  fanout.
+- `NdrRuntime.registerCurrentDevice`, `registerDeviceIdentity`, and
+  `ensureCurrentDeviceRegistered` confirm enrollment against signed relay snapshots,
+  including first-device bootstrap. A stale or conflicting result rejects with a
+  retryable setup error. Keep the selected transport and offer explicit retry.
+  Registration is not atomic across devices: simultaneous sign-ins may need sequential
+  retries. Another client's later write can still supersede a completed check.
+- Same-second conflicting membership cannot confirm registration. An interrupted or
+  failed local enrollment stays blocked across replay and restart until successful
+  confirmation. Retry adds only the requested device to fresh verified membership;
+  when equally new signed rosters conflict, retain only membership common to them.
+  Never restore every member of a stale prepared roster.
+- The lower-level `publishPreparedRegistration` rebases and publishes approval; its
+  caller remains responsible for confirmation when using this split preparation API.
 - After device registration or revocation, clients should refresh bootstrap state,
   subscriptions, and session routing.
 - When a new direct-message session author appears in a `session-current-*` or

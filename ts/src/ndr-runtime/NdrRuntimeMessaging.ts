@@ -367,6 +367,7 @@ export abstract class NdrRuntimeMessaging extends NdrRuntimeCore {
   protected abstract applyIncomingAppKeys(
     incomingAppKeys: AppKeys,
     incomingCreatedAt: number,
+    canonical?: boolean,
   ): Promise<"advanced" | "stale" | "merged_equal_timestamp">;
 
   protected abstract syncState(

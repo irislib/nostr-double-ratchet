@@ -27,8 +27,10 @@ import type {
   RevokeDeviceOptions,
 } from "../NdrRuntime.js";
 import { cloneAppKeys, now } from "./runtimeInternals.js";
+import { registrationConflict, registrationConflictKey, waitForRegistrationSnapshot } from "./registrationSnapshot.js";
 
 export abstract class NdrRuntimeRegistration extends NdrRuntimeMessaging {
+  private readonly unconfirmedRegistrations = new Set<string>();
   async prepareRegistration(
     options: PrepareRegistrationOptions,
   ): Promise<PreparedRegistration> {
@@ -37,9 +39,9 @@ export abstract class NdrRuntimeRegistration extends NdrRuntimeMessaging {
       throw new Error("DelegateManager not initialized");
     }
 
-    const baseKeys = await this.resolveBaseAppKeys(
+    const baseKeys = await this.resolveRegistrationBase(
       options.ownerPubkey,
-      options.timeoutMs,
+      options.timeoutMs ?? this.appKeysFetchTimeoutMs,
     );
     const appKeys = cloneAppKeys(baseKeys);
 
@@ -69,9 +71,9 @@ export abstract class NdrRuntimeRegistration extends NdrRuntimeMessaging {
   ): Promise<PreparedRegistration> {
     await this.initAppKeysManager();
 
-    const baseKeys = await this.resolveBaseAppKeys(
+    const baseKeys = await this.resolveRegistrationBase(
       options.ownerPubkey,
-      options.timeoutMs,
+      options.timeoutMs ?? this.appKeysFetchTimeoutMs,
     );
     const appKeys = cloneAppKeys(baseKeys);
     appKeys.addDevice({
@@ -103,17 +105,26 @@ export abstract class NdrRuntimeRegistration extends NdrRuntimeMessaging {
         appKeysManagerReady: this.state.appKeysManagerReady,
         sessionManagerReady: this.state.sessionManagerReady,
       });
-    const publishedEvent = await this.publishAppKeys(
-      prepared.appKeys,
-      prepared.ownerPubkey,
-    );
-    await this.appKeysManager?.setAppKeys(prepared.appKeys);
+    // Signing may happen long after preparation. Replay only this explicit
+    // addition onto the latest verified roster; stale membership can contain
+    // devices revoked while a confirmation dialog was open.
+    const appKeys = await this.resolveRegistrationBase(prepared.ownerPubkey);
+    const identity = prepared.newDeviceIdentity;
+    const target = prepared.appKeys.getAllDevices().find(device => device.identityPubkey === identity);
+    if (!target) throw new Error("Prepared registration does not include its device");
+    if (prepared.baseDevices.some(device => device.identityPubkey === identity) &&
+      !appKeys.getAllDevices().some(device => device.identityPubkey === identity)) {
+      throw registrationConflict();
+    }
+    appKeys.addDevice(target);
+    const labels = prepared.appKeys.getDeviceLabels(identity);
+    if (labels) appKeys.setDeviceLabels(identity, labels, labels.updatedAt);
+    this.unconfirmedRegistrations.add(identity);
+    const publishedEvent = await this.publishAppKeys(appKeys, prepared.ownerPubkey);
+    // A newer subscription update may have arrived while the signer/transport
+    // was awaited. The normal reducer preserves its membership and timestamp.
+    await this.applyIncomingAppKeys(appKeys, publishedEvent.created_at);
     this.feedSessionManagerEvent(publishedEvent);
-    this.syncState({
-      registeredDevices: prepared.devices,
-      hasLocalAppKeys: prepared.devices.length > 0,
-      lastAppKeysCreatedAt: publishedEvent.created_at ?? now(),
-    });
     return {
       createdAt: publishedEvent.created_at ?? now(),
       relayConfirmationRequired,
@@ -159,18 +170,16 @@ export abstract class NdrRuntimeRegistration extends NdrRuntimeMessaging {
     options: RegisterCurrentDeviceOptions,
   ): Promise<PublishPreparedRegistrationResult> {
     const prepared = await this.prepareRegistration(options);
+    // Persist the pending gate before local publication can install the device.
+    // Reopening during confirmation must not turn an interrupted attempt into success.
+    await this.storage.put(registrationConflictKey(prepared.newDeviceIdentity), this.state.lastAppKeysCreatedAt);
+    this.registrationConflictCreatedAt = this.state.lastAppKeysCreatedAt;
+    this.syncState({});
     const result = await this.publishPreparedRegistration(prepared);
-    if (result.relayConfirmationRequired) {
-      await this.waitForDeviceRegistrationOnRelay(
-        options.ownerPubkey,
-        prepared.newDeviceIdentity,
-        options.timeoutMs || this.appKeysFetchTimeoutMs,
-      );
-      await this.refreshOwnAppKeysFromRelay(
-        options.ownerPubkey,
-        options.timeoutMs || this.appKeysFastTimeoutMs,
-      ).catch(() => {});
-    }
+    await this.confirmRegistration(
+      options.ownerPubkey, prepared.newDeviceIdentity,
+      options.timeoutMs ?? this.appKeysFastTimeoutMs,
+    );
     return {
       createdAt: result.createdAt,
       relayConfirmationRequired: result.relayConfirmationRequired,
@@ -182,18 +191,53 @@ export abstract class NdrRuntimeRegistration extends NdrRuntimeMessaging {
   ): Promise<PublishPreparedRegistrationResult> {
     const prepared = await this.prepareRegistrationForIdentity(options);
     const result = await this.publishPreparedRegistration(prepared);
-    if (result.relayConfirmationRequired) {
-      await this.waitForDeviceRegistrationOnRelay(
-        options.ownerPubkey,
-        prepared.newDeviceIdentity,
-        options.timeoutMs || this.appKeysFetchTimeoutMs,
-      );
-      await this.refreshOwnAppKeysFromRelay(
-        options.ownerPubkey,
-        options.timeoutMs || this.appKeysFastTimeoutMs,
-      ).catch(() => {});
-    }
+    await this.confirmRegistration(
+      options.ownerPubkey, prepared.newDeviceIdentity,
+      options.timeoutMs ?? this.appKeysFastTimeoutMs,
+    );
     return result;
+  }
+
+  private async resolveRegistrationBase(owner: string, timeoutMs = this.appKeysFastTimeoutMs): Promise<AppKeys> {
+    const snapshot = await waitForRegistrationSnapshot(
+      owner, this.nostrSubscribe, timeoutMs, this.ownerIdentityKey,
+    );
+    if (snapshot && snapshot.event.created_at >= this.state.lastAppKeysCreatedAt) {
+      const base = snapshot.ambiguous ? new AppKeys(snapshot.commonDevices) : snapshot.appKeys;
+      await this.applyIncomingAppKeys(base, snapshot.event.created_at, true);
+      // A newer queued update may have won while persistence was awaited.
+      return cloneAppKeys(this.appKeysManager?.getAppKeys() ?? base);
+    }
+    return cloneAppKeys(this.appKeysManager?.getAppKeys() ?? new AppKeys());
+  }
+
+  private async confirmRegistration(owner: string, identity: string, timeoutMs: number): Promise<void> {
+    const snapshot = await waitForRegistrationSnapshot(
+      owner, this.nostrSubscribe, timeoutMs, this.ownerIdentityKey,
+    );
+    const update = snapshot && await this.applyIncomingAppKeys(
+      snapshot.ambiguous ? new AppKeys(snapshot.commonDevices) : snapshot.appKeys,
+      snapshot.event.created_at, true,
+    );
+    if (!snapshot || snapshot.ambiguous || update === "stale" ||
+      !snapshot.appKeys.getAllDevices().some(device => device.identityPubkey === identity) ||
+      !this.state.registeredDevices.some(device => device.identityPubkey === identity)) {
+      if (identity === this.state.currentDevicePubkey) {
+        const createdAt = this.state.lastAppKeysCreatedAt;
+        await this.storage.put(registrationConflictKey(identity), createdAt);
+        this.registrationConflictCreatedAt = createdAt;
+        this.syncState({});
+      }
+      // No automatic re-add: an exclusion could be a deliberate revocation.
+      // A caller can explicitly retry after the competing update has settled.
+      throw registrationConflict();
+    }
+    if (identity === this.state.currentDevicePubkey) {
+      await this.storage.del(registrationConflictKey(identity));
+      this.registrationConflictCreatedAt = null;
+    }
+    this.unconfirmedRegistrations.delete(identity);
+    this.syncState({});
   }
 
   async revokeDevice(options: RevokeDeviceOptions): Promise<number> {
@@ -206,7 +250,8 @@ export abstract class NdrRuntimeRegistration extends NdrRuntimeMessaging {
     timeoutMs?: number,
   ): Promise<boolean> {
     await this.initManagers();
-    if (this.state.isCurrentDeviceRegistered) {
+    if (this.state.isCurrentDeviceRegistered &&
+      !this.unconfirmedRegistrations.has(this.state.currentDevicePubkey ?? "")) {
       return false;
     }
 
@@ -325,12 +370,6 @@ export abstract class NdrRuntimeRegistration extends NdrRuntimeMessaging {
     appKeys: AppKeys,
     ownerPubkey: string,
   ): Promise<VerifiedEvent>;
-
-  protected abstract waitForDeviceRegistrationOnRelay(
-    ownerPubkey: string,
-    devicePubkey: string,
-    timeoutMs: number,
-  ): Promise<void>;
 
   protected abstract syncState(
     patch: Partial<

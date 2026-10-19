@@ -292,7 +292,11 @@ it("feeds local owner AppKeys into the session core before owner setup", async (
       drainEvents: () => [],
       hasPendingEvents: () => false,
     }
+    await runtime.getAppKeysManager()!.setAppKeys(new AppKeys([
+      { identityPubkey: "device-a", createdAt: 100 },
+    ]))
     await runtime.publishPreparedRegistration({
+      ownerPubkey,
       appKeys: new AppKeys([
         { identityPubkey: "device-a", createdAt: 100 },
         { identityPubkey: "device-b", createdAt: 101 },
@@ -301,7 +305,7 @@ it("feeds local owner AppKeys into the session core before owner setup", async (
         { identityPubkey: "device-a", createdAt: 100 },
         { identityPubkey: "device-b", createdAt: 101 },
       ],
-      baseDevices: [],
+      baseDevices: [{ identityPubkey: "device-a", createdAt: 100 }],
       newDeviceIdentity: "device-b",
     })
     feedEvent.mockClear()

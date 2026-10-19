@@ -1,3 +1,4 @@
+import { registrationConflictKey } from "./registrationSnapshot.js";
 import { RuntimeDurableSessionHandlers } from "./durableSessionHandlers.js";
 import { retireLegacyPrivateContactSync } from "../session-manager/retiredPrivateControls.js";
 import { AppKeys } from "../AppKeys.js";
@@ -77,6 +78,8 @@ export abstract class NdrRuntimeCore {
     () => this.sessionManager,
   );
   private legacyRetirementPromise: Promise<number> | null = null;
+
+  protected registrationConflictCreatedAt: number | null = null;
 
   protected state: NdrRuntimeState = {
     ownerPubkey: null,
@@ -350,6 +353,8 @@ export abstract class NdrRuntimeCore {
       });
       await manager.init();
       this.delegateManager = manager;
+      const conflict = await this.storage.get<number>(registrationConflictKey(manager.getIdentityPublicKey()));
+      this.registrationConflictCreatedAt = Number.isSafeInteger(conflict) && conflict! >= 0 ? conflict! : null;
       this.syncState({
         delegateManagerReady: true,
         currentDevicePubkey: manager.getIdentityPublicKey(),

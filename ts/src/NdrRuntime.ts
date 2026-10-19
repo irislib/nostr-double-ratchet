@@ -1,3 +1,4 @@
+import { registrationConflict } from "./ndr-runtime/registrationSnapshot.js";
 import {
   AppKeys,
   applyAppKeysSnapshotPreservingLabels,
@@ -96,6 +97,7 @@ export interface RegisterDeviceIdentityOptions extends PrepareRegistrationForIde
 export interface RevokeDeviceOptions extends PrepareRevocationOptions {}
 
 export class NdrRuntime extends NdrRuntimeRegistration {
+  private appKeysApplyQueue: Promise<void> = Promise.resolve();
   close(): void {
     this.stopAppKeysSubscription();
     this.messagePushAuthorCleanup?.();
@@ -270,6 +272,9 @@ export class NdrRuntime extends NdrRuntimeRegistration {
     operation: (manager: SessionManager) => Promise<T>,
   ): Promise<T> {
     const manager = await this.waitForSessionManager(ownerPubkey);
+    if (this.registrationConflictCreatedAt !== null) {
+      throw registrationConflict();
+    }
     try {
       return await operation(manager);
     } finally {
@@ -293,25 +298,41 @@ export class NdrRuntime extends NdrRuntimeRegistration {
   protected async applyIncomingAppKeys(
     incomingAppKeys: AppKeys,
     incomingCreatedAt: number,
+    canonical = false,
   ): Promise<"advanced" | "stale" | "merged_equal_timestamp"> {
     await this.initAppKeysManager();
-    const update = applyAppKeysSnapshotPreservingLabels({
-      currentAppKeys: this.appKeysManager?.getAppKeys(),
-      currentCreatedAt: this.state.lastAppKeysCreatedAt,
-      incomingAppKeys,
-      incomingCreatedAt,
-    });
-    if (update.decision === "stale") {
-      return update.decision;
-    }
+    const manager = this.appKeysManager!;
+    const apply = this.appKeysApplyQueue.then(async () => {
+      if (this.appKeysManager !== manager) return "stale" as const;
+      const update = applyAppKeysSnapshotPreservingLabels({
+        currentAppKeys: this.appKeysManager?.getAppKeys(),
+        currentCreatedAt: this.state.lastAppKeysCreatedAt,
+        incomingAppKeys,
+        incomingCreatedAt,
+      });
+      if (update.decision === "stale") {
+        return update.decision;
+      }
 
-    await this.appKeysManager?.setAppKeys(update.appKeys);
-    this.syncState({
-      registeredDevices: update.appKeys.getAllDevices(),
-      hasLocalAppKeys: update.appKeys.getAllDevices().length > 0,
-      lastAppKeysCreatedAt: update.createdAt,
+      if (canonical) {
+        const devices = incomingAppKeys.getAllDevices();
+        const keys = new Set(devices.map(device => device.identityPubkey));
+        update.appKeys = new AppKeys(devices, update.appKeys.getAllDeviceLabels().filter(
+          labels => keys.has(labels.identityPubkey),
+        ));
+      }
+
+      await manager.setAppKeys(update.appKeys);
+      if (this.appKeysManager !== manager) return "stale" as const;
+      this.syncState({
+        registeredDevices: update.appKeys.getAllDevices(),
+        hasLocalAppKeys: update.appKeys.getAllDevices().length > 0,
+        lastAppKeysCreatedAt: update.createdAt,
+      });
+      return update.decision;
     });
-    return update.decision;
+    this.appKeysApplyQueue = apply.then(() => {}, () => {});
+    return apply;
   }
 
   protected async ensureAppKeysProfileId(ownerPubkey: string): Promise<string> {
@@ -344,29 +365,6 @@ export class NdrRuntime extends NdrRuntimeRegistration {
     );
   }
 
-  protected async waitForDeviceRegistrationOnRelay(
-    ownerPubkey: string,
-    devicePubkey: string,
-    timeoutMs: number,
-  ): Promise<void> {
-    const appKeys = await AppKeys.waitFor(
-      ownerPubkey,
-      this.nostrSubscribe,
-      timeoutMs,
-      this.ownerIdentityKey,
-    );
-    const isAuthorized =
-      appKeys
-        ?.getAllDevices()
-        .some((device) => device.identityPubkey === devicePubkey) ?? false;
-
-    if (!isAuthorized) {
-      throw new Error(
-        `Relay AppKeys for ${ownerPubkey} do not include current device ${devicePubkey}`,
-      );
-    }
-  }
-
   protected syncState(
     patch: Partial<
       Omit<
@@ -393,6 +391,9 @@ export class NdrRuntime extends NdrRuntimeRegistration {
     this.state = {
       ...nextState,
       ...derived,
+      ...(nextState.currentDevicePubkey && this.registrationConflictCreatedAt !== null
+        ? { isCurrentDeviceRegistered: false, requiresDeviceRegistration: true, canSendPrivateMessages: false }
+        : {}),
     };
     for (const listener of this.stateListeners) {
       listener(this.getState());

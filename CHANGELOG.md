@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## TypeScript 0.0.179 - 2026-10-20
+
+- Rebase prepared device registration onto fresh verified membership, adding only
+  the requested device so stale preparation cannot restore removed siblings.
+- Confirm high-level enrollment against signed relay snapshots, including the
+  first device. Conflicting or stale evidence returns a retryable setup error;
+  interrupted or failed authorization remains blocked across replay and restart.
+- Preserve newer roster updates during asynchronous signing and storage writes.
+  Concurrent enrollment remains a bounded conflict check, not an atomic operation;
+  applications should offer explicit retry without changing encryption protocols.
+- Existing wire formats and Rust APIs are unchanged.
+
 ## TypeScript 0.0.178 - 2026-10-19
 
 - Add optional `createPersistentNostrOutbox` hooks for durable runtime publication:
