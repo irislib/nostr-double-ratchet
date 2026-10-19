@@ -74,12 +74,33 @@ jobs:
           assert.equal(manifest.repository.url, `git+https://github.com/${process.env.GITHUB_REPOSITORY}.git`);
           JS
           echo "NPM_TARBALL=$package" >> "$GITHUB_ENV"
+          echo "NPM_INTEGRITY=sha512-$(openssl dgst -sha512 -binary "$package" | openssl base64 -A)" >> "$GITHUB_ENV"
 
       - name: Validate publication
         run: npm publish "$NPM_TARBALL" --dry-run --ignore-scripts --access public --tag latest
 
+      - name: Check for an existing identical release
+        id: existing
+        env:
+          EXPECTED_VERSION: ${{ inputs.version }}
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { appendFileSync } from 'node:fs';
+          const response = await fetch(`https://registry.npmjs.org/nostr-double-ratchet/${process.env.EXPECTED_VERSION}`, { signal: AbortSignal.timeout(15000) });
+          if (response.status === 404) {
+            appendFileSync(process.env.GITHUB_OUTPUT, 'published=false\n');
+          } else {
+            assert.ok(response.ok, `Registry returned ${response.status}`);
+            const published = await response.json();
+            assert.equal(published.dist.integrity, process.env.NPM_INTEGRITY, 'Published version differs from the tested artifact');
+            appendFileSync(process.env.GITHUB_OUTPUT, 'published=true\n');
+            console.log('The identical tested package is already published.');
+          }
+          JS
+
       - name: Publish with npm trusted publishing
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && steps.existing.outputs.published != 'true' }}
         run: npm publish "$NPM_TARBALL" --ignore-scripts --provenance --access public --tag latest
 
       - name: Verify the published package
@@ -87,7 +108,27 @@ jobs:
         env:
           EXPECTED_VERSION: ${{ inputs.version }}
         run: |
-          expected=$(openssl dgst -sha512 -binary "$NPM_TARBALL" | openssl base64 -A)
-          actual=$(npm view "nostr-double-ratchet@$EXPECTED_VERSION" dist.integrity --registry=https://registry.npmjs.org)
-          test "$actual" = "sha512-$expected"
-          test "$(npm view nostr-double-ratchet dist-tags.latest --registry=https://registry.npmjs.org)" = "$EXPECTED_VERSION"
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { setTimeout } from 'node:timers/promises';
+          const url = 'https://registry.npmjs.org/nostr-double-ratchet';
+          for (let attempt = 0; attempt < 18; attempt += 1) {
+            const response = await fetch(`${url}/${process.env.EXPECTED_VERSION}`, { signal: AbortSignal.timeout(15000) });
+            if (response.ok) {
+              const published = await response.json();
+              assert.equal(published.dist.integrity, process.env.NPM_INTEGRITY, 'Registry tarball differs from the tested artifact');
+              const latest = await fetch(`${url}/latest`, { signal: AbortSignal.timeout(15000) });
+              if (latest.ok && (await latest.json()).version === process.env.EXPECTED_VERSION) {
+                console.log('Published package integrity and latest tag verified.');
+                process.exit(0);
+              }
+            } else {
+              assert.ok(response.status === 404 || response.status >= 500, `Registry returned ${response.status}`);
+            }
+            if (attempt < 17) {
+              console.log('Waiting for npm registry processing...');
+              await setTimeout(10000);
+            }
+          }
+          throw new Error('npm did not expose the expected package and latest tag within the verification window');
+          JS
