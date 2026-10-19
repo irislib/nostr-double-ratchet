@@ -81,6 +81,7 @@ const runtime = new NdrRuntime({
 
 await runtime.initForOwner(ownerPublicKey);
 await runtime.ensureCurrentDeviceRegistered(ownerPublicKey);
+await runtime.republishInvite();
 
 runtime.onSessionEvent((event, from) => {
   console.log(`${from}: ${event.content}`);
@@ -125,6 +126,37 @@ envelopes after restart or connectivity changes and deletes them only after deli
 acknowledged. A failed enqueue rejects the local handoff and retains queued direct messages;
 a transport rejection is observed by `onPublishError`, whose exceptions are isolated.
 Without an enqueue hook, transport failures have no library-owned durable retry guarantee.
+
+For a small web client, `createPersistentNostrOutbox` provides those hooks using the
+same storage adapter. Give each account its own storage namespace (or `keyPrefix`):
+
+```typescript
+import { createPersistentNostrOutbox, NdrRuntime } from "nostr-double-ratchet";
+
+const outbox = createPersistentNostrOutbox({
+  storage,
+  publish: publishSignedEvent, // Resolve with the exact event after a relay ACK.
+  onError: ({ error }) => reportDeliveryFailure(error),
+});
+const runtime = new NdrRuntime({
+  storage, nostrSubscribe, nostrFetch, nostrSign: signOwnerEvent,
+  nostrEnqueue: outbox.enqueue,
+  nostrPublish: outbox.publish,
+});
+void outbox.retry(); // Restore pending envelopes; also call on connectivity changes.
+// On logout: runtime.close(); await outbox.close();
+```
+
+The optional outbox preserves signed envelopes and their local context until a
+relay accepts them. It limits concurrent publication (four by default), deduplicates
+in-flight events, continues past individual failures, and retries only while rows
+remain pending. An empty outbox has no timer or repeated storage scans. The host's
+publish function must reject on timeout and must not resolve merely for queueing.
+`retry()` is awaitable; `close()` stops retries and late ACK effects without waiting
+for stalled network calls. An optional async `onPublished` callback can save delivery
+status before removal; it must be idempotent because a failed write is retried.
+Use one outbox instance per storage prefix. The host still owns account guards,
+relay selection, connectivity events and publication policies such as deleted chats.
 
 For compatibility, an **unsigned** event without `nostrSign` still awaits the legacy
 `nostrPublish` result because that callback also supplies its signature. Supply a separate
@@ -201,6 +233,7 @@ Reference web integrations do this:
    and direct-message authors trigger bounded relay backfill immediately.
 3. Call `initForOwner(ownerPubkey)`, then `ensureCurrentDeviceRegistered(ownerPubkey)` or
    `registerCurrentDevice(...)` when owner-key logins should participate in multi-device fanout.
+   Then call `republishInvite()` so peers can discover this device's session invitation.
 4. Attach `onSessionEvent(...)` / `onGroupEvent(...)` once for app lifetime.
 5. Optionally call `setupUser(peerPubkey)` before opening a chat or creating a group to prewarm
    subscriptions and bootstrap.

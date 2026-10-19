@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## TypeScript 0.0.178 - 2026-10-19
+
+- Add optional `createPersistentNostrOutbox` hooks for durable runtime publication:
+  preserve exact signed envelopes until relay acknowledgment, bound concurrent
+  sends, retry after restart, and stop background work when closed or empty.
+- Keep independent queued messages moving after individual delivery failures and
+  support an idempotent application delivery-status callback before removal.
+- Document explicit invite publication after device registration. Existing runtime
+  defaults, wire messages, and Rust APIs are unchanged.
+
 ## Rust 0.0.170 - 2026-10-04
 
 - Add resumable group decryption with a caller-supplied trial budget. Searches
