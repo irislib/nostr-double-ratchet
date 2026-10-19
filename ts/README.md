@@ -79,16 +79,16 @@ const runtime = new NdrRuntime({
   storage,
 });
 
-await runtime.initForOwner(ownerPublicKey);
-await runtime.ensureCurrentDeviceRegistered(ownerPublicKey);
-await runtime.republishInvite();
-
 runtime.onSessionEvent((event, from) => {
   console.log(`${from}: ${event.content}`);
 });
 runtime.onGroupEvent((event) => {
   console.log(`group ${event.groupId}: ${event.inner.content}`);
 });
+
+await runtime.initForOwner(ownerPublicKey);
+await runtime.ensureCurrentDeviceRegistered(ownerPublicKey);
+await runtime.republishInvite();
 
 const groupManager = await runtime.waitForGroupManager(ownerPublicKey);
 await runtime.sendMessage(recipientPubkey, "Hello!");
@@ -231,10 +231,11 @@ Reference web integrations do this:
 2. Wrap `nostrSubscribe` with `RuntimeSubscriptionTracker` +
    `buildRuntimeBackfillFilters(...)` so newly added AppKeys authors, invite-response recipients,
    and direct-message authors trigger bounded relay backfill immediately.
-3. Call `initForOwner(ownerPubkey)`, then `ensureCurrentDeviceRegistered(ownerPubkey)` or
+3. Attach `onDurableSessionEvent(...)` / `onSessionEvent(...)` / `onGroupEvent(...)`
+   before initialization so restored inbox rows and early incoming messages have consumers.
+4. Call `initForOwner(ownerPubkey)`, then `ensureCurrentDeviceRegistered(ownerPubkey)` or
    `registerCurrentDevice(...)` when owner-key logins should participate in multi-device fanout.
    Then call `republishInvite()` so peers can discover this device's session invitation.
-4. Attach `onSessionEvent(...)` / `onGroupEvent(...)` once for app lifetime.
 5. Optionally call `setupUser(peerPubkey)` before opening a chat or creating a group to prewarm
    subscriptions and bootstrap.
 
