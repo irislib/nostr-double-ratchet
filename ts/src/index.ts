@@ -23,3 +23,5 @@ export * from "./notificationPreview.js"
 export * from "./publishing.js"
 export * from "./PersistentNostrOutbox.js"
 export { METADATA_PRIVACY_VERSION, METADATA_PRIVACY_TAG, hasMetadataPrivacyVersion } from "./metadataPrivacy.js"
+
+export * from "./PrivateGroupDelivery.js"

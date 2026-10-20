@@ -25,6 +25,8 @@ import {
 import type { OnEventMeta } from "./session-manager/types.js";
 import type { VerifiedEvent } from "nostr-tools";
 import { createNostrPublisher } from "./publishing.js";
+import { PRIVATE_GROUP_DELIVERY_KIND, parsePrivateGroupDelivery,
+  privateGroupDeliverySenderStatus, previewPrivateGroupDelivery } from "./PrivateGroupDelivery.js";
 
 export interface SendGroupEventOptions {
   nowMs?: number;
@@ -76,8 +78,11 @@ export class SessionGroupRuntime {
   private groupManagerInitPromise: Promise<GroupManager> | null = null;
   private sessionManager: SessionManager | null = null;
   private sessionBridgeCleanup: Unsubscribe | null = null;
+  private privateDeliveryCleanup: Unsubscribe | null = null;
+  private deliveryRetryTimer?: ReturnType<typeof setTimeout>;
+  private readonly committingPrivateEvents = new Set<string>();
   private readonly groupEventCallbacks = new Set<
-    (event: GroupDecryptedEvent) => void
+    (event: GroupDecryptedEvent) => void | Promise<void>
   >();
 
   constructor(options: SessionGroupRuntimeOptions) {
@@ -131,7 +136,7 @@ export class SessionGroupRuntime {
         nostrSubscribe: this.nostrSubscribe,
         nostrFetch: this.nostrFetch,
         onDecryptedEvent: (event) => {
-          this.emitGroupEvent(event);
+          if (!this.committingPrivateEvents.has(event.outerEventId)) void this.emitGroupEvent(event).catch(() => {});
         },
       });
       this.groupManager = groupManager;
@@ -149,8 +154,9 @@ export class SessionGroupRuntime {
     return this.waitForManager(ownerPubkey);
   }
 
-  onGroupEvent(callback: (event: GroupDecryptedEvent) => void): Unsubscribe {
+  onGroupEvent(callback: (event: GroupDecryptedEvent) => void | Promise<void>): Unsubscribe {
     this.groupEventCallbacks.add(callback);
+    void this.sessionManager?.flushDurableSessionEvents();
     return () => {
       this.groupEventCallbacks.delete(callback);
     };
@@ -167,6 +173,15 @@ export class SessionGroupRuntime {
 
     this.clearSessionBridge();
     this.sessionManager = manager;
+    if (manager && this.groupManager) {
+      const groups = this.groupManager;
+      this.privateDeliveryCleanup = manager.onDurableEvent([PRIVATE_GROUP_DELIVERY_KIND], async (event, sender, meta) => {
+        const active = () => this.sessionManager === manager && this.groupManager === groups;
+        if (!active()) throw new Error("Inactive group delivery handler");
+        await this.processPrivateDelivery(event, meta?.senderOwnerPubkey || sender);
+        if (!active()) throw new Error("Inactive group delivery handler");
+      });
+    }
 
     if (!manager || !this.groupManager || !bridgeSessionEvents) {
       return;
@@ -181,13 +196,13 @@ export class SessionGroupRuntime {
     const senderOwnerPubkey = meta?.senderOwnerPubkey || from;
     const senderDevicePubkey = meta?.senderDevicePubkey || event.pubkey;
     if (this.shouldEmitPairwiseGroupEvent(event, senderDevicePubkey)) {
-      this.emitGroupEvent(
+      void this.emitGroupEvent(
         this.buildPairwiseGroupEvent(
           event,
           senderOwnerPubkey,
           senderDevicePubkey,
         ),
-      );
+      ).catch(() => {});
     }
     void this.groupManager?.handleIncomingSessionEvent(
       event,
@@ -199,6 +214,7 @@ export class SessionGroupRuntime {
   async upsertGroup(group: GroupData, ownerPubkey?: string): Promise<void> {
     const manager = await this.waitForManager(ownerPubkey);
     await manager.upsertGroup(group);
+    await this.flushPrivateDeliveries();
   }
 
   async syncGroups(groups: GroupData[], ownerPubkey?: string): Promise<void> {
@@ -208,10 +224,9 @@ export class SessionGroupRuntime {
       await manager.upsertGroup(group);
     }
     for (const groupId of manager.managedGroupIds()) {
-      if (!nextGroupIds.has(groupId)) {
-        manager.removeGroup(groupId);
-      }
+      if (!nextGroupIds.has(groupId)) manager.removeGroup(groupId);
     }
+    await this.flushPrivateDeliveries();
   }
 
   removeGroup(groupId: string): void {
@@ -240,7 +255,7 @@ export class SessionGroupRuntime {
     opts: SendGroupEventOptions = {},
   ): Promise<{ outer: VerifiedEvent; inner: Rumor }> {
     const groupManager = await this.waitForManager();
-    return groupManager.sendEvent(groupId, event, {
+    const result = await groupManager.sendEvent(groupId, event, {
       nowMs: opts.nowMs,
       sendPairwise: async (recipientOwnerPubkey, rumor) => {
         const manager = await this.waitForSessionManagerFn();
@@ -248,6 +263,8 @@ export class SessionGroupRuntime {
       },
       publishOuter: this.nostrPublish,
     });
+    await this.flushPrivateDeliveries();
+    return result;
   }
 
   async sendGroupMessage(
@@ -267,6 +284,8 @@ export class SessionGroupRuntime {
 
   close(): void {
     this.clearSessionBridge();
+    clearTimeout(this.deliveryRetryTimer);
+    this.deliveryRetryTimer = undefined;
     this.groupManager?.destroy();
     this.groupManager = null;
     this.groupManagerInitPromise = null;
@@ -275,6 +294,8 @@ export class SessionGroupRuntime {
   }
 
   private clearSessionBridge(): void {
+    this.privateDeliveryCleanup?.();
+    this.privateDeliveryCleanup = null;
     this.sessionBridgeCleanup?.();
     this.sessionBridgeCleanup = null;
   }
@@ -324,10 +345,56 @@ export class SessionGroupRuntime {
     };
   }
 
-  private emitGroupEvent(event: GroupDecryptedEvent): void {
-    for (const callback of this.groupEventCallbacks) {
-      callback(event);
+  private async emitGroupEvent(event: GroupDecryptedEvent): Promise<void> {
+    for (const callback of this.groupEventCallbacks) await callback(event);
+  }
+
+  private async flushPrivateDeliveries(): Promise<void> {
+    clearTimeout(this.deliveryRetryTimer);
+    this.deliveryRetryTimer = undefined;
+    const manager = this.groupManager;
+    if (!manager) return;
+    let pending = true;
+    try {
+      pending = await manager.flushPrivateDeliveries(async (recipient, rumor) => {
+        if (this.groupManager !== manager) throw new Error("Inactive group fanout");
+        const sessions = await this.waitForSessionManagerFn();
+        if (this.groupManager !== manager) throw new Error("Inactive group fanout");
+        await sessions.sendEvent(recipient, rumor, { includeLocalSiblings: false });
+      });
+    } finally {
+      if (pending && this.groupManager === manager) {
+        this.deliveryRetryTimer = setTimeout(() => { void this.flushPrivateDeliveries().catch(() => {}); }, 5000);
+        this.deliveryRetryTimer.unref?.();
+      }
     }
+  }
+
+  private async processPrivateDelivery(rumor: Rumor, senderOwnerPubkey: string): Promise<void> {
+    const outer = parsePrivateGroupDelivery(rumor);
+    if (!outer) return;
+    const manager = this.groupManager;
+    if (!manager) throw new Error("Group delivery waits for group state");
+    const group = manager.groupForSenderEvent(outer.pubkey);
+    if (!group) throw new Error("Group delivery waits for sender keys");
+    const opts = { storage: this.groupStorage, ourOwnerPubkey: this.getOwnerPubkey()!,
+      ourDevicePubkey: this.getCurrentDevicePubkey()!, group, event: outer, senderOwnerPubkey };
+    const status = await privateGroupDeliverySenderStatus(opts);
+    if (status === "rejected") return;
+    if (status !== "authorized") throw new Error("Group delivery waits for authenticated sender mapping");
+    const cacheKey = `v1/private-group-delivery/${opts.ourOwnerPubkey}/${outer.id}`;
+    let decrypted = await this.groupStorage.get<GroupDecryptedEvent>(cacheKey);
+    if (!decrypted) {
+      decrypted = await previewPrivateGroupDelivery(opts) || undefined;
+      if (!decrypted) throw new Error("Group delivery waits for decryption keys");
+      await this.groupStorage.put(cacheKey, decrypted);
+    }
+    // The saved receive ratchet retains 21113 until application persistence succeeds.
+    if (!this.groupEventCallbacks.size) throw new Error("Group delivery waits for application handler");
+    await this.emitGroupEvent(decrypted);
+    this.committingPrivateEvents.add(outer.id);
+    try { await manager.handleOuterEvent(outer); }
+    finally { this.committingPrivateEvents.delete(outer.id); }
   }
 }
 

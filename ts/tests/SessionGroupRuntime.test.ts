@@ -9,6 +9,12 @@ class FakeSessionManager {
   readonly devicePubkey: string;
   private readonly callbacks = new Set<OnEventCallback>();
   peer: FakeSessionManager | null = null;
+  private durable?: OnEventCallback;
+  onDurableEvent(_kinds: readonly number[], callback: OnEventCallback) {
+    this.durable = callback;
+    return () => { this.durable = undefined; };
+  }
+  async flushDurableSessionEvents() {}
 
   constructor(ownerPubkey: string, devicePubkey: string) {
     this.ownerPubkey = ownerPubkey;
@@ -34,6 +40,7 @@ class FakeSessionManager {
     senderOwnerPubkey: string,
     senderDevicePubkey: string,
   ): void {
+    if (rumor.kind === 21113) return;
     for (const callback of this.callbacks) {
       callback(rumor, senderOwnerPubkey, {
         senderOwnerPubkey,

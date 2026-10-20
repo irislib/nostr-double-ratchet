@@ -5,7 +5,7 @@ import type {
 } from "./types.js";
 
 export const DEFAULT_DURABLE_SESSION_KINDS = [
-  10449, 10450, 10452, 10453,
+  10449, 10450, 10452, 10453, 21113,
 ] as const;
 type Registration = { kinds: Set<number>; callback: OnDurableEventCallback };
 type RecordWithInbox = {

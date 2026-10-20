@@ -1,3 +1,4 @@
+import { captureGroupCiphertext } from "./helpers/groupCiphertext.js";
 import { describe, expect, it, vi } from "vitest";
 import type { Filter, VerifiedEvent } from "nostr-tools";
 import { generateSecretKey, getPublicKey } from "nostr-tools";
@@ -56,7 +57,7 @@ it("suppresses local-device one-to-many outer echoes by default", async () => {
     );
 
     let outer: VerifiedEvent | null = null;
-    await manager.sendMessage(groupId, "local-device-message", {
+    await captureGroupCiphertext(manager, "sendMessage", groupId, "local-device-message", {
       sendPairwise: async () => {},
       publishOuter: async (event) => {
         outer = event;
@@ -106,7 +107,7 @@ it("purges removed-member sender mappings and blocks future outer delivery", asy
 
     let firstDistribution: Rumor | null = null;
     let firstOuter: VerifiedEvent | null = null;
-    await alice.sendMessage("before-revocation", {
+    await captureGroupCiphertext(alice, "sendMessage", "before-revocation", {
       sendPairwise: async (_to, rumor) => {
         firstDistribution = rumor;
       },
@@ -122,18 +123,17 @@ it("purges removed-member sender mappings and blocks future outer delivery", asy
     );
     expect(drained).toEqual([]);
     const liveFilters = filters.filter((filter) => !("since" in filter));
-    expect(liveFilters).toHaveLength(1);
-    expect(liveFilters[0]!.authors).toEqual([firstOuter!.pubkey]);
+    expect(liveFilters).toEqual([]);
 
     const before = await manager.handleOuterEvent(firstOuter!);
     expect(before?.inner.content).toBe("before-revocation");
 
     await manager.upsertGroup(makeGroup(groupId, [bobOwnerPk], [bobOwnerPk]));
-    expect(unsubscribeCalls).toBe(1);
-    expect(filters.filter((filter) => !("since" in filter))).toHaveLength(1);
+    expect(unsubscribeCalls).toBe(0);
+    expect(filters).toEqual([]);
 
     let secondOuter: VerifiedEvent | null = null;
-    await alice.sendMessage("after-revocation", {
+    await captureGroupCiphertext(alice, "sendMessage", "after-revocation", {
       sendPairwise: async () => {},
       publishOuter: async (outer) => {
         secondOuter = outer;
@@ -156,6 +156,6 @@ it("purges removed-member sender mappings and blocks future outer delivery", asy
       aliceDevicePk,
     );
     expect(drainedAfterRemoval).toEqual([]);
-    expect(filters.filter((filter) => !("since" in filter))).toHaveLength(1);
+    expect(filters).toEqual([]);
   });
 });

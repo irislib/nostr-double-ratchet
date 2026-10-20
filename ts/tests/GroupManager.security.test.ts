@@ -1,3 +1,4 @@
+import { captureGroupCiphertext } from "./helpers/groupCiphertext.js";
 import { describe, expect, it } from "vitest";
 import { generateSecretKey, getPublicKey, type VerifiedEvent } from "nostr-tools";
 import { Group, GroupManager, type GroupData } from "../src/Group";
@@ -29,7 +30,7 @@ describe("GroupManager outer event authentication", () => {
       });
       await bob.upsertGroup(data);
       let distribution: Rumor | undefined;
-      const { outer } = await alice.sendMessage("authentic message", {
+      const { outer } = await captureGroupCiphertext(alice, "sendMessage", "authentic message", {
         sendPairwise: async (_recipient, rumor) => { distribution = rumor; },
         publishOuter: async () => {},
       });

@@ -420,55 +420,11 @@ export abstract class GroupManagerOperations extends GroupManagerState {
   }
 
   async syncOuterSubscription(): Promise<void> {
-    if (!this.nostrSubscribe && !this.nostrFetch) return;
-
-    let authors = Array.from(this.senderEventToGroup.keys());
-    if (this.suppressLocalDeviceEcho && authors.length > 0) {
-      const localSenderEvents = await this.listLocalSenderEventPubkeys();
-      authors = authors.filter((author) => !localSenderEvents.has(author));
-    }
-    authors.sort();
-    const addedAuthors = authors.filter(
-      (author) => !this.outerAuthors.includes(author),
-    );
-    const authorsKey = authors.join(",");
-    if (authorsKey === this.outerAuthorsKey) return;
-
-    try {
-      this.outerUnsubscribe?.();
-    } catch {
-      // ignore teardown errors
-    }
+    // Shared author queries correlate group membership, including on authenticated relays.
+    this.outerUnsubscribe?.();
     this.outerUnsubscribe = null;
-    this.outerAuthorsKey = authorsKey;
-    this.outerAuthors = authors;
-
-    if (authors.length === 0) return;
-
-    if (!this.nostrSubscribe) {
-      this.startOuterBackfill(addedAuthors);
-      return;
-    }
-
-    try {
-      this.outerUnsubscribe = this.nostrSubscribe(
-        {
-          kinds: [this.oneToMany.outerEventKind()],
-          authors,
-        },
-        (event) => {
-          void this.handleOuterEvent(event).catch((error) => {
-            this.reportError(error, {
-              operation: "handleOuterEvent",
-              senderEventPubkey: event.pubkey,
-              eventId: event.id,
-            });
-          });
-        },
-      );
-      this.startOuterBackfill(addedAuthors);
-    } catch (error) {
-      this.reportError(error, { operation: "syncOuterSubscription" });
-    }
+    this.outerAuthors = [];
+    this.outerAuthorsKey = "";
+    this.clearOuterBackfills();
   }
 }

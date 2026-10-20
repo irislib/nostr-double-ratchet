@@ -1,3 +1,4 @@
+import { captureGroupCiphertext } from "./helpers/groupCiphertext.js";
 import { describe, expect, it } from "vitest";
 import {
   generateSecretKey,
@@ -230,7 +231,7 @@ describe("sender-key repair requests", () => {
 
     const distributions: Array<{ to: string; rumor: Rumor }> = [];
     const published: VerifiedEvent[] = [];
-    await alice.sendMessage("repair me", {
+    await captureGroupCiphertext(alice, "sendMessage", "repair me", {
       nowMs: 1_700_000_000_000,
       sendPairwise: async (to, rumor) => distributions.push({ to, rumor }),
       publishOuter: async (event) => {
@@ -274,7 +275,7 @@ describe("sender-key repair requests", () => {
       parseSenderKeyRepairRequestRumor(aliceRepairEvents[0]!.inner),
     ).toEqual(request);
 
-    await alice.sendMessage("sender chain moved on", {
+    await captureGroupCiphertext(alice, "sendMessage", "sender chain moved on", {
       nowMs: 1_700_000_002_000,
       sendPairwise: async () => {},
       publishOuter: async () => {},
@@ -328,7 +329,7 @@ describe("sender-key repair requests", () => {
     });
 
     const published: VerifiedEvent[] = [];
-    await alice.sendMessage("before removal", {
+    await captureGroupCiphertext(alice, "sendMessage", "before removal", {
       sendPairwise: async () => {},
       publishOuter: async (event) => {
         published.push(event);
@@ -379,7 +380,7 @@ describe("sender-key repair requests", () => {
 
     const distributions: Array<{ to: string; rumor: Rumor }> = [];
     const published: VerifiedEvent[] = [];
-    await alice.sendMessage("real message", {
+    await captureGroupCiphertext(alice, "sendMessage", "real message", {
       nowMs: 1_700_000_020_000,
       sendPairwise: async (to, rumor) => distributions.push({ to, rumor }),
       publishOuter: async (event) => {

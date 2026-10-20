@@ -186,7 +186,7 @@ it("initializes, registers, sends direct and group messages while every relay AC
     bob.runtime.onGroupEvent((event) => { groups.push(event.inner.content) })
     const groupMessage = await alice.runtime.sendGroupMessage(created.group.id, "group without ACK")
     expect(groupMessage.inner.content).toBe("group without ACK")
-    expect(alice.contexts.get(groupMessage.outer.id)).toEqual({ groupId: created.group.id })
+    expect(alice.contexts.has(groupMessage.outer.id)).toBe(false)
     expect([...alice.contexts.values()].filter(context => context?.groupId === created.group.id).length).toBeGreaterThanOrEqual(2)
     await vi.waitFor(() => expect(groups).toContain("group without ACK"))
     await alice.runtime.rotateInvite()

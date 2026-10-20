@@ -74,6 +74,23 @@ export interface CreateGroupResult {
 }
 
 export class GroupManager extends GroupManagerBackfill {
+  getGroup(groupId: string): GroupData | undefined {
+    return this.groups.get(groupId)?.data;
+  }
+
+  groupForSenderEvent(senderEventPubkey: string): GroupData | undefined {
+    const id = this.senderEventToGroup.get(senderEventPubkey);
+    return id ? this.getGroup(id) : undefined;
+  }
+
+  async flushPrivateDeliveries(sendPairwise: PairwiseSend): Promise<boolean> {
+    return this.enqueueOperation(async () => {
+      let pending = false;
+      for (const group of this.groups.values()) pending = await group.flushPrivateDeliveries(sendPairwise) || pending;
+      return pending;
+    });
+  }
+
   protected async handleIncomingSessionEventForKnownGroup(
     groupId: string,
     group: Group,

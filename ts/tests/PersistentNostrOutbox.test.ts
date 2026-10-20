@@ -4,7 +4,7 @@ import { InMemoryStorageAdapter } from "../src/StorageAdapter";
 import { createPersistentNostrOutbox } from "../src/PersistentNostrOutbox";
 
 const event = (content = "encrypted"): VerifiedEvent => finalizeEvent({
-  kind: 1060, created_at: 1, content, tags: [["v", "2"], ["header", "encrypted-header"]],
+  kind: 1060, created_at: 1, content, tags: [["v", "2"], ["p", "ab".repeat(32)], ["header", "encrypted-header"]],
 }, generateSecretKey());
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
@@ -216,3 +216,17 @@ it("quarantines restored unversioned publications without deleting them or retry
   await expect(outbox.publish(legacy)).rejects.toThrow("new private handshake");
   await outbox.close();
 });
+
+it('quarantines saved group roster facts and shared ciphertext without deleting history', async () => {
+  const storage = new InMemoryStorageAdapter(), publish = vi.fn(async (event: VerifiedEvent) => event)
+  const legacy = [
+    finalizeEvent({kind: 37368, created_at: 1, content: '', tags: [['type', 'group_roster']]}, generateSecretKey()),
+    finalizeEvent({kind: 1060, created_at: 1, content: 'encrypted', tags: [['v', '2'], ['header', 'encrypted-header']]}, generateSecretKey()),
+  ]
+  for (const event of legacy) await storage.put(`v1/runtime-outbox/${event.id}`, {event})
+  const outbox = createPersistentNostrOutbox({storage, publish})
+  await outbox.retry()
+  expect(publish).not.toHaveBeenCalled()
+  for (const event of legacy) expect(await storage.get(`v1/runtime-outbox/${event.id}`)).toEqual({event})
+  await outbox.close()
+})

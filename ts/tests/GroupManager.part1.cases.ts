@@ -1,3 +1,4 @@
+import { captureGroupCiphertext } from "./helpers/groupCiphertext.js";
 import { describe, expect, it, vi } from "vitest";
 import type { Filter, VerifiedEvent } from "nostr-tools";
 import { generateSecretKey, getPublicKey } from "nostr-tools";
@@ -177,7 +178,7 @@ it("drains queued outer events after sender-key distribution and emits callbacks
     let distribution: Rumor | null = null;
     let outer: VerifiedEvent | null = null;
 
-    await alice.sendMessage("hello group", {
+    await captureGroupCiphertext(alice, "sendMessage", "hello group", {
       sendPairwise: async (_to, rumor) => {
         distribution = rumor;
       },
@@ -204,12 +205,8 @@ it("drains queued outer events after sender-key distribution and emits callbacks
     expect(drained[0]!.inner.content).toBe("hello group");
     expect(received).toEqual(["hello group"]);
 
-    // Manager should now subscribe to this sender-event author for future outers.
-    const liveFilter = filters.find((filter) => !("since" in filter));
-    expect(liveFilter?.kinds).toEqual([outer!.kind]);
-    expect(liveFilter?.authors).toEqual([outer!.pubkey]);
-    const backfillFilter = filters.find((filter) => "since" in filter);
-    expect(backfillFilter?.authors).toEqual([outer!.pubkey]);
+    // Learning group keys must never produce a shared-author relay query.
+    expect(filters).toEqual([]);
   });
 
 it("creates an unknown group from pairwise metadata and drains queued distribution state", async () => {
@@ -252,7 +249,7 @@ it("creates an unknown group from pairwise metadata and drains queued distributi
 
     let distributionRumor: Rumor | null = null;
     let outer: VerifiedEvent | null = null;
-    await aliceManager.sendMessage(created.group.id, "hello from alice", {
+    await captureGroupCiphertext(aliceManager, "sendMessage", created.group.id, "hello from alice", {
       sendPairwise: async (_recipient, rumor) => {
         distributionRumor = rumor;
       },
@@ -320,7 +317,7 @@ it("sendMessage uses device pubkey for inner rumor and sends distribution once",
     const pairwise: Array<{ recipient: string; rumor: Rumor }> = [];
     const published: VerifiedEvent[] = [];
 
-    const sent = await manager.sendMessage(groupId, "from-device", {
+    const sent = await captureGroupCiphertext(manager, "sendMessage", groupId, "from-device", {
       sendPairwise: async (recipient, rumor) => {
         pairwise.push({ recipient, rumor });
       },
@@ -362,7 +359,7 @@ it("sendEvent preserves inner kind and tags for non-message group events", async
       makeGroup(groupId, [aliceOwnerPk, bobOwnerPk], [aliceOwnerPk]),
     );
 
-    const sent = await manager.sendEvent(
+    const sent = await captureGroupCiphertext(manager, "sendEvent",
       groupId,
       {
         kind: REACTION_KIND,

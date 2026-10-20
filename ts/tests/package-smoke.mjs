@@ -1,7 +1,7 @@
 // Run from a disposable consumer directory after installing the npm tarball.
 // Regression for #26: public SessionManager sends must contain transport failures.
 import assert from "node:assert/strict";
-import { NdrRuntime, InMemoryStorageAdapter, createPersistentNostrOutbox, METADATA_PRIVACY_TAG } from "nostr-double-ratchet";
+import { NdrRuntime, InMemoryStorageAdapter, createPersistentNostrOutbox, METADATA_PRIVACY_TAG, PAIRWISE_GROUP_DELIVERY_VERSION, PRIVATE_GROUP_DELIVERY_KIND } from "nostr-double-ratchet";
 import { finalizeEvent, getPublicKey, matchFilter } from "nostr-tools";
 
 const keys = [1, 2].map((scalar) => {
@@ -12,7 +12,7 @@ const keys = [1, 2].map((scalar) => {
 const owners = keys.map(getPublicKey);
 const outboxStorage = new InMemoryStorageAdapter();
 const outbox = createPersistentNostrOutbox({ storage: outboxStorage, publish: async (event) => event });
-const queued = finalizeEvent({ kind: 1060, created_at: 1, content: "encrypted", tags: [METADATA_PRIVACY_TAG, ["header", "encrypted"]] }, keys[0]);
+const queued = finalizeEvent({ kind: 1060, created_at: 1, content: "encrypted", tags: [METADATA_PRIVACY_TAG, ["p", owners[1]], ["header", "encrypted"]] }, keys[0]);
 await outbox.enqueue(queued);
 assert.equal((await outboxStorage.list()).length, 1);
 await outbox.retry();
@@ -94,3 +94,6 @@ try {
   for (const runtime of runtimes) runtime.close();
   process.removeListener("unhandledRejection", onUnhandled);
 }
+
+assert.equal(PAIRWISE_GROUP_DELIVERY_VERSION, 1);
+assert.equal(PRIVATE_GROUP_DELIVERY_KIND, 21113);

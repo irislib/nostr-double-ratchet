@@ -1,3 +1,4 @@
+import { captureGroupCiphertext } from "./helpers/groupCiphertext.js";
 import { describe, expect, it } from "vitest";
 import { generateSecretKey, getPublicKey } from "nostr-tools";
 import { Group, GroupManager, removeGroupMember, type GroupData } from "../src/Group";
@@ -41,7 +42,7 @@ describe("group membership sender-key rotation", () => {
       let alice = f.sender();
       const bob = f.receiver(f.bob);
       const carol = f.receiver(f.carol);
-      const first = await alice.sendMessage("before removal", f.options);
+      const first = await captureGroupCiphertext(alice, "sendMessage", "before removal", f.options);
       await f.install(bob, f.bob);
       await f.install(carol, f.carol);
       expect((await bob.handleOuterEvent(first.outer))?.inner.content).toBe("before removal");
@@ -53,7 +54,7 @@ describe("group membership sender-key rotation", () => {
       else alice = f.sender(next!);
       f.sent.length = 0;
 
-      const second = await alice.sendMessage("after removal", f.options);
+      const second = await captureGroupCiphertext(alice, "sendMessage", "after removal", f.options);
       // Bob deliberately retains his old roster and keys, like an uncooperative ex-member.
       expect(await bob.handleOuterEvent(second.outer)).toBeNull();
       expect(f.sent.map((entry) => entry.to).sort()).toEqual([f.alice, f.carol].sort());
@@ -70,14 +71,14 @@ describe("group membership sender-key rotation", () => {
     await alice.upsertGroup(f.data);
     const bob = f.receiver(f.bob);
     const carol = f.receiver(f.carol);
-    const first = await alice.sendMessage(f.data.id, "missed original key", f.options);
+    const first = await captureGroupCiphertext(alice, "sendMessage", f.data.id, "missed original key", f.options);
     await f.install(bob, f.bob);
     // Carol receives the ciphertext but misses the original key distribution.
     expect(await carol.handleOuterEvent(first.outer)).toBeNull();
     const request = carol.senderKeyRepairRequestForOuterEvent(first.outer)!;
     await alice.upsertGroup(removeGroupMember(f.data, f.bob, f.alice)!);
     f.sent.length = 0;
-    const second = await alice.sendMessage(f.data.id, "new membership", f.options);
+    const second = await captureGroupCiphertext(alice, "sendMessage", f.data.id, "new membership", f.options);
     expect(await bob.handleOuterEvent(second.outer)).toBeNull();
     await f.install(carol, f.carol);
     expect((await carol.handleOuterEvent(second.outer))?.inner.content).toBe("new membership");
@@ -104,12 +105,12 @@ describe("group membership sender-key rotation", () => {
     const f = fixture();
     const alice = f.sender();
     const bob = f.receiver(f.bob);
-    const first = await alice.sendMessage("first", f.options);
+    const first = await captureGroupCiphertext(alice, "sendMessage", "first", f.options);
     await f.install(bob, f.bob);
     await bob.handleOuterEvent(first.outer);
     f.sent.length = 0;
     alice.setData({ ...f.data, name: "Renamed", members: [...f.data.members].reverse() });
-    const second = await alice.sendMessage("same members", f.options);
+    const second = await captureGroupCiphertext(alice, "sendMessage", "same members", f.options);
     expect(f.sent).toEqual([]);
     expect((await bob.handleOuterEvent(second.outer))?.inner.content).toBe("same members");
   });
@@ -117,11 +118,11 @@ describe("group membership sender-key rotation", () => {
   it("does not send or distribute keys after the local owner is removed", async () => {
     const f = fixture();
     const alice = f.sender();
-    await alice.sendMessage("first", f.options);
+    await captureGroupCiphertext(alice, "sendMessage", "first", f.options);
     alice.setMembers([f.bob, f.carol]);
     f.sent.length = 0;
     let published = false;
-    await expect(alice.sendMessage("not a member", {
+    await expect(captureGroupCiphertext(alice, "sendMessage", "not a member", {
       ...f.options, publishOuter: async () => { published = true; },
     })).rejects.toThrow(/member/i);
     expect(f.sent).toEqual([]);
@@ -137,7 +138,7 @@ describe("group membership sender-key rotation", () => {
       let alice = f.sender();
       const bob = f.receiver(f.bob);
       const carol = f.receiver(f.carol);
-      await alice.sendMessage("first", f.options);
+      await captureGroupCiphertext(alice, "sendMessage", "first", f.options);
       await f.install(bob, f.bob);
       const next = removeGroupMember(f.data, f.bob, f.alice)!;
       alice.setData(next);
@@ -153,7 +154,7 @@ describe("group membership sender-key rotation", () => {
           if (key.endsWith("/repair-snapshots")) throw new Error("storage unavailable");
           await put(key, value);
         };
-        await expect(alice.sendMessage("interrupted", {
+        await expect(captureGroupCiphertext(alice, "sendMessage", "interrupted", {
           ...f.options, publishOuter: async () => { published = true; },
         })).rejects.toThrow("storage unavailable");
         expect(f.sent).toEqual([]);
@@ -161,7 +162,7 @@ describe("group membership sender-key rotation", () => {
         f.storage.put = put;
       }
       alice = f.sender(next);
-      const message = await alice.sendMessage("safe retry", f.options);
+      const message = await captureGroupCiphertext(alice, "sendMessage", "safe retry", f.options);
       expect(await bob.handleOuterEvent(message.outer)).toBeNull();
       await f.install(carol, f.carol);
       expect((await carol.handleOuterEvent(message.outer))?.inner.content).toBe("safe retry");
@@ -171,7 +172,7 @@ describe("group membership sender-key rotation", () => {
   it("gives an added member a fresh key without exposing pre-join messages", async () => {
     const f = fixture();
     const alice = f.sender();
-    const first = await alice.sendMessage("before joining", f.options);
+    const first = await captureGroupCiphertext(alice, "sendMessage", "before joining", f.options);
     const daveOwner = getPublicKey(generateSecretKey());
     const next = { ...f.data, members: [...f.data.members, daveOwner] };
     const dave = new Group({
@@ -179,7 +180,7 @@ describe("group membership sender-key rotation", () => {
     });
     alice.setData(next);
     f.sent.length = 0;
-    const second = await alice.sendMessage("welcome", f.options);
+    const second = await captureGroupCiphertext(alice, "sendMessage", "welcome", f.options);
     await f.install(dave, daveOwner);
     expect((await dave.handleOuterEvent(second.outer))?.inner.content).toBe("welcome");
     expect(await dave.handleOuterEvent(first.outer)).toBeNull();
@@ -188,7 +189,7 @@ describe("group membership sender-key rotation", () => {
   it.each(["current", "legacy"] as const)("retries %s key handoffs only to eligible recipients, once", async (format) => {
     const f = fixture();
     let alice = f.sender();
-    const first = await alice.sendMessage("missed while queue failed", {
+    const first = await captureGroupCiphertext(alice, "sendMessage", "missed while queue failed", {
       ...f.options,
       sendPairwise: async (to, rumor) => {
         if (to !== f.alice) throw new Error("queue unavailable");
@@ -210,7 +211,7 @@ describe("group membership sender-key rotation", () => {
     expect(await carol.handleOuterEvent(first.outer)).toBeNull();
     alice = f.sender(next);
     f.sent.length = 0;
-    const second = await alice.sendMessage("after membership changed", f.options);
+    const second = await captureGroupCiphertext(alice, "sendMessage", "after membership changed", f.options);
     expect(f.sent.filter(entry => entry.to === f.bob)).toHaveLength(0);
     expect(f.sent.filter(entry => entry.to === f.alice)).toHaveLength(format === "legacy" ? 2 : 1);
     expect(f.sent.filter(entry => entry.to === f.carol)).toHaveLength(2);
@@ -225,7 +226,7 @@ describe("group membership sender-key rotation", () => {
     expect((await dave.handleOuterEvent(second.outer))?.inner.content).toBe(second.inner.content);
     alice = f.sender(next);
     f.sent.length = 0;
-    await alice.sendMessage("no more retries needed", f.options);
+    await captureGroupCiphertext(alice, "sendMessage", "no more retries needed", f.options);
     expect(f.sent).toEqual([]);
   });
 
@@ -233,12 +234,12 @@ describe("group membership sender-key rotation", () => {
     const f = fixture();
     const alice = f.sender();
     const bob = f.receiver(f.bob);
-    await alice.sendMessage("first", f.options);
+    await captureGroupCiphertext(alice, "sendMessage", "first", f.options);
     await f.install(bob, f.bob);
     const dave = getPublicKey(generateSecretKey());
     alice.setMembers([...f.data.members, dave]);
     let published = false;
-    await expect(alice.sendMessage("interrupted", {
+    await expect(captureGroupCiphertext(alice, "sendMessage", "interrupted", {
       sendPairwise: async (_to, rumor) => {
         // Bob receives this newly issued key before his removal is observed.
         await bob.handleIncomingSessionEvent(rumor, f.alice, f.aliceDevice);
@@ -248,7 +249,7 @@ describe("group membership sender-key rotation", () => {
     })).rejects.toThrow(/membership changed/i);
     expect(published).toBe(false);
     f.sent.length = 0;
-    const message = await alice.sendMessage("retry after removal", f.options);
+    const message = await captureGroupCiphertext(alice, "sendMessage", "retry after removal", f.options);
     expect(await bob.handleOuterEvent(message.outer)).toBeNull();
     expect(f.sent.map((entry) => entry.to)).not.toContain(f.bob);
   });

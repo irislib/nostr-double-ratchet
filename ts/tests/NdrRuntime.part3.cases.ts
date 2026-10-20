@@ -322,7 +322,8 @@ it("owns group transport alongside sessions on the high-level runtime path", asy
     expect(sent.inner.content).toBe("hello group")
     expect(sent.inner.kind).toBe(14)
     expect(sent.inner.tags).toContainEqual(["l", created.group.id])
-    expect(publishedInnerEventIds).toContain(sent.inner.id)
+    expect((await aliceRuntime.queuedMessageDiagnostics(sent.inner.id)).some(entry => entry.innerEventId === sent.inner.id)).toBe(true)
+    expect(relay.getAllEvents().some(event => event.id === sent.outer.id)).toBe(false)
     expect(aliceRuntime.getGroupManager()?.knownSenderEventPubkeys().length).toBeGreaterThan(0)
 
     await bobRuntime.syncGroups([], bobOwnerPubkey)

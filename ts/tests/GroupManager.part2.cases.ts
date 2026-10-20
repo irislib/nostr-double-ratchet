@@ -1,3 +1,4 @@
+import { captureGroupCiphertext } from "./helpers/groupCiphertext.js";
 import { describe, expect, it, vi } from "vitest";
 import type { Filter, VerifiedEvent } from "nostr-tools";
 import { generateSecretKey, getPublicKey } from "nostr-tools";
@@ -64,7 +65,7 @@ it("serializes concurrent same-group sends so typing does not race the first mes
     const published: VerifiedEvent[] = [];
 
     await Promise.all([
-      sender.sendEvent(
+      captureGroupCiphertext(sender, "sendEvent",
         groupId,
         {
           kind: TYPING_KIND,
@@ -80,7 +81,7 @@ it("serializes concurrent same-group sends so typing does not race the first mes
           },
         },
       ),
-      sender.sendEvent(
+      captureGroupCiphertext(sender, "sendEvent",
         groupId,
         {
           kind: CHAT_MESSAGE_KIND,
@@ -132,7 +133,7 @@ it("serializes concurrent same-group sends so typing does not race the first mes
     ]);
   });
 
-it("re-subscribes outer authors when new sender-event pubkeys are learned", async () => {
+it("keeps group authors off relay subscriptions when sender keys are learned", async () => {
     const groupAId = "group-a";
     const groupBId = "group-b";
 
@@ -178,7 +179,7 @@ it("re-subscribes outer authors when new sender-event pubkeys are learned", asyn
 
     let distA: Rumor | null = null;
     let outerA: VerifiedEvent | null = null;
-    await senderForGroupA.sendMessage("a1", {
+    await captureGroupCiphertext(senderForGroupA, "sendMessage", "a1", {
       sendPairwise: async (_to, rumor) => {
         distA = rumor;
       },
@@ -189,7 +190,7 @@ it("re-subscribes outer authors when new sender-event pubkeys are learned", asyn
 
     let distB: Rumor | null = null;
     let outerB: VerifiedEvent | null = null;
-    await senderForGroupB.sendMessage("b1", {
+    await captureGroupCiphertext(senderForGroupB, "sendMessage", "b1", {
       sendPairwise: async (_to, rumor) => {
         distB = rumor;
       },
@@ -204,8 +205,7 @@ it("re-subscribes outer authors when new sender-event pubkeys are learned", asyn
       aliceDevicePk,
     );
     const liveFiltersAfterA = filters.filter((filter) => !("since" in filter));
-    expect(liveFiltersAfterA).toHaveLength(1);
-    expect(liveFiltersAfterA[0]!.authors).toEqual([outerA!.pubkey]);
+    expect(liveFiltersAfterA).toEqual([]);
     expect(unsubscribeCalls).toBe(0);
 
     await manager.handleIncomingSessionEvent(
@@ -214,14 +214,11 @@ it("re-subscribes outer authors when new sender-event pubkeys are learned", asyn
       aliceDevicePk,
     );
     const liveFiltersAfterB = filters.filter((filter) => !("since" in filter));
-    expect(liveFiltersAfterB).toHaveLength(2);
-    expect(liveFiltersAfterB[1]!.authors).toEqual(
-      [outerA!.pubkey, outerB!.pubkey].sort(),
-    );
-    expect(unsubscribeCalls).toBe(1);
+    expect(liveFiltersAfterB).toEqual([]);
+    expect(unsubscribeCalls).toBe(0);
   });
 
-it("backfills recent outer events when a sender-event pubkey is learned after publish", async () => {
+it("accepts privately delivered historical ciphertext without shared-author backfill", async () => {
     const groupId = "group-manager-backfill";
 
     const aliceOwnerPk = getPublicKey(generateSecretKey());
@@ -261,7 +258,7 @@ it("backfills recent outer events when a sender-event pubkey is learned after pu
 
     let distribution: Rumor | null = null;
     let outer: VerifiedEvent | null = null;
-    await alice.sendMessage("late group reply", {
+    await captureGroupCiphertext(alice, "sendMessage", "late group reply", {
       sendPairwise: async (_to, rumor) => {
         distribution = rumor;
       },
@@ -276,18 +273,12 @@ it("backfills recent outer events when a sender-event pubkey is learned after pu
       aliceDevicePk,
     );
 
-    const backfillSubscription = subscriptions.find(
-      (entry) => "since" in entry.filter,
-    );
-    expect(backfillSubscription).toBeDefined();
-
-    backfillSubscription!.onEvent(outer!);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
+    expect(subscriptions).toEqual([]);
+    await manager.handleOuterEvent(outer!);
     expect(received).toEqual(["late group reply"]);
   });
 
-it("retries outer backfill after learning a sender-event pubkey", async () => {
+it("never retries a shared-author backfill after learning a sender key", async () => {
     vi.useFakeTimers();
     try {
       const groupId = "group-manager-backfill-retry";
@@ -306,7 +297,7 @@ it("retries outer backfill after learning a sender-event pubkey", async () => {
 
       let distribution: Rumor | null = null;
       let outer: VerifiedEvent | null = null;
-      await alice.sendMessage("retried group reply", {
+      await captureGroupCiphertext(alice, "sendMessage", "retried group reply", {
         sendPairwise: async (_to, rumor) => {
           distribution = rumor;
         },
@@ -349,14 +340,16 @@ it("retries outer backfill after learning a sender-event pubkey", async () => {
       expect(received).toEqual([]);
       await vi.advanceTimersByTimeAsync(30);
 
-      expect(backfillCalls).toBe(2);
+      expect(backfillCalls).toBe(0);
+      expect(received).toEqual([]);
+      await manager.handleOuterEvent(outer!);
       expect(received).toEqual(["retried group reply"]);
     } finally {
       vi.useRealTimers();
     }
   });
 
-it("fetches and orders recent outer events for newly learned sender-event pubkeys", async () => {
+it("does not fetch shared-author history and accepts private ciphertext in order", async () => {
     const groupId = "group-manager-fetch-backfill";
 
     const aliceOwnerPk = getPublicKey(generateSecretKey());
@@ -373,7 +366,7 @@ it("fetches and orders recent outer events for newly learned sender-event pubkey
 
     let distribution: Rumor | null = null;
     const published: VerifiedEvent[] = [];
-    await alice.sendMessage("fetch backfill #1", {
+    await captureGroupCiphertext(alice, "sendMessage", "fetch backfill #1", {
       sendPairwise: async (_to, rumor) => {
         distribution = rumor;
       },
@@ -382,7 +375,7 @@ it("fetches and orders recent outer events for newly learned sender-event pubkey
       },
       nowMs: 1_000,
     });
-    await alice.sendMessage("fetch backfill #2", {
+    await captureGroupCiphertext(alice, "sendMessage", "fetch backfill #2", {
       sendPairwise: async () => {},
       publishOuter: async (outer) => {
         published.push(outer);
@@ -390,7 +383,7 @@ it("fetches and orders recent outer events for newly learned sender-event pubkey
       nowMs: 2_000,
     });
     for (let index = 3; index <= 5; index += 1) {
-      await alice.sendMessage(`fetch backfill #${index}`, {
+      await captureGroupCiphertext(alice, "sendMessage", `fetch backfill #${index}`, {
         sendPairwise: async () => {},
         publishOuter: async (outer) => {
           published.push(outer);
@@ -434,11 +427,11 @@ it("fetches and orders recent outer events for newly learned sender-event pubkey
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(fetchCalls).toHaveLength(1);
-    expect(fetchCalls.every((call) => call.authors?.length === 1)).toBe(true);
+    expect(fetchCalls).toEqual([]);
+    for (const outer of published) await manager.handleOuterEvent(outer);
     expect(received).toEqual(
       Array.from({ length: 5 }, (_, index) => `fetch backfill #${index + 1}`),
     );
-    expect(parseSpy).toHaveBeenCalledTimes(published.length * 2);
+    expect(parseSpy).toHaveBeenCalledTimes(published.length);
   });
 });

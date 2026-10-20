@@ -2,9 +2,10 @@ import type { UnsignedEvent, VerifiedEvent } from "nostr-tools";
 import type { StorageAdapter } from "./StorageAdapter.js";
 import type { NostrPublishContext, NostrPublishError } from "./types.js";
 import { hasMetadataPrivacyVersion } from "./metadataPrivacy.js";
+import { isForbiddenGroupRelayEvent } from "./publishing.js";
 
 function requiresPrivacyUpgrade(event: VerifiedEvent): boolean {
-  return (event.kind === 1059 || event.kind === 1060) && !hasMetadataPrivacyVersion(event);
+  return isForbiddenGroupRelayEvent(event) || ((event.kind === 1059 || event.kind === 1060) && !hasMetadataPrivacyVersion(event));
 }
 
 export interface PersistentNostrPublication {

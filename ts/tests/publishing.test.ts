@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest"
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools"
-import { createNostrPublisher, groupPublicationContext } from "../src/publishing"
+import { createNostrPublisher, groupPublicationContext, groupPublicationInnerEventId } from "../src/publishing"
 
 const secret = generateSecretKey()
 const unsigned = { pubkey: getPublicKey(secret), kind: 1, created_at: 1, content: "hello", tags: [] }
@@ -109,4 +109,25 @@ it("recovers direct recipient policy from queued plaintext without exposing it o
   await createNostrPublisher(async () => signed, { nostrEnqueue: enqueue })(signed, 'inner', context)
   expect(enqueue).toHaveBeenCalledWith(signed, 'inner', context)
   expect(JSON.stringify(signed)).not.toContain(recipient)
+})
+
+it('refuses public group roster facts and bare shared group envelopes before signing or enqueueing', async () => {
+  const transport = vi.fn(async () => signed), enqueue = vi.fn(async () => {})
+  const publish = createNostrPublisher(transport, { nostrEnqueue: enqueue })
+  for (const event of [
+    finalizeEvent({...unsigned, kind: 37368, tags: [['type', 'group_roster']]}, secret),
+    finalizeEvent({...unsigned, kind: 1060, tags: [['v', '2'], ['header', 'ciphertext']]}, secret),
+    ...[10445, 10446, 10447, 21113].map(kind => finalizeEvent({...unsigned, kind}, secret)),
+  ]) await expect(publish(event)).rejects.toThrow('group')
+  expect(transport).not.toHaveBeenCalled()
+  expect(enqueue).not.toHaveBeenCalled()
+})
+
+
+it('keeps group and recipient policy together with the canonical message ID for private delivery', () => {
+  const recipient = getPublicKey(generateSecretKey()), canonicalId = 'ab'.repeat(32)
+  const rumor = {id: 'cd'.repeat(32), kind: 21113, created_at: 123,
+    tags: [['l', 'group-a'], ['p', recipient], ['e', canonicalId, '', 'group-message']]}
+  expect(groupPublicationContext(rumor)).toEqual({groupId: 'group-a', recipientOwnerPubkey: recipient, createdAt: 123})
+  expect(groupPublicationInnerEventId(rumor)).toBe(canonicalId)
 })

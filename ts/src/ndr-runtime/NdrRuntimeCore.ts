@@ -430,7 +430,7 @@ export abstract class NdrRuntimeCore {
     return this.groupController.waitForManager(ownerPubkey);
   }
 
-  onGroupEvent(callback: (event: GroupDecryptedEvent) => void): Unsubscribe {
+  onGroupEvent(callback: (event: GroupDecryptedEvent) => void | Promise<void>): Unsubscribe {
     return this.groupController.onGroupEvent(callback);
   }
 

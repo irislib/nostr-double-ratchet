@@ -139,7 +139,7 @@ it("delegates outbound publishing to device records without requiring an active 
         content: "prepared",
         kind: MESSAGE_EVENT_KIND,
         created_at: Math.floor(Date.now() / 1000),
-        tags: [],
+        tags: [["v", "2"], ["p", peerPublicKey], ["header", "prepared-header"]],
       },
       peerSecretKey,
     ) as VerifiedEvent

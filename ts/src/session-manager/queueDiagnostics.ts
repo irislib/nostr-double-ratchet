@@ -1,3 +1,4 @@
+import { groupPublicationInnerEventId } from "../publishing.js"
 import type { MessageQueue } from "../MessageQueue.js"
 import type { UserRecordActor } from "./UserRecordActor.js"
 
@@ -31,7 +32,7 @@ export async function queuedMessageDiagnostics(input: {
 
   const diagnostics: QueuedMessageDiagnostic[] = []
   for (const entry of await input.discoveryQueue.entries()) {
-    const entryInnerEventId = entry.event.id
+    const entryInnerEventId = groupPublicationInnerEventId(entry.event)
     if (input.innerEventId && entryInnerEventId !== input.innerEventId) continue
     diagnostics.push({
       stage: "discovery",
@@ -43,7 +44,7 @@ export async function queuedMessageDiagnostics(input: {
   }
 
   for (const entry of await input.messageQueue.entries()) {
-    const entryInnerEventId = entry.event.id
+    const entryInnerEventId = groupPublicationInnerEventId(entry.event)
     if (input.innerEventId && entryInnerEventId !== input.innerEventId) continue
     diagnostics.push({
       stage: "device",

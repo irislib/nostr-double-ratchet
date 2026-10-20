@@ -4,8 +4,8 @@ import {
   type SenderKeyRepairRequest,
 } from "../SenderKeyRepair.js";
 import type { SenderKeyDistribution } from "../SenderKey.js";
-import { CHAT_MESSAGE_KIND, MESSAGE_EVENT_KIND, type Rumor, type NostrPublish } from "../types.js";
-import { createNostrPublisher } from "../publishing.js";
+import { CHAT_MESSAGE_KIND, MESSAGE_EVENT_KIND, type Rumor } from "../types.js";
+import { PrivateGroupDeliveryOutbox } from "../PrivateGroupDelivery.js";
 import { GroupSenderKeys } from "./GroupSenderKeys.js";
 import type { PairwiseSend, PublishOuter } from "../GroupChannel.js";
 
@@ -80,8 +80,8 @@ export abstract class GroupSending extends GroupSenderKeys {
   }
 
   /**
-   * Send an inner group event over one-to-many transport.
-   * Ensures and distributes sender keys, then publishes exactly one outer event.
+   * Encrypt a group event locally, then deliver it separately through every recipient's ratchet.
+   * Persist fanout intent before handoff; the shared envelope never reaches a relay.
    */
   async sendEvent(
     event: { kind: number; content: string; tags?: string[][] },
@@ -134,12 +134,23 @@ export abstract class GroupSending extends GroupSenderKeys {
 
     await this.saveSenderKeyState(this.ourDevicePubkey, senderKey);
     this.assertCurrentRecipients(recipients);
-    await createNostrPublisher(
-      opts.publishOuter as NostrPublish,
-      this.publicationOptions,
-    )(outer, inner.id, { groupId: this.groupId() });
+    await this.privateDeliveryOutbox().enqueue(outer, recipients, inner.id);
+    await this.flushPrivateDeliveries(opts.sendPairwise);
+
 
     return { outer, inner };
+  }
+
+  private privateDeliveryOutbox(): PrivateGroupDeliveryOutbox {
+    return new PrivateGroupDeliveryOutbox(this.storage,
+      `${this.versionPrefix}/group/${this.groupId()}/private-deliveries/${this.ourDevicePubkey}`,
+      this.groupId(), this.ourDevicePubkey);
+  }
+
+  async flushPrivateDeliveries(sendPairwise: PairwiseSend): Promise<boolean> {
+    const members = this.senderKeyRecipientOwnerPubkeys();
+    if (!members.includes(this.ourOwnerPubkey)) return false;
+    return this.privateDeliveryOutbox().flush(sendPairwise, members);
   }
 
   /** Send a regular group chat message (kind 14). */

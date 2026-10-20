@@ -69,11 +69,11 @@ function getFirstTagValue(
  * - Each *device* has a per-group "sender event" pubkey (outer Nostr author).
  * - Each device uses a symmetric SenderKeyState chain for forward secrecy within that sender.
  * - Sender keys are distributed pairwise over 1:1 Double Ratchet sessions (forward secure).
- * - Group messages are published once using OneToManyChannel.
+ * - The sender-key envelope stays inside separate recipient Double Ratchet deliveries.
  *
  * This class is transport-agnostic:
  * - You provide `sendPairwise` for distributing keys over 1:1 sessions.
- * - You provide `publishOuter` for publishing the one-to-many outer events.
+ * - `publishOuter` is retained as an API parameter but is never used for group traffic.
  * - You feed it incoming session rumors + outer events via the `handle…` methods.
  */
 

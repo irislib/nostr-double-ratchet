@@ -71,7 +71,9 @@ describe("group pairwise fanout", () => {
     const ownerKeys = Array.from({ length: 3 }, () => generateSecretKey());
     const owners = ownerKeys.map(getPublicKey);
     const published: VerifiedEvent[] = [];
-    const alice = createRuntime({ relay, ownerPrivateKey: ownerKeys[0], onPublish: (event) => {
+    const publishedInnerIds: Array<string | undefined> = [];
+    const alice = createRuntime({ relay, ownerPrivateKey: ownerKeys[0], onPublish: (event, innerEventId) => {
+      publishedInnerIds.push(innerEventId);
       if ("sig" in event) published.push(event as VerifiedEvent);
     } });
     const sibling = createRuntime({ relay, ownerPrivateKey: ownerKeys[0] });
@@ -108,7 +110,15 @@ describe("group pairwise fanout", () => {
       const rumorIds = new Set(distributions.map(event => event.id));
       expect(rumorIds.size).toBe(1);
       const keyPublications = published.filter(event => event.id !== sent.outer.id && event.kind === 1060);
-      expect(keyPublications).toHaveLength(clients.length - 1);
+      expect(keyPublications).toHaveLength(2 * (clients.length - 1));
+      expect(publishedInnerIds).toContain(sent.inner.id);
+      for (const outer of keyPublications) {
+        expect(outer.tags.filter(tag => tag[0] === "p")).toHaveLength(1);
+        expect(outer.pubkey).not.toBe(sent.outer.pubkey);
+        expect(owners).not.toContain(outer.pubkey);
+        expect(clients.map(client => client.getState().currentDevicePubkey)).not.toContain(outer.pubkey);
+        expect(JSON.stringify(outer)).not.toContain(created.group.id);
+      }
     } finally {
       for (const runtime of clients) runtime.close();
     }

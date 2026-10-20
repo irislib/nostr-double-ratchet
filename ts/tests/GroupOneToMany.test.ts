@@ -1,3 +1,4 @@
+import { captureGroupCiphertext } from "./helpers/groupCiphertext.js";
 import { describe, expect, it } from "vitest";
 import { generateSecretKey, getPublicKey } from "nostr-tools";
 
@@ -45,7 +46,7 @@ describe("Group one-to-many (sender keys + OneToManyChannel)", () => {
     const sent: Array<{ to: string; rumor: Rumor }> = [];
     const published: unknown[] = [];
 
-    await g.sendMessage("hello", {
+    await captureGroupCiphertext(g, "sendMessage", "hello", {
       sendPairwise: async (to, rumor) => {
         sent.push({ to, rumor });
       },
@@ -92,7 +93,7 @@ describe("Group one-to-many (sender keys + OneToManyChannel)", () => {
     const sent: Array<{ to: string; rumor: Rumor }> = [];
     let outer: unknown | null = null;
 
-    await alice.sendMessage("hello out of order", {
+    await captureGroupCiphertext(alice, "sendMessage", "hello out of order", {
       sendPairwise: async (to, rumor) => {
         sent.push({ to, rumor });
       },
@@ -148,7 +149,7 @@ describe("Group one-to-many (sender keys + OneToManyChannel)", () => {
     const published: unknown[] = [];
 
     // First message establishes initial key + distribution.
-    await alice.sendMessage("m1", {
+    await captureGroupCiphertext(alice, "sendMessage", "m1", {
       sendPairwise: async (to, rumor) => sent.push({ to, rumor }),
       publishOuter: async (event) => published.push(event),
     });
@@ -166,7 +167,7 @@ describe("Group one-to-many (sender keys + OneToManyChannel)", () => {
     await alice.rotateSenderKey({
       sendPairwise: async (to, rumor) => sent.push({ to, rumor }),
     });
-    await alice.sendMessage("m2", {
+    await captureGroupCiphertext(alice, "sendMessage", "m2", {
       sendPairwise: async (to, rumor) => sent.push({ to, rumor }),
       publishOuter: async (event) => published.push(event),
     });
@@ -214,7 +215,7 @@ describe("Group one-to-many (sender keys + OneToManyChannel)", () => {
     const sent: Array<{ to: string; rumor: Rumor }> = [];
     let outer: unknown | null = null;
 
-    await alice.sendMessage("hello bob devices", {
+    await captureGroupCiphertext(alice, "sendMessage", "hello bob devices", {
       sendPairwise: async (to, rumor) => sent.push({ to, rumor }),
       publishOuter: async (event) => {
         outer = event;
@@ -265,7 +266,7 @@ describe("Group one-to-many (sender keys + OneToManyChannel)", () => {
 
     const sent: Array<{ to: string; rumor: Rumor }> = [];
     let outer: unknown | null = null;
-    await alice.sendMessage("impersonation-test", {
+    await captureGroupCiphertext(alice, "sendMessage", "impersonation-test", {
       sendPairwise: async (to, rumor) => sent.push({ to, rumor }),
       publishOuter: async (event) => {
         outer = event;
