@@ -130,6 +130,13 @@ impl SessionManager {
     where
         R: RngCore + CryptoRng,
     {
+        if let Some(invite) = self.local_invite.as_mut() {
+            if invite.metadata_privacy_version != crate::METADATA_PRIVACY_VERSION {
+                invite.metadata_privacy_version = crate::METADATA_PRIVACY_VERSION;
+                invite.created_at =
+                    UnixSeconds(ctx.now.get().max(invite.created_at.get().saturating_add(1)));
+            }
+        }
         if self.local_invite.is_none() {
             let invite = Invite::create_new_with_context(
                 ctx,

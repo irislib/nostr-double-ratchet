@@ -40,6 +40,7 @@ function makeSession(
   const theirNextPrivateKey = generateSecretKey()
 
   const state: SessionState = {
+    metadataPrivacyVersion: 2,
     rootKey: new Uint8Array(32).fill(1),
     theirCurrentNostrPublicKey: canReceive ? getPublicKey(theirCurrentPrivateKey) : undefined,
     theirNextNostrPublicKey: canSend

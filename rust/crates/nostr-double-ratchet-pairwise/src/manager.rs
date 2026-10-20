@@ -1,6 +1,8 @@
+mod subscriptions;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use subscriptions::refresh_subscription_actions;
 
 use nostr::{Event, Filter, Keys, Kind, PublicKey, UnsignedEvent};
 use nostr_double_ratchet::{
@@ -38,7 +40,7 @@ impl PairwiseManager {
         limits.validate()?;
         let payload = store.load()?;
         let mut needs_storage_commit = payload.is_none();
-        let state = match payload {
+        let mut state = match payload {
             Some(payload) => {
                 needs_storage_commit = is_legacy_state_payload(&payload);
                 let state = open_state(&payload, &identity_keys, &limits)?;
@@ -53,6 +55,15 @@ impl PairwiseManager {
                 PairwiseState::new(identity_keys.public_key().to_hex(), invite)
             }
         };
+        if state.local_invite.metadata_privacy_version
+            != nostr_double_ratchet::METADATA_PRIVACY_VERSION
+        {
+            state.local_invite.metadata_privacy_version =
+                nostr_double_ratchet::METADATA_PRIVACY_VERSION;
+            state.local_invite.created_at =
+                UnixSeconds(unix_now().max(state.local_invite.created_at.get().saturating_add(1)));
+            needs_storage_commit = true;
+        }
         let mut manager = Self {
             store,
             identity_keys,
@@ -111,9 +122,11 @@ impl PairwiseManager {
             .peers
             .get(&peer_hex)
             .and_then(|peer| {
-                peer.sessions
-                    .iter()
-                    .find(|session| session.handshake_id == handshake_id)
+                peer.sessions.iter().find(|session| {
+                    session.handshake_id == handshake_id
+                        && session.state.metadata_privacy_version
+                            == nostr_double_ratchet::METADATA_PRIVACY_VERSION
+                })
             })
             .and_then(|session| {
                 Some((
@@ -513,7 +526,23 @@ impl PairwiseManager {
         if next.pending_actions.len() != self.state.pending_actions.len() {
             self.commit_next(next, self.installed_message_authors.clone())?;
         }
-        Ok(self.state.pending_actions.clone())
+        Ok(self
+            .state
+            .pending_actions
+            .iter()
+            .filter(|action| match &action.kind {
+                PairwiseActionKind::Publish { event_json, .. }
+                | PairwiseActionKind::OutOfBand { event_json, .. } => {
+                    serde_json::from_str::<Event>(event_json)
+                        .ok()
+                        .is_some_and(|event| {
+                            nostr_double_ratchet::has_metadata_privacy_version(&event)
+                        })
+                }
+                _ => true,
+            })
+            .cloned()
+            .collect())
     }
 
     pub fn ack_actions(&mut self, action_ids: &[String]) -> Result<()> {
@@ -728,6 +757,11 @@ fn validate_response_peer(
 }
 
 fn validate_relay_publish(event: &Event) -> Result<()> {
+    if !nostr_double_ratchet::has_metadata_privacy_version(event) {
+        return Err(PairwiseError::InvalidEvent(
+            "publication requires a new private handshake".into(),
+        ));
+    }
     if event.kind != Kind::from(MESSAGE_EVENT_KIND as u16) {
         return Err(PairwiseError::InvalidEvent(
             "relay publish must be kind 1060".to_string(),
@@ -860,93 +894,6 @@ fn has_pending_publish_event(state: &PairwiseState, session_id: &str, event_json
             } if pending_session == session_id && pending == event_json
         )
     })
-}
-
-fn message_authors(state: &PairwiseState, limits: &RuntimeLimits) -> Result<Vec<String>> {
-    let mut authors = BTreeSet::new();
-    for peer in state.peers.values() {
-        authors.extend(
-            peer.tracked_sender_pubkeys()
-                .into_iter()
-                .map(|pubkey| pubkey.to_hex()),
-        );
-        if authors.len() > limits.max_subscription_authors {
-            return Err(PairwiseError::QueueFull {
-                queue: "subscription-authors",
-            });
-        }
-    }
-    Ok(authors.into_iter().collect())
-}
-
-fn refresh_subscription_actions(
-    state: &mut PairwiseState,
-    installed_authors: &[String],
-    force: bool,
-    limits: &RuntimeLimits,
-) -> Result<Vec<String>> {
-    let authors = message_authors(state, limits)?;
-    let subscription_id = state.message_subscription_id.clone();
-    let has_pending_subscribe = state.pending_actions.iter().any(|action| {
-        matches!(
-            &action.kind,
-            PairwiseActionKind::Subscribe {
-                subscription_id: pending,
-                ..
-            } if pending == &subscription_id
-        )
-    });
-    let has_pending_unsubscribe = state.pending_actions.iter().any(|action| {
-        matches!(
-            &action.kind,
-            PairwiseActionKind::Unsubscribe {
-                subscription_id: pending,
-            } if pending == &subscription_id
-        )
-    });
-    if installed_authors.is_empty()
-        && (has_pending_subscribe || (authors.is_empty() && has_pending_unsubscribe))
-    {
-        return Ok(authors);
-    }
-    if !force && authors == installed_authors {
-        return Ok(authors);
-    }
-    state.pending_actions.retain(|action| match &action.kind {
-        PairwiseActionKind::Subscribe {
-            subscription_id: pending,
-            ..
-        }
-        | PairwiseActionKind::Unsubscribe {
-            subscription_id: pending,
-        } => pending != &subscription_id,
-        _ => true,
-    });
-    if authors.is_empty() && !installed_authors.is_empty() {
-        push_action(
-            state,
-            PairwiseActionKind::Unsubscribe {
-                subscription_id: subscription_id.clone(),
-            },
-        );
-    }
-    if !authors.is_empty() {
-        let pubkeys = authors
-            .iter()
-            .map(|author| PublicKey::parse(author))
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        let filter = Filter::new()
-            .kind(Kind::from(MESSAGE_EVENT_KIND as u16))
-            .authors(pubkeys);
-        push_action(
-            state,
-            PairwiseActionKind::Subscribe {
-                subscription_id,
-                filter_json: serde_json::to_string(&filter)?,
-            },
-        );
-    }
-    Ok(authors)
 }
 
 fn handshake_id(invite: &Invite, invitee: PublicKey) -> String {

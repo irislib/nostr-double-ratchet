@@ -33,6 +33,8 @@ pub struct SkippedKeysEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionState {
+    #[serde(default)]
+    pub metadata_privacy_version: u8,
     #[serde(with = "hex::serde")]
     pub root_key: [u8; 32],
     pub their_current_nostr_public_key: Option<DevicePubkey>,
@@ -53,6 +55,8 @@ pub struct SessionState {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MessageEnvelope {
+    #[serde(default)]
+    pub metadata_privacy_version: u8,
     pub sender: DevicePubkey,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recipient: Option<DevicePubkey>,
@@ -196,6 +200,23 @@ impl Session {
     where
         R: RngCore + CryptoRng,
     {
+        let (their_ephemeral_public_key, our_ephemeral_private_key) = if is_initiator {
+            (
+                crate::metadata_privacy::private_responder_public_key(
+                    our_ephemeral_private_key,
+                    their_ephemeral_public_key,
+                )?,
+                our_ephemeral_private_key,
+            )
+        } else {
+            (
+                their_ephemeral_public_key,
+                crate::metadata_privacy::private_responder_secret_key(
+                    our_ephemeral_private_key,
+                    their_ephemeral_public_key,
+                )?,
+            )
+        };
         let our_keys = nostr::Keys::new(secret_key_from_bytes(&our_ephemeral_private_key)?);
         let our_next_private_key = random_secret_key_bytes(ctx.rng)?;
         let our_next_keys = nostr::Keys::new(secret_key_from_bytes(&our_next_private_key)?);
@@ -234,6 +255,7 @@ impl Session {
 
         Ok(Self {
             state: SessionState {
+                metadata_privacy_version: crate::METADATA_PRIVACY_VERSION,
                 root_key,
                 their_current_nostr_public_key: None,
                 their_next_nostr_public_key: Some(their_ephemeral_public_key),
@@ -252,14 +274,16 @@ impl Session {
     }
 
     pub fn can_send(&self) -> bool {
-        self.state.their_next_nostr_public_key.is_some()
+        self.state.metadata_privacy_version == crate::METADATA_PRIVACY_VERSION
+            && self.state.their_next_nostr_public_key.is_some()
             && self.state.our_current_nostr_key.is_some()
     }
 
     pub fn matches_sender(&self, sender: DevicePubkey) -> bool {
-        self.state.their_current_nostr_public_key == Some(sender)
-            || self.state.their_next_nostr_public_key == Some(sender)
-            || self.state.skipped_keys.contains_key(&sender)
+        self.state.metadata_privacy_version == crate::METADATA_PRIVACY_VERSION
+            && (self.state.their_current_nostr_public_key == Some(sender)
+                || self.state.their_next_nostr_public_key == Some(sender)
+                || self.state.skipped_keys.contains_key(&sender))
     }
 
     pub fn plan_send(&self, payload: &[u8], now: UnixSeconds) -> Result<SendPlan> {
@@ -289,6 +313,7 @@ impl Session {
         Ok(SendPlan {
             next_state,
             envelope: MessageEnvelope {
+                metadata_privacy_version: crate::METADATA_PRIVACY_VERSION,
                 sender: our_current.public_key,
                 recipient: None,
                 signer_secret_key: our_current.private_key,
@@ -316,7 +341,9 @@ impl Session {
     where
         R: RngCore + CryptoRng,
     {
-        if !self.matches_sender(envelope.sender) {
+        if envelope.metadata_privacy_version != crate::METADATA_PRIVACY_VERSION
+            || !self.matches_sender(envelope.sender)
+        {
             return Err(DomainError::UnexpectedSender.into());
         }
 
@@ -706,6 +733,7 @@ mod tests {
             .plan_receive(
                 &mut recv_ctx,
                 &MessageEnvelope {
+                    metadata_privacy_version: crate::METADATA_PRIVACY_VERSION,
                     sender: device_pubkey_from_secret_bytes(&bob_secret).unwrap(),
                     recipient: None,
                     signer_secret_key: bob_secret,

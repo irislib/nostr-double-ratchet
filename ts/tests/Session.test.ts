@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { generateSecretKey, getPublicKey, type VerifiedEvent } from "nostr-tools"
 import { Session } from "../src/Session"
+import { privateResponderPublicKey } from "../src/metadataPrivacy"
 import {
   buildReactionRumor,
   buildReplyRumor,
@@ -61,7 +62,7 @@ describe("Session", () => {
       sharedSecret(),
     )
 
-    expect(alice.state.theirNextNostrPublicKey).toBe(getPublicKey(bobSecretKey))
+    expect(alice.state.theirNextNostrPublicKey).toBe(privateResponderPublicKey(aliceSecretKey, getPublicKey(bobSecretKey)))
     expect(alice.state.ourCurrentNostrKey!.publicKey).toBe(getPublicKey(aliceSecretKey))
     expect(alice.state.ourCurrentNostrKey!.publicKey).toHaveLength(64)
   })
@@ -71,8 +72,8 @@ describe("Session", () => {
     const { event } = sendText(alice, "Hello, world!")
 
     expect(event.kind).toBe(MESSAGE_EVENT_KIND)
-    expect(event.tags[0][0]).toEqual("header")
-    expect(event.tags[0][1]).toBeTruthy()
+    expect(event.tags).toContainEqual(["v", "2"])
+    expect(event.tags.find(tag => tag[0] === "header")?.[1]).toBeTruthy()
     expect(event.content).toBeTruthy()
     expect(event.pubkey).toHaveLength(64)
     expect(event.id).toHaveLength(64)

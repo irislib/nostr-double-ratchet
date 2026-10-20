@@ -1,7 +1,9 @@
+import { METADATA_PRIVACY_VERSION } from "../metadataPrivacy.js"
 import type { Session } from "../Session.js"
 import type { UserRecordActor } from "./UserRecordActor.js"
 
 export function sessionMessageAuthorPubkeys(session: Session): string[] {
+  if (session.state.metadataPrivacyVersion !== METADATA_PRIVACY_VERSION) return []
   const authors = new Set<string>()
   if (session.state.theirCurrentNostrPublicKey) {
     authors.add(session.state.theirCurrentNostrPublicKey)

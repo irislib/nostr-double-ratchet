@@ -1,3 +1,4 @@
+import { METADATA_PRIVACY_VERSION, METADATA_PRIVACY_TAG, hasMetadataPrivacyVersion } from "./metadataPrivacy.js";
 import { encryptInviteOwnerProof, validInviteOwnerProof, INVITE_OWNER_PROOF_TAG } from "./inviteOwnerProof.js";
 import { finalizeEvent, VerifiedEvent, UnsignedEvent, verifyEvent, Filter } from "nostr-tools";
 import { INVITE_EVENT_KIND, NostrSubscribe, Unsubscribe, EncryptFunction, DecryptFunction, INVITE_RESPONSE_KIND } from "./types.js";
@@ -50,6 +51,7 @@ export class Invite {
         public createdAt: number = now(),
         public purpose?: InvitePurpose,
         public ownerPubkey?: string,
+        public metadataPrivacyVersion = METADATA_PRIVACY_VERSION,
     ) {
     }
 
@@ -116,6 +118,7 @@ export class Invite {
             owner?: string;
             ownerPubkey?: string;
         };
+        if ((data as { version?: number }).version !== METADATA_PRIVACY_VERSION) throw new Error("Invite requires a privacy upgrade");
         const resolvedEphemeralKey = ephemeralKey || inviterEphemeralPublicKey;
         if (!inviter || !resolvedEphemeralKey || !sharedSecret) {
             throw new Error("Missing required fields (inviter, ephemeralKey, sharedSecret) in invite data.");
@@ -138,6 +141,7 @@ export class Invite {
 
     static deserialize(json: string): Invite {
         const data = JSON.parse(json);
+        const upgradeOwned = data.inviterEphemeralPrivateKey && data.metadataPrivacyVersion !== METADATA_PRIVACY_VERSION;
         return new Invite(
             data.inviterEphemeralPublicKey,
             data.sharedSecret,
@@ -146,13 +150,15 @@ export class Invite {
             data.deviceId,
             data.maxUses,
             data.usedBy,
-            data.createdAt,
+            upgradeOwned ? Math.max(now(), (data.createdAt ?? 0) + 1) : data.createdAt,
             data.purpose,
             data.ownerPubkey,
+            data.inviterEphemeralPrivateKey ? METADATA_PRIVACY_VERSION : (data.metadataPrivacyVersion ?? 0),
         );
     }
 
     static fromEvent(event: VerifiedEvent): Invite {
+        if (!hasMetadataPrivacyVersion(event)) throw new Error("Invite requires a privacy upgrade");
         if (!event.sig) {
             throw new Error("Event is not signed");
         }
@@ -298,6 +304,7 @@ export class Invite {
      */
     serialize(): string {
         return JSON.stringify({
+            metadataPrivacyVersion: this.metadataPrivacyVersion,
             inviterEphemeralPublicKey: this.inviterEphemeralPublicKey,
             sharedSecret: this.sharedSecret,
             inviter: this.inviter,
@@ -316,6 +323,7 @@ export class Invite {
      */
     getUrl(root = "https://chat.iris.to") {
         const data = {
+            version: METADATA_PRIVACY_VERSION,
             inviter: this.inviter,
             ephemeralKey: this.inviterEphemeralPublicKey,
             sharedSecret: this.sharedSecret,
@@ -337,6 +345,7 @@ export class Invite {
             content: "",
             created_at: this.createdAt,
             tags: [
+                [...METADATA_PRIVACY_TAG],
                 ['ephemeralKey', this.inviterEphemeralPublicKey],
                 ['sharedSecret', this.sharedSecret],
                 ['d', 'double-ratchet/invites/' + this.deviceId],
@@ -359,6 +368,7 @@ export class Invite {
             content: "",
             created_at: Math.floor(Date.now() / 1000),
             tags: [
+                [...METADATA_PRIVACY_TAG],
                 ['d', 'double-ratchet/invites/' + this.deviceId],
                 ['l', 'double-ratchet/invites'],
             ],
@@ -387,6 +397,7 @@ export class Invite {
         ownerPublicKey?: string,
         ownerProof?: VerifiedEvent,
     ): Promise<{ session: Session, event: VerifiedEvent }> {
+        if (this.metadataPrivacyVersion !== METADATA_PRIVACY_VERSION) throw new Error("Invite requires a privacy upgrade");
         const inviteeSessionKeypair = generateEphemeralKeypair();
         const inviterPublicKey = this.inviter || this.inviterEphemeralPublicKey;
 
@@ -438,6 +449,7 @@ export class Invite {
 
         return nostrSubscribe(filter, async (event) => {
             try {
+                if (!hasMetadataPrivacyVersion(event)) return;
                 if (seenEventIds.has(event.id)) {
                     return;
                 }

@@ -73,6 +73,7 @@ impl From<Error> for CoreError {
 }
 
 pub fn message_event(envelope: &MessageEnvelope) -> Result<Event> {
+    require_privacy_version(envelope.metadata_privacy_version)?;
     let author_secret_key = secret_key_from_bytes(&envelope.signer_secret_key)?;
     let author_keys = Keys::new(author_secret_key);
     let derived_sender = DevicePubkey::from_bytes(author_keys.public_key().to_bytes());
@@ -86,6 +87,7 @@ pub fn message_event(envelope: &MessageEnvelope) -> Result<Event> {
         Kind::from(MESSAGE_EVENT_KIND as u16),
         envelope.ciphertext.clone(),
     )
+    .tag(tag(["v", "2"])?)
     .tag(tag(["header", envelope.encrypted_header.as_str()])?)
     .custom_created_at(Timestamp::from(envelope.created_at.get()));
     if let Some(recipient) = envelope.recipient {
@@ -97,6 +99,7 @@ pub fn message_event(envelope: &MessageEnvelope) -> Result<Event> {
 }
 
 pub fn parse_message_event(event: &Event) -> Result<MessageEnvelope> {
+    require_private_event(event)?;
     verify_event_kind(event, MESSAGE_EVENT_KIND)?;
     event.verify()?;
     let encrypted_header = required_tag_value(event, "header")?;
@@ -105,6 +108,7 @@ pub fn parse_message_event(event: &Event) -> Result<MessageEnvelope> {
     }
 
     Ok(MessageEnvelope {
+        metadata_privacy_version: crate::METADATA_PRIVACY_VERSION,
         sender: DevicePubkey::from_bytes(event.pubkey.to_bytes()),
         recipient: optional_tag_value(event, "p")
             .as_deref()
@@ -134,6 +138,7 @@ pub fn group_sender_key_message_event(envelope: &GroupSenderKeyMessageEnvelope) 
         None => encrypted_cover_header(&author_keys)?,
     };
     let unsigned = EventBuilder::new(Kind::from(GROUP_SENDER_KEY_MESSAGE_KIND as u16), content)
+        .tag(tag(["v", "2"])?)
         .tag(tag(["header", encrypted_header.as_str()])?)
         .custom_created_at(Timestamp::from(envelope.created_at.get()))
         .build(public_key(envelope.sender_event_pubkey)?);
@@ -145,6 +150,7 @@ pub fn group_sender_key_message_event(envelope: &GroupSenderKeyMessageEnvelope) 
 pub fn parse_group_sender_key_message_event(
     event: &Event,
 ) -> Result<ParsedGroupSenderKeyMessageEvent> {
+    require_private_event(event)?;
     verify_event_kind(event, GROUP_SENDER_KEY_MESSAGE_KIND)?;
     event.verify()?;
     if optional_tag_value(event, "header").is_some() {
@@ -160,6 +166,7 @@ pub fn parse_group_sender_key_message_event(
 pub fn parse_group_sender_key_message_event_unchecked(
     event: &Event,
 ) -> Result<ParsedGroupSenderKeyMessageEvent> {
+    require_private_event(event)?;
     verify_event_kind(event, GROUP_SENDER_KEY_MESSAGE_KIND)?;
     event.verify()?;
     parsed_group_sender_key_message_event_from_content(event)
@@ -257,6 +264,10 @@ fn parse_group_sender_key_legacy_content(content: &str) -> Result<(u32, u32, Vec
 pub fn invite_url(invite: &Invite, root: &str) -> Result<String> {
     let mut data = serde_json::Map::new();
     data.insert(
+        "version".into(),
+        serde_json::json!(crate::METADATA_PRIVACY_VERSION),
+    );
+    data.insert(
         "inviter".to_string(),
         serde_json::Value::String(invite.inviter_device_pubkey.to_string()),
     );
@@ -314,6 +325,12 @@ pub fn parse_invite_url(url: &str) -> Result<Invite> {
         .ok_or_else(|| Error::InvalidEvent("no hash in invite URL".to_string()))?;
     let decoded = urlencoding::decode(hash).map_err(|e| Error::InvalidEvent(e.to_string()))?;
     let data: serde_json::Value = serde_json::from_str(&decoded)?;
+    require_privacy_version(
+        data["version"]
+            .as_u64()
+            .and_then(|v| u8::try_from(v).ok())
+            .unwrap_or(0),
+    )?;
 
     let inviter_device_pubkey = parse_device_pubkey(
         data.get("inviter")
@@ -339,6 +356,7 @@ pub fn parse_invite_url(url: &str) -> Result<Invite> {
         .transpose()?;
 
     Ok(Invite {
+        metadata_privacy_version: crate::METADATA_PRIVACY_VERSION,
         inviter_device_pubkey,
         inviter_ephemeral_public_key,
         shared_secret,
@@ -364,6 +382,7 @@ pub fn invite_unsigned_event(invite: &Invite) -> Result<UnsignedEvent> {
         .clone()
         .unwrap_or_else(|| inviter_device_pubkey.to_string());
     let mut builder = EventBuilder::new(Kind::from(INVITE_EVENT_KIND as u16), "")
+        .tag(tag(["v", "2"])?)
         .tag(tag([
             "ephemeralKey",
             &invite.inviter_ephemeral_public_key.to_string(),
@@ -385,6 +404,7 @@ pub fn invite_unsigned_event(invite: &Invite) -> Result<UnsignedEvent> {
 }
 
 pub fn parse_invite_event(event: &Event) -> Result<Invite> {
+    require_private_event(event)?;
     verify_event_kind(event, INVITE_EVENT_KIND)?;
     event.verify()?;
 
@@ -401,6 +421,7 @@ pub fn parse_invite_event(event: &Event) -> Result<Invite> {
     }
 
     Ok(Invite {
+        metadata_privacy_version: crate::METADATA_PRIVACY_VERSION,
         inviter_device_pubkey,
         inviter_ephemeral_public_key: parse_device_pubkey(&required_tag_value(
             event,
@@ -423,6 +444,7 @@ pub fn parse_invite_event(event: &Event) -> Result<Invite> {
 }
 
 pub fn invite_response_event(envelope: &InviteResponseEnvelope) -> Result<Event> {
+    require_privacy_version(envelope.metadata_privacy_version)?;
     let author_secret_key = secret_key_from_bytes(&envelope.signer_secret_key)?;
     let author_keys = Keys::new(author_secret_key);
     let derived_sender = DevicePubkey::from_bytes(author_keys.public_key().to_bytes());
@@ -436,6 +458,7 @@ pub fn invite_response_event(envelope: &InviteResponseEnvelope) -> Result<Event>
         Kind::from(INVITE_RESPONSE_KIND as u16),
         envelope.content.clone(),
     )
+    .tag(tag(["v", "2"])?)
     .tag(tag(["p", &envelope.recipient.to_string()])?)
     .custom_created_at(Timestamp::from(envelope.created_at.get()))
     .build(public_key(envelope.sender)?);
@@ -444,11 +467,13 @@ pub fn invite_response_event(envelope: &InviteResponseEnvelope) -> Result<Event>
 }
 
 pub fn parse_invite_response_event(event: &Event) -> Result<InviteResponseEnvelope> {
+    require_private_event(event)?;
     verify_event_kind(event, INVITE_RESPONSE_KIND)?;
     event.verify()?;
     let recipient = parse_device_pubkey(&required_tag_value(event, "p")?)?;
 
     Ok(InviteResponseEnvelope {
+        metadata_privacy_version: crate::METADATA_PRIVACY_VERSION,
         sender: DevicePubkey::from_bytes(event.pubkey.to_bytes()),
         signer_secret_key: [0u8; 32],
         recipient,
@@ -590,6 +615,7 @@ mod tests {
                 .to_bytes(),
         );
         let event = message_event(&MessageEnvelope {
+            metadata_privacy_version: crate::METADATA_PRIVACY_VERSION,
             sender,
             recipient: Some(DevicePubkey::from_bytes([7u8; 32])),
             signer_secret_key: signer_secret,
@@ -647,10 +673,9 @@ mod tests {
 
     #[cfg(feature = "full")]
     #[test]
-    fn legacy_group_sender_key_message_without_header_still_parses() {
+    fn unversioned_group_sender_key_message_is_rejected() {
         let signer_secret = [23u8; 32];
         let signer_keys = Keys::new(secret_key_from_bytes(&signer_secret).unwrap());
-        let sender_event_pubkey = DevicePubkey::from_bytes(signer_keys.public_key().to_bytes());
         let content = build_group_sender_key_legacy_content(8, 12, b"legacy ciphertext");
         let event = EventBuilder::new(Kind::from(GROUP_SENDER_KEY_MESSAGE_KIND as u16), content)
             .custom_created_at(Timestamp::from(13))
@@ -659,12 +684,7 @@ mod tests {
             .unwrap();
 
         assert!(optional_tag_value(&event, "header").is_none());
-        let parsed = parse_group_sender_key_message_event(&event).unwrap();
-        assert_eq!(parsed.sender_event_pubkey, sender_event_pubkey);
-        assert_eq!(parsed.key_id, 8);
-        assert_eq!(parsed.message_number, 12);
-        assert!(parsed.encrypted_header.is_none());
-        assert_eq!(parsed.ciphertext, b"legacy ciphertext");
+        assert!(parse_group_sender_key_message_event(&event).is_err());
     }
 
     #[test]
@@ -682,6 +702,7 @@ mod tests {
                 .to_bytes(),
         );
         let invite = Invite {
+            metadata_privacy_version: crate::METADATA_PRIVACY_VERSION,
             inviter_device_pubkey,
             inviter_ephemeral_public_key: DevicePubkey::from_bytes([9u8; 32]),
             shared_secret: [7u8; 32],
@@ -761,6 +782,7 @@ mod tests {
         let device = Keys::generate().public_key();
         let owner = Keys::generate().public_key();
         let payload = serde_json::json!({
+            "version": 2,
             "inviter": device.to_hex(),
             "ephemeralKey": device.to_hex(),
             "sharedSecret": "01".repeat(32),
@@ -804,6 +826,7 @@ mod tests {
         let recipient = DevicePubkey::from_bytes([7u8; 32]);
 
         let event = invite_response_event(&InviteResponseEnvelope {
+            metadata_privacy_version: crate::METADATA_PRIVACY_VERSION,
             sender,
             signer_secret_key: sender_secret,
             recipient,
@@ -834,6 +857,7 @@ mod tests {
                 .to_bytes(),
         );
         let invite = Invite {
+            metadata_privacy_version: crate::METADATA_PRIVACY_VERSION,
             inviter_device_pubkey,
             inviter_ephemeral_public_key: DevicePubkey::from_bytes([9u8; 32]),
             shared_secret: [7u8; 32],
@@ -897,4 +921,22 @@ mod tests {
         let legacy_roster_signed = legacy_roster_unsigned.sign_with_keys(&keys).unwrap();
         assert!(parse_roster_event(&legacy_roster_signed).is_err());
     }
+}
+
+fn require_privacy_version(version: u8) -> Result<()> {
+    if version != crate::METADATA_PRIVACY_VERSION {
+        return Err(Error::InvalidEvent(
+            "protocol requires a new private handshake".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn require_private_event(event: &Event) -> Result<()> {
+    if !crate::has_metadata_privacy_version(event) {
+        return Err(Error::InvalidEvent(
+            "event requires a privacy upgrade".into(),
+        ));
+    }
+    Ok(())
 }

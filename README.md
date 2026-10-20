@@ -104,6 +104,33 @@ events and does not own chat features such as reactions, typing, receipts, or ex
 - No global availability guarantee; delivery depends on relay reachability.
 - No perfect metadata privacy (Nostr relays still see network-level and outer-event metadata).
 
+### Metadata Privacy Protocol v2
+
+Private event authors must not be linkable to an account or device identity.
+An identity recipient tag is permitted for cold delivery only with such an author.
+In particular, the public invite key must never sign the inviter's first reply.
+Both implementations derive a different initial responder key for each acceptance:
+`t = SHA256("NIP-118/responder-key-blinding/v2" || NIP44-conversation-key ||
+inviter-x-only-public-key || initiator-x-only-public-key)`. The inviter adds `t`
+to the even-Y normalized invite secret modulo the curve order; the initiator
+adds `t*G` to the even-Y invite point. Invalid scalars or infinity are errors.
+The resulting key initializes the ordinary double ratchet. The invite response
+still targets the invite key and hides the initiating identity inside encryption.
+
+New private events, invite responses and public invites carry exactly one
+`["v","2"]` tag; invite URLs carry `version: 2`. This marker identifies a format,
+not proof of privacy or authenticity. Verify signatures and retain local signer
+checks. `hasMetadataPrivacyVersion` / `has_metadata_privacy_version` support host
+outbox migration. Unversioned sessions and cached peer invites must be replaced
+through new handshakes; unversioned queued ciphertext must never be republished.
+The supplied persistent outboxes retain blocked items locally. Applications must
+retain message history and regenerate pending sends from their local plaintext
+or report them as failed. Owned invites need a newer publication timestamp.
+
+Regression tests inspect both directions of the public-invite transcript,
+restored sessions, retries, arbitrary outer tags and persisted queues, with
+matching even-Y and odd-Y key derivation vectors in Rust and TypeScript.
+
 ## Multi-Device Integration Contract
 
 New clients and tools should use the shared multi-device helpers in this repo instead of

@@ -65,7 +65,7 @@ describe("Invite", () => {
     expect(event).toBeDefined();
     expect(event.pubkey).not.toBe(bobPublicKey);
     expect(event.kind).toBe(INVITE_RESPONSE_KIND);
-    expect(event.tags).toEqual([["p", invite.inviterEphemeralPublicKey]]);
+    expect(event.tags).toEqual([["v", "2"], ["p", invite.inviterEphemeralPublicKey]]);
   });
 
   it("encodes invite response inner payload as an unsigned kind 1060 rumor", async () => {

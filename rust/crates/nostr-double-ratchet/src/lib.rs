@@ -17,6 +17,7 @@ pub mod invite;
 pub mod message_builders;
 #[cfg(feature = "full")]
 pub mod message_origin;
+mod metadata_privacy;
 #[cfg(feature = "full")]
 pub mod multi_device;
 #[cfg(feature = "full")]
@@ -30,6 +31,7 @@ pub mod roster_editor;
 pub mod sender_key;
 mod serde_hex;
 pub mod session;
+pub use metadata_privacy::{has_metadata_privacy_version, METADATA_PRIVACY_VERSION};
 #[cfg(feature = "full")]
 pub mod session_manager;
 #[cfg(feature = "full")]

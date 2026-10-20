@@ -11,6 +11,8 @@ import {
 import { DUMMY_INNER_PUBKEY } from "./messageBuilders.js";
 import { kdf, deepCopyState } from "./utils.js";
 
+import { METADATA_PRIVACY_VERSION, METADATA_PRIVACY_TAG, hasMetadataPrivacyVersion, privateResponderPublicKey, privateResponderSecretKey } from "./metadataPrivacy.js";
+
 const MAX_SKIP = 1000;
 
 function parseInnerRumor(text: string): Rumor {
@@ -71,6 +73,11 @@ export class Session {
     sharedSecret: Uint8Array,
     name?: string
   ): Session {
+    if (isInitiator) {
+      theirEphemeralNostrPublicKey = privateResponderPublicKey(ourEphemeralNostrPrivateKey, theirEphemeralNostrPublicKey);
+    } else {
+      ourEphemeralNostrPrivateKey = privateResponderSecretKey(ourEphemeralNostrPrivateKey, theirEphemeralNostrPublicKey);
+    }
     const ourNextPrivateKey = generateSecretKey();
     
     let rootKey: Uint8Array;
@@ -99,6 +106,7 @@ export class Session {
     }
     
     const state: SessionState = {
+      metadataPrivacyVersion: METADATA_PRIVACY_VERSION,
       rootKey,
       theirNextNostrPublicKey: theirEphemeralNostrPublicKey,
       ourCurrentNostrKey,
@@ -127,6 +135,12 @@ export class Session {
     event: Partial<UnsignedEvent>,
     outerTags: string[][] = [],
   ): {event: VerifiedEvent, innerEvent: Rumor} {
+    if (this.state.metadataPrivacyVersion !== METADATA_PRIVACY_VERSION) {
+      throw new Error("Session requires a new private handshake");
+    }
+    if (outerTags.some(tag => tag.length !== 2 || tag[0] !== "p" || !/^[0-9a-f]{64}$/.test(tag[1])) || outerTags.length > 1) {
+      throw new Error("Only one delivery recipient is allowed outside the encrypted message");
+    }
     if (!this.state.theirNextNostrPublicKey || !this.state.ourCurrentNostrKey) {
       throw new Error("we are not the initiator, so we can't send the first message");
     }
@@ -159,7 +173,7 @@ export class Session {
     const nostrEvent = finalizeEvent({
       content: encryptedData,
       kind: MESSAGE_EVENT_KIND,
-      tags: [["header", encryptedHeader], ...outerTags.map((tag) => [...tag])],
+      tags: [[...METADATA_PRIVACY_TAG], ["header", encryptedHeader], ...outerTags.map((tag) => [...tag])],
       created_at: Math.floor(now / 1000)
     }, this.state.ourCurrentNostrKey.privateKey);
 
@@ -335,6 +349,7 @@ export class Session {
 
 
   receiveEvent(e: VerifiedEvent): Rumor | undefined {
+    if (this.state.metadataPrivacyVersion !== METADATA_PRIVACY_VERSION || !hasMetadataPrivacyVersion(e)) return undefined;
     const snapshot = deepCopyState(this.state);
 
     try {

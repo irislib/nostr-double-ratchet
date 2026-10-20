@@ -136,14 +136,12 @@ describe("incoming session routing", () => {
     }
   });
 
-  it.each(["owner", "device", "multiple"])("retains %s recipient compatibility", async (alias) => {
+  it.each(["owner", "device"])("retains %s recipient compatibility", async (alias) => {
     const receiver = await manager(getPublicKey(generateSecretKey()));
     const { alice, bob } = pair();
     receiver.installPeer(bob);
     const recipient = alias === "owner" ? receiver.localOwner : receiver.getDeviceId();
-    const tags = alias === "multiple"
-      ? [["p", getPublicKey(generateSecretKey())], ["p", recipient]]
-      : [["p", recipient]];
+    const tags = [["p", recipient]];
     const received = vi.fn();
     receiver.onEvent(received);
     try {

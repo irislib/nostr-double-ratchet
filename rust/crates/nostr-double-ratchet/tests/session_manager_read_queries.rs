@@ -33,6 +33,7 @@ fn key(n: u32) -> DevicePubkey {
 
 fn state(n: u32, skipped: usize) -> SessionState {
     SessionState {
+        metadata_privacy_version: nostr_double_ratchet::METADATA_PRIVACY_VERSION,
         root_key: [0; 32],
         their_current_nostr_public_key: Some(key(n)),
         their_next_nostr_public_key: Some(key(n + 1)),

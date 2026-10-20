@@ -71,6 +71,7 @@ describe('Invite Link URL serialization', () => {
 
       const payload = {
         inviter: alicePublicKey,
+        version: 2,
         inviterEphemeralPublicKey: invite.inviterEphemeralPublicKey,
         sharedSecret: invite.sharedSecret,
       }
@@ -98,7 +99,7 @@ describe('Invite Link URL serialization', () => {
     it('should throw error for invalid URL', () => {
       expect(() => Invite.fromUrl('https://iris.to/')).toThrow('No invite data found in the URL hash')
       expect(() => Invite.fromUrl('https://chat.iris.to/#invalid')).toThrow('Invite data in URL hash is not valid JSON')
-      expect(() => Invite.fromUrl('https://chat.iris.to/#{}')).toThrow('Missing required fields')
+      expect(() => Invite.fromUrl('https://chat.iris.to/#{}')).toThrow('Invite requires a privacy upgrade')
     })
 
     it('should allow communication after serializing and deserializing invite for both parties', async () => {

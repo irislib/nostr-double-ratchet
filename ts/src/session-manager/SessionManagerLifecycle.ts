@@ -1,3 +1,4 @@
+import { hasMetadataPrivacyVersion } from "../metadataPrivacy.js";
 import { decryptInviteOwnerProof, validInviteOwnerProof } from "../inviteOwnerProof.js";
 import {
   ExpirationOptions,
@@ -181,6 +182,7 @@ export abstract class SessionManagerLifecycle extends SessionManagerRecords {
   protected async processInviteResponseEvent(
     event: VerifiedEvent,
   ): Promise<boolean> {
+    if (!hasMetadataPrivacyVersion(event)) return false;
     if (
       this.processedInviteResponses.has(event.id) ||
       this.pendingInviteResponses.has(event.id)

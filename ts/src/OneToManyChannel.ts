@@ -1,3 +1,4 @@
+import { METADATA_PRIVACY_TAG, hasMetadataPrivacyVersion } from "./metadataPrivacy.js";
 import {
   finalizeEvent,
   getPublicKey,
@@ -104,6 +105,7 @@ export class OneToManyChannel {
   }
 
   parseOuterEvent(event: VerifiedEvent): OneToManyMessage {
+    if (!hasMetadataPrivacyVersion(event)) throw new Error("Group event requires a privacy upgrade");
     if (event.kind !== this.outerKind) {
       throw new Error(
         `unexpected kind ${event.kind}, expected ${this.outerKind}`,
@@ -143,7 +145,7 @@ export class OneToManyChannel {
     const template: EventTemplate = {
       kind: this.outerKind,
       content,
-      tags: [["header", encryptedCoverHeader(senderEventSecretKey)]],
+      tags: [[...METADATA_PRIVACY_TAG], ["header", encryptedCoverHeader(senderEventSecretKey)]],
       created_at: createdAt,
     };
 

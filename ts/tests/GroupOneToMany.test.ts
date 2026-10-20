@@ -59,6 +59,11 @@ describe("Group one-to-many (sender keys + OneToManyChannel)", () => {
       [aliceOwnerPk, bobOwnerPk, carolOwnerPk].sort(),
     );
     expect(published).toHaveLength(1);
+    const wire = JSON.stringify(published[0]);
+    for (const identity of [aliceOwnerPk, bobOwnerPk, carolOwnerPk, aliceDevicePk]) {
+      expect(wire).not.toContain(identity);
+    }
+    expect(wire).not.toContain(groupId);
   });
 
   it("decrypts a group message even if the outer event arrives before the sender-key distribution", async () => {

@@ -66,6 +66,7 @@ fn optional_public_key_hex(value: Option<PublicKey>) -> Option<String> {
 
 fn owned_invite_from_vector(vector: &InviteResponseVector) -> Invite {
     Invite {
+        metadata_privacy_version: nostr_double_ratchet::METADATA_PRIVACY_VERSION,
         inviter_device_pubkey: device_pubkey_from_hex(&vector.inviter_device_pubkey),
         inviter_ephemeral_public_key: device_pubkey_from_hex(&vector.inviter_ephemeral_pubkey),
         shared_secret: hex_to_bytes32(&vector.shared_secret),

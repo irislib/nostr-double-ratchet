@@ -26,6 +26,77 @@ fn subscription_filter_is_message_only_and_uses_ephemeral_authors() {
     assert!(state.pending_actions.is_empty());
 }
 
+#[test]
+fn restart_replaces_obsolete_subscriptions_and_quarantines_old_publications() {
+    let keys = Keys::generate();
+    let store = Arc::new(MemoryStore::default());
+    let mut manager =
+        PairwiseManager::open(store.clone(), keys.clone(), RuntimeLimits::default()).unwrap();
+    manager.state.local_invite.metadata_privacy_version = 0;
+    let previous_time = manager.state.local_invite.created_at;
+    let subscription_id = manager.state.message_subscription_id.clone();
+    push_action(
+        &mut manager.state,
+        PairwiseActionKind::Subscribe {
+            subscription_id,
+            filter_json: serde_json::json!({"kinds":[1060],"authors":[keys.public_key().to_hex()]})
+                .to_string(),
+        },
+    );
+    manager
+        .commit_next(manager.state.clone(), Vec::new())
+        .unwrap();
+    let mut restored =
+        PairwiseManager::open(store, keys.clone(), RuntimeLimits::default()).unwrap();
+    assert_eq!(restored.state.local_invite.metadata_privacy_version, 2);
+    assert!(restored.state.local_invite.created_at > previous_time);
+    assert!(restored
+        .pending_actions_at(0)
+        .unwrap()
+        .iter()
+        .all(|action| !matches!(action.kind, PairwiseActionKind::Subscribe { .. })));
+    let legacy = nostr::EventBuilder::new(Kind::from(1060), "old ciphertext")
+        .sign_with_keys(&keys)
+        .unwrap();
+    push_action(
+        &mut restored.state,
+        PairwiseActionKind::Publish {
+            session_id: "old-session".into(),
+            event_json: serde_json::to_string(&legacy).unwrap(),
+            inner_event_id: None,
+        },
+    );
+    assert!(restored.pending_actions_at(0).unwrap().is_empty());
+    assert_eq!(restored.state.pending_actions.len(), 1);
+    assert_eq!(restored.state.pending_outbound_count(), 0);
+}
+
+#[test]
+fn accepting_an_upgraded_invite_replaces_a_cached_old_handshake() {
+    let alice_keys = Keys::generate();
+    let bob_keys = Keys::generate();
+    let mut alice = test_manager(&alice_keys);
+    let bob = test_manager(&bob_keys);
+    let invite = &bob.state.local_invite;
+    let now = invite.created_at.get();
+    alice
+        .accept_invite(invite, bob_keys.public_key(), now)
+        .unwrap();
+    let peer = alice
+        .state
+        .peers
+        .get_mut(&bob_keys.public_key().to_hex())
+        .unwrap();
+    peer.sessions[0].state.metadata_privacy_version = 0;
+    let previous_response = peer.sessions[0].invite_response_event_json.clone();
+    alice
+        .accept_invite(invite, bob_keys.public_key(), now)
+        .unwrap();
+    let replacement = &alice.state.peers[&bob_keys.public_key().to_hex()].sessions[0];
+    assert_eq!(replacement.state.metadata_privacy_version, 2);
+    assert_ne!(replacement.invite_response_event_json, previous_response);
+}
+
 fn test_manager(keys: &Keys) -> PairwiseManager {
     PairwiseManager::open(
         Arc::new(MemoryStore::default()),

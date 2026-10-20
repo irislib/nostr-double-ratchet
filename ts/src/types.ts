@@ -18,6 +18,8 @@ export type KeyPair = {
  * State of a Double Ratchet session between two parties. Needed for persisting sessions.
  */
 export interface SessionState {
+  /** Required for private responder keys; unversioned sessions must be replaced. */
+  metadataPrivacyVersion?: number;
   /** Root key used to derive new sending / receiving chain keys */
   rootKey: Uint8Array;
   

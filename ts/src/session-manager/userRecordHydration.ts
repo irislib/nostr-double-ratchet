@@ -1,4 +1,5 @@
 import { AppKeys } from "../AppKeys.js"
+import { METADATA_PRIVACY_VERSION } from "../metadataPrivacy.js"
 import { Session } from "../Session.js"
 import { deserializeSessionState } from "../utils.js"
 import type {
@@ -44,7 +45,9 @@ export function hydrateUserRecord(input: HydrateUserRecordInput): void {
       const device = userRecord.ensureDevice(deviceData.deviceId, deviceData.createdAt)
 
       for (const session of deviceData.inactiveSessions
-        .map((entry) => deserializeStoredSession(entry, rememberProcessedInviteResponse))
+        .flatMap((entry) => {
+          try { return [deserializeStoredSession(entry, rememberProcessedInviteResponse)] } catch { return [] }
+        })
         .reverse()
       ) {
         device.installSession(session, true, { persist: false })
@@ -94,6 +97,7 @@ function deserializeStoredSession(
   rememberProcessedInviteResponse: HydrateUserRecordInput["rememberProcessedInviteResponse"],
 ): Session {
   const session = new Session(deserializeSessionState(entry.state))
+  if (session.state.metadataPrivacyVersion !== METADATA_PRIVACY_VERSION) throw new Error("Session requires a new private handshake")
   session.name = entry.name
   rememberProcessedInviteResponse(entry.name)
   return session

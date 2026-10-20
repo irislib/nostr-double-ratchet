@@ -20,6 +20,7 @@ const VERSION_NUMBER = 1;
 export function serializeSessionState(state: SessionState): string {
   return JSON.stringify({
     version: VERSION_NUMBER,
+    metadataPrivacyVersion: state.metadataPrivacyVersion,
     rootKey: bytesToHex(state.rootKey),
     theirCurrentNostrPublicKey: state.theirCurrentNostrPublicKey,
     theirNextNostrPublicKey: state.theirNextNostrPublicKey,
@@ -71,6 +72,7 @@ export function deserializeSessionState(data: string): SessionState {
     }
     
     return {
+      metadataPrivacyVersion: state.metadataPrivacyVersion,
       rootKey: hexToBytes(state.rootKey),
       theirCurrentNostrPublicKey: state.theirCurrentNostrPublicKey,
       theirNextNostrPublicKey: state.theirNextNostrPublicKey,
@@ -93,6 +95,7 @@ export function deserializeSessionState(data: string): SessionState {
   
   // Handle current version
   return {
+    metadataPrivacyVersion: state.metadataPrivacyVersion,
     rootKey: hexToBytes(state.rootKey),
     theirCurrentNostrPublicKey: state.theirCurrentNostrPublicKey,
     theirNextNostrPublicKey: state.theirNextNostrPublicKey,
@@ -128,6 +131,7 @@ export function deserializeSessionState(data: string): SessionState {
 
 export function deepCopyState(s: SessionState): SessionState {
   return {
+    metadataPrivacyVersion: s.metadataPrivacyVersion,
     rootKey: new Uint8Array(s.rootKey),
     theirCurrentNostrPublicKey: s.theirCurrentNostrPublicKey,
     theirNextNostrPublicKey: s.theirNextNostrPublicKey,

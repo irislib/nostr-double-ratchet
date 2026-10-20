@@ -18,6 +18,8 @@ use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Invite {
+    #[serde(default)]
+    pub metadata_privacy_version: u8,
     pub inviter_device_pubkey: DevicePubkey,
     pub inviter_ephemeral_public_key: DevicePubkey,
     #[serde(with = "hex::serde")]
@@ -55,6 +57,7 @@ pub struct InviteResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InviteResponseEnvelope {
+    pub metadata_privacy_version: u8,
     pub sender: DevicePubkey,
     pub signer_secret_key: [u8; 32],
     pub recipient: DevicePubkey,
@@ -138,6 +141,7 @@ impl Invite {
         let shared_secret = random_secret_key_bytes(ctx.rng)?;
 
         Ok(Self {
+            metadata_privacy_version: crate::METADATA_PRIVACY_VERSION,
             inviter_device_pubkey,
             inviter_ephemeral_public_key,
             shared_secret,
@@ -233,6 +237,11 @@ impl Invite {
     where
         R: RngCore + CryptoRng,
     {
+        if self.metadata_privacy_version != crate::METADATA_PRIVACY_VERSION {
+            return Err(crate::Error::Invite(
+                "invite requires a privacy upgrade".into(),
+            ));
+        }
         self.ensure_accept_allowed(invitee_public_key)?;
 
         let invitee_session_key = random_secret_key_bytes(ctx.rng)?;
@@ -303,6 +312,7 @@ impl Invite {
         Ok((
             session,
             InviteResponseEnvelope {
+                metadata_privacy_version: crate::METADATA_PRIVACY_VERSION,
                 sender: random_sender_pubkey,
                 signer_secret_key: random_sender_secret,
                 recipient: self.inviter_ephemeral_public_key,
@@ -321,6 +331,11 @@ impl Invite {
     where
         R: RngCore + CryptoRng,
     {
+        if envelope.metadata_privacy_version != crate::METADATA_PRIVACY_VERSION {
+            return Err(crate::Error::Invite(
+                "invite response requires a privacy upgrade".into(),
+            ));
+        }
         let inviter_ephemeral_private_key = self
             .inviter_ephemeral_private_key
             .ok_or_else(|| crate::Error::Parse("ephemeral key not available".to_string()))?;

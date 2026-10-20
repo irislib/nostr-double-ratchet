@@ -55,6 +55,7 @@ fn test_url_parses_inviter_ephemeral_public_key_field() -> Result<()> {
     let invite = Invite::create_new(alice_pk, None, None)?;
 
     let payload = serde_json::json!({
+        "version": 2,
         "inviter": alice_pk.to_hex(),
         "inviterEphemeralPublicKey": hex::encode(invite.inviter_ephemeral_public_key.to_bytes()),
         "sharedSecret": hex::encode(invite.shared_secret),

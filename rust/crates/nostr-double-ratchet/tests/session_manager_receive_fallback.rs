@@ -8,13 +8,12 @@ use support::{
 };
 
 #[test]
-fn reply_to_new_session_is_tried_after_old_active_session_with_same_invite_author() -> Result<()> {
+fn reply_to_new_session_is_routed_past_old_active_session_from_same_invite() -> Result<()> {
     receive_reply_after_stale_candidates(0)
 }
 
 #[test]
-fn reply_to_new_session_is_tried_after_earlier_inactive_session_with_same_invite_author(
-) -> Result<()> {
+fn reply_to_new_session_is_routed_past_earlier_inactive_session_from_same_invite() -> Result<()> {
     receive_reply_after_stale_candidates(1)
 }
 
@@ -31,8 +30,8 @@ fn receive_reply_after_stale_candidates(stale_inactive_count: usize) -> Result<(
     )?;
     let public_invite = public_invite_via_url(&owned_invite)?;
 
-    // Two real acceptances of the same public invitation have the same first
-    // reply author, but different session secrets.
+    // Two acceptances of the same public invitation must have distinct first
+    // reply authors as well as different session secrets.
     let mut old_ctx = context(2, now + 1);
     let (mut old_session, old_response) = public_invite.accept_with_owner_context(
         &mut old_ctx,
@@ -74,9 +73,13 @@ fn receive_reply_after_stale_candidates(stale_inactive_count: usize) -> Result<(
     );
     let reply = send_text(&mut bob_session, &mut bob_ctx, "reply to new session")?;
 
-    // Prove the routing ambiguity and the valid later candidate independently
-    // of SessionManager, without modifying either candidate's ratchet state.
-    assert!(old_session.matches_sender(reply.incoming.sender));
+    // Prove author separation and the valid later candidate independently of
+    // SessionManager, without modifying either candidate's ratchet state.
+    assert!(!old_session.matches_sender(reply.incoming.sender));
+    assert_ne!(
+        reply.incoming.sender,
+        owned_invite.inviter_ephemeral_public_key
+    );
     assert!(new_session.matches_sender(reply.incoming.sender));
     let mut check_ctx = context(5, now + 4);
     assert!(old_session
@@ -110,7 +113,7 @@ fn receive_reply_after_stale_candidates(stale_inactive_count: usize) -> Result<(
             &mut stale_ctx,
             "earlier inactive message",
         )?;
-        assert!(stale_session.matches_sender(reply.incoming.sender));
+        assert!(!stale_session.matches_sender(reply.incoming.sender));
         assert!(stale_session
             .plan_receive(&mut stale_ctx, &reply.incoming)
             .is_err());
@@ -141,7 +144,7 @@ fn receive_reply_after_stale_candidates(stale_inactive_count: usize) -> Result<(
     let mut invalid_reply = reply.incoming.clone();
     invalid_reply.ciphertext = "invalid ciphertext".to_owned();
     let mut failed_ctx = context(8, now + 5);
-    let original_error = old_session
+    let original_error = new_session
         .plan_receive(&mut failed_ctx, &invalid_reply)
         .unwrap_err();
     let error = manager
@@ -153,7 +156,7 @@ fn receive_reply_after_stale_candidates(stale_inactive_count: usize) -> Result<(
     let mut receive_ctx = context(6, now + 5);
     let received = manager
         .receive(&mut receive_ctx, bob.owner_pubkey, &reply.incoming)
-        .expect("an earlier matching session's decryption failure must not hide a valid session")
+        .expect("an earlier session must not hide a valid session")
         .expect("the newer session must receive its reply");
     assert_eq!(received.owner_pubkey, bob.owner_pubkey);
     assert_eq!(received.device_pubkey, bob.device_pubkey);

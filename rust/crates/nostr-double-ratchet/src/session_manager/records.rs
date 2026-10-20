@@ -117,12 +117,18 @@ impl DeviceRecord {
             is_stale: snapshot.is_stale,
             stale_since: snapshot.stale_since,
             claimed_owner_pubkey: snapshot.claimed_owner_pubkey,
-            public_invite: snapshot.public_invite,
+            public_invite: snapshot.public_invite.filter(|invite| {
+                invite.metadata_privacy_version == crate::METADATA_PRIVACY_VERSION
+            }),
             invite_response_generated: snapshot.invite_response_generated,
-            active_session: snapshot.active_session.map(Session::from_state),
+            active_session: snapshot
+                .active_session
+                .filter(|state| state.metadata_privacy_version == crate::METADATA_PRIVACY_VERSION)
+                .map(Session::from_state),
             inactive_sessions: snapshot
                 .inactive_sessions
                 .into_iter()
+                .filter(|state| state.metadata_privacy_version == crate::METADATA_PRIVACY_VERSION)
                 .map(Session::from_state)
                 .collect(),
             last_activity: snapshot.last_activity,

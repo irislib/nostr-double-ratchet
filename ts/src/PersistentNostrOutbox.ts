@@ -1,6 +1,11 @@
 import type { UnsignedEvent, VerifiedEvent } from "nostr-tools";
 import type { StorageAdapter } from "./StorageAdapter.js";
 import type { NostrPublishContext, NostrPublishError } from "./types.js";
+import { hasMetadataPrivacyVersion } from "./metadataPrivacy.js";
+
+function requiresPrivacyUpgrade(event: VerifiedEvent): boolean {
+  return (event.kind === 1059 || event.kind === 1060) && !hasMetadataPrivacyVersion(event);
+}
 
 export interface PersistentNostrPublication {
   event: VerifiedEvent;
@@ -33,6 +38,7 @@ export function createPersistentNostrOutbox(options: PersistentNostrOutboxOption
     !Number.isSafeInteger(retryDelayMs) || retryDelayMs < 1 || retryDelayMs > 2_147_483_647)
     throw new Error("Invalid outbox options");
   const keys = new Set<string>();
+  const blocked = new Set<string>();
   const enqueuing = new Map<string, Promise<void>>();
   const attempts = new Map<string, Promise<VerifiedEvent>>();
   const writes = new Set<Promise<unknown>>();
@@ -78,6 +84,7 @@ export function createPersistentNostrOutbox(options: PersistentNostrOutboxOption
   async function enqueue(event: VerifiedEvent, innerEventId?: string, context?: NostrPublishContext) {
     assertOpen();
     if (!event.id || !event.sig) throw new Error("Cannot queue an unsigned event");
+    if (requiresPrivacyUpgrade(event)) throw new Error("Publication requires a new private handshake");
     const key = prefix + event.id;
     const existing = enqueuing.get(key);
     if (existing) return existing;
@@ -118,6 +125,13 @@ export function createPersistentNostrOutbox(options: PersistentNostrOutboxOption
         row = await options.storage.get<PersistentNostrPublication>(key);
         assertOpen();
         if (!row) { keys.delete(key); throw new Error("Outbox envelope is missing"); }
+        if (requiresPrivacyUpgrade(row.event)) {
+          // Preserve the original ciphertext for the host to inspect or replace.
+          // It must neither reach the relay nor spin in the automatic retry loop.
+          blocked.add(key);
+          keys.delete(key);
+          throw new Error("Publication requires a new private handshake");
+        }
         const result = await Promise.race([
           options.publish(structuredClone(row.event), row.innerEventId, structuredClone(row.context)),
           closedPromise,
@@ -154,7 +168,7 @@ export function createPersistentNostrOutbox(options: PersistentNostrOutboxOption
     if (retrying) return retrying;
     retrying = (async () => {
       await load();
-      const remaining = [...keys];
+      const remaining = [...keys].filter(key => !blocked.has(key));
       let index = 0;
       await Promise.all(Array.from({ length: Math.min(concurrency, remaining.length) }, async () => {
         while (!closed && index < remaining.length) {

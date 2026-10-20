@@ -1,15 +1,18 @@
+import { METADATA_PRIVACY_VERSION } from "../metadataPrivacy.js"
 import type { Session } from "../Session.js"
 
 export type SessionPriority = [number, number, number, number]
 export type SendSessionPriority = [number, number, number, number, number]
 
 export function sessionCanSend(session: Session): boolean {
+  if (session.state.metadataPrivacyVersion !== METADATA_PRIVACY_VERSION) return false
   return Boolean(
     session.state.theirNextNostrPublicKey && session.state.ourCurrentNostrKey
   )
 }
 
 export function sessionCanReceive(session: Session): boolean {
+  if (session.state.metadataPrivacyVersion !== METADATA_PRIVACY_VERSION) return false
   return Boolean(
     session.state.receivingChainKey ||
     session.state.theirCurrentNostrPublicKey ||

@@ -373,11 +373,14 @@ impl PairwiseState {
     pub fn pending_outbound_count(&self) -> usize {
         self.pending_actions
             .iter()
-            .filter(|action| {
-                matches!(
-                    action.kind,
-                    PairwiseActionKind::Publish { .. } | PairwiseActionKind::OutOfBand { .. }
-                )
+            .filter(|action| match &action.kind {
+                PairwiseActionKind::Publish { event_json, .. }
+                | PairwiseActionKind::OutOfBand { event_json, .. } => serde_json::from_str::<
+                    nostr::Event,
+                >(event_json)
+                .ok()
+                .is_some_and(|event| nostr_double_ratchet::has_metadata_privacy_version(&event)),
+                _ => false,
             })
             .count()
     }
@@ -516,6 +519,9 @@ impl SessionRecord {
 }
 
 pub(crate) fn session_sender_keys(state: &SessionState) -> Vec<DevicePubkey> {
+    if state.metadata_privacy_version != nostr_double_ratchet::METADATA_PRIVACY_VERSION {
+        return Vec::new();
+    }
     let mut keys = BTreeSet::new();
     keys.extend(state.their_current_nostr_public_key);
     keys.extend(state.their_next_nostr_public_key);

@@ -1,3 +1,4 @@
+import { privateResponderPublicKey } from "../src/metadataPrivacy"
 import { describe, it, expect } from 'vitest'
 import { generateSecretKey, getEventHash, getPublicKey, nip44 } from 'nostr-tools'
 import { getConversationKey } from 'nostr-tools/nip44'
@@ -437,7 +438,7 @@ describe('inviteUtils', () => {
 
       expect(session).toBeDefined()
       expect(session.state).toBeDefined()
-      expect(session.state.theirNextNostrPublicKey).toBe(inviterEphemeralKeypair.publicKey)
+      expect(session.state.theirNextNostrPublicKey).toBe(privateResponderPublicKey(inviteeSessionKeypair.privateKey, inviterEphemeralKeypair.publicKey))
     })
 
     it('should create a session for inviter (receiver)', () => {

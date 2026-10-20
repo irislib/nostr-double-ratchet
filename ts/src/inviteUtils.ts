@@ -1,3 +1,4 @@
+import { METADATA_PRIVACY_TAG } from "./metadataPrivacy.js"
 import { generateSecretKey, getEventHash, getPublicKey, nip44 } from 'nostr-tools'
 import { getConversationKey } from 'nostr-tools/nip44'
 import { schnorr } from '@noble/curves/secp256k1.js'
@@ -229,7 +230,7 @@ export async function encryptInviteResponse(params: EncryptInviteResponseParams)
     pubkey: randomSenderPublicKey,
     content: nip44.encrypt(innerJson, getConversationKey(randomSenderPrivateKey, inviterEphemeralPublicKey)),
     created_at: randomNow(),
-    tags: [['p', inviterEphemeralPublicKey]],
+    tags: [[...METADATA_PRIVACY_TAG], ['p', inviterEphemeralPublicKey]],
   }
 
   return {

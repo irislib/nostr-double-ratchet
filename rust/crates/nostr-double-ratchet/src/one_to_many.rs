@@ -118,6 +118,11 @@ impl OneToManyChannel {
     }
 
     pub fn parse_outer_event(&self, event: &nostr::Event) -> Result<OneToManyMessage> {
+        if !crate::has_metadata_privacy_version(event) {
+            return Err(Error::InvalidEvent(
+                "group event requires a privacy upgrade".into(),
+            ));
+        }
         if event.kind != nostr::Kind::Custom(self.outer_kind as u16) {
             return Err(Error::InvalidEvent(format!(
                 "unexpected kind {}, expected {}",
@@ -149,6 +154,7 @@ impl OneToManyChannel {
 
         let unsigned =
             nostr::EventBuilder::new(nostr::Kind::Custom(self.outer_kind as u16), &content)
+                .tag(nostr::Tag::parse(["v", "2"]).expect("valid version tag"))
                 .tag(encrypted_cover_header_tag(sender_event_keys)?)
                 .custom_created_at(created_at)
                 .build(sender_event_keys.public_key());

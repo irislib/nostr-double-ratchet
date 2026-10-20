@@ -620,6 +620,7 @@ fn reencrypt_outer_response(
         Version::V2,
     )?;
     Ok(InviteResponseEnvelope {
+        metadata_privacy_version: nostr_double_ratchet::METADATA_PRIVACY_VERSION,
         sender: response.sender,
         signer_secret_key: response.signer_secret_key,
         recipient: response.recipient,
