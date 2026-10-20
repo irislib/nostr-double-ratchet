@@ -308,6 +308,7 @@ export class SessionGroupRuntime {
       return false;
     }
     if (
+      event.kind === PRIVATE_GROUP_DELIVERY_KIND ||
       event.kind === GROUP_ROSTER_FACT_KIND ||
       event.kind === GROUP_SENDER_KEY_DISTRIBUTION_KIND
     ) {

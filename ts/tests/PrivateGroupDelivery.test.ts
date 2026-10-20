@@ -101,12 +101,17 @@ describe('private group delivery recovery', () => {
     await expect(deliver!(rumor, carol)).resolves.toBeUndefined()
     await expect(deliver!(rumor, alice)).rejects.toThrow('application handler')
     const observed: string[] = []
+    let callbackCount = 0
     let fail = true
     runtime.onGroupEvent(async event => {
+      callbackCount++
       await Promise.resolve()
       if (fail) throw new Error('injected app persistence failure')
       observed.push(event.inner.id)
     })
+    runtime.processSessionEvent(rumor, alice, {senderOwnerPubkey: alice, senderDevicePubkey: device} as never)
+    await Promise.resolve()
+    expect(callbackCount).toBe(0)
     await expect(deliver!(rumor, alice)).rejects.toThrow('app persistence')
     fail = false
     await deliver!(rumor, alice)
