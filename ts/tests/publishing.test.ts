@@ -118,6 +118,7 @@ it('refuses public group roster facts and bare shared group envelopes before sig
     finalizeEvent({...unsigned, kind: 37368, tags: [['type', 'group_roster']]}, secret),
     finalizeEvent({...unsigned, kind: 1060, tags: [['v', '2'], ['header', 'ciphertext']]}, secret),
     ...[10445, 10446, 10447, 21113].map(kind => finalizeEvent({...unsigned, kind}, secret)),
+    finalizeEvent({...unsigned, kind: 1059, tags: [['p', 'ab'.repeat(32)], ['p', 'cd'.repeat(32)]]}, secret),
   ]) await expect(publish(event)).rejects.toThrow('group')
   expect(transport).not.toHaveBeenCalled()
   expect(enqueue).not.toHaveBeenCalled()

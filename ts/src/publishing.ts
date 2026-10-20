@@ -7,7 +7,7 @@ import { GROUP_ROSTER_FACT_KIND } from "./GroupMeta.js";
 export function isForbiddenGroupRelayEvent(event: Pick<Rumor, "kind" | "tags">): boolean {
   if ([10445, 10446, 10447, 21113].includes(event.kind)) return true;
   if (event.kind === GROUP_ROSTER_FACT_KIND && event.tags.some(tag => tag[0] === "type" && tag[1] === "group_roster")) return true;
-  if (event.kind !== 1060) return false;
+  if (event.kind !== 1060 && event.kind !== 1059) return false;
   const recipients = event.tags.filter(tag => tag[0] === "p");
   return recipients.length !== 1 || !/^[a-f0-9]{64}$/i.test(recipients[0][1] || "");
 }
