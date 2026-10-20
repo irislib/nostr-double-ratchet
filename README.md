@@ -187,18 +187,23 @@ helpers above.
 
 ## Group Messaging Model
 
-Groups use a hybrid model:
+Group delivery preserves the same private transport boundary as direct messages:
 
 1. Group metadata and sender-key distributions are sent over authenticated 1:1 ratchet sessions.
 2. Each sending device has a per-group sender-event keypair and sender-key chain.
-3. A group message is published once as a one-to-many encrypted outer event.
-4. Members decrypt using sender-key state learned from pairwise distributions.
-5. Shared-channel events are used only for signed bootstrap invites when members do not yet have a direct 1:1 session.
+3. The signed group ciphertext is a local intermediate payload. Each recipient receives it inside a separate authenticated double-ratchet session (kind 21113).
+4. Members authenticate the pairwise sender before decrypting the nested group payload. Delivery callbacks must persist the message before acknowledging it.
+5. Group membership, names, administrators, sender-key authors, and shared group ciphertext must never be published or subscribed to as public group channels. Missing sessions use invite handshakes and durable private retries.
+
+The JavaScript runtime handles this fanout and durable delivery centrally. Rust's
+`GroupManager` is a transport-independent planner: its returned group ciphertext
+must be wrapped in recipient-specific ratchet deliveries by the integration. It
+must never be published directly. Private relay publishing and public peer
+discovery must also be isolated from account-authenticated receive connections.
 
 ## Scalability And Tradeoffs
 
-- Per-group message publish is O(1) (single outer event), which scales better than per-member ciphertext fanout.
-- Sender-key distribution and metadata updates are O(number of members/devices), so membership churn is more expensive than steady-state messaging.
+- Group message delivery, sender-key distribution, and metadata updates are O(number of members/devices). This avoids a public channel that identifies a group's participants through shared subscriptions.
 - Multi-device support improves usability but increases session count, subscriptions, and state management complexity.
 - Delivery is eventually consistent; implementations use persistent queues/retries but cannot force relay delivery.
 
