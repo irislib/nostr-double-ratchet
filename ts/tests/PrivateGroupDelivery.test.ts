@@ -30,6 +30,30 @@ describe('private group delivery', () => {
 })
 
 describe('private group delivery recovery', () => {
+  it('rejects known-group nonmember keys instead of retaining them for a future metadata revision', async () => {
+    const alice = key(), bob = key(), device = key(), receiverDevice = key();
+    const data = createGroupData('membership', alice, [bob]);
+    const sender = new Group({ data, ourOwnerPubkey: alice, ourDevicePubkey: device });
+    const receiver = new GroupManager({ ourOwnerPubkey: bob, ourDevicePubkey: receiverDevice });
+    const keys: import('../src/types.js').Rumor[] = [];
+    try {
+      await receiver.upsertGroup({ ...data, members: [bob], admins: [bob] });
+      const result = await sender.sendMessage('membership-gated', {
+        publishOuter: async () => { throw new Error('Shared publication forbidden') },
+        sendPairwise: async (recipient, rumor) => { if (recipient === bob && rumor.kind === 10446) keys.push(rumor) },
+      });
+      expect(keys.length).toBeGreaterThan(0);
+      for (const rumor of keys) await receiver.handleIncomingSessionEvent(rumor, alice, device);
+      expect(receiver.groupForSenderEvent(result.outer.pubkey)).toBeUndefined();
+      await receiver.upsertGroup(data);
+      // A later local membership update cannot authenticate a previously rejected key.
+      expect(receiver.groupForSenderEvent(result.outer.pubkey)).toBeUndefined();
+      for (const rumor of keys) await receiver.handleIncomingSessionEvent(rumor, alice, device);
+      expect(receiver.groupForSenderEvent(result.outer.pubkey)?.id).toBe(data.id);
+      expect((await receiver.handleOuterEvent(result.outer))?.inner.id).toBe(result.inner.id);
+    } finally { receiver.destroy(); }
+  });
+
   it('persists all recipients before handoff and resumes only failed recipients after restart', async () => {
     const { PrivateGroupDeliveryOutbox } = await import('../src/PrivateGroupDelivery.js')
     const storage = new InMemoryStorageAdapter(), alice = key(), bob = key(), carol = key(), device = key()
@@ -85,7 +109,7 @@ describe('private group delivery recovery', () => {
     let deliver: (rumor: any, sender: string) => Promise<void>
     const sessions = { onEvent: () => () => {}, onDurableEvent: (_: number[], callback: typeof deliver) => {
       deliver = callback; return () => {}
-    }, flushDurableSessionEvents: async () => {}, sendEvent: async () => {} }
+    }, flushDurableSessionEvents: async () => {}, notifyDurableSessionEventReadiness: () => {}, sendEvent: async () => {} }
     const runtime = new SessionGroupRuntime({ sessionManager: sessions as never, ourOwnerPubkey: bob,
       ourDevicePubkey: receiverDevice, groupStorage: storage, nostrSubscribe: vi.fn(() => () => {}), nostrPublish: vi.fn() })
     await runtime.upsertGroup(data)
@@ -161,4 +185,96 @@ it('rejects an oversized group delivery before acknowledging an undeliverable fa
     sendPairwise: async (_recipient, rumor) => { deliveries.push(rumor.kind) },
   })).rejects.toThrow('oversized')
   expect(deliveries).not.toContain(21113)
+})
+
+
+it.each(['known', 'upsert', 'sync'] as const)('automatically commits queued ratchet group deliveries after %s readiness', async bootstrap => {
+  const { MockRelay } = await import('./helpers/mockRelay.js')
+  const { createRuntime } = await import('./helpers/runtime.js')
+  const { PRIVATE_GROUP_DELIVERY_KIND } = await import('../src/PrivateGroupDelivery.js')
+  const frames: string[] = [], requests: string[] = []
+  class SerializedRelay extends MockRelay {
+    override storeAndDeliver(event: Parameters<MockRelay['storeAndDeliver']>[0]) {
+      const frame = JSON.stringify(['EVENT', event]); frames.push(frame)
+      super.storeAndDeliver(JSON.parse(frame)[1])
+    }
+    override subscribe(filter: Parameters<MockRelay['subscribe']>[0], onEvent: Parameters<MockRelay['subscribe']>[1]) {
+      const frame = JSON.stringify(['REQ', 'test', filter]); requests.push(frame)
+      return super.subscribe(JSON.parse(frame)[2], event => onEvent(JSON.parse(JSON.stringify(event))))
+    }
+  }
+  const relay = new SerializedRelay(), aliceSecret = generateSecretKey(), bobSecret = generateSecretKey()
+  const alice = getPublicKey(aliceSecret), bob = getPublicKey(bobSecret)
+  const sender = createRuntime({ relay, ownerPrivateKey: aliceSecret })
+  const receiver = createRuntime({ relay, ownerPrivateKey: bobSecret })
+  const committed = new Map<string, string>()
+  let callbackCount = 0, keysReceived = 0
+  receiver.onSessionEvent(event => { if (event.kind === 10446) keysReceived++ })
+  let releaseCommit!: () => void
+  const commitAllowed = new Promise<void>(resolve => { releaseCommit = resolve })
+  receiver.onGroupEvent(async event => {
+    callbackCount++
+    await commitAllowed
+    committed.set(event.inner.id, event.inner.content)
+  })
+  try {
+    for (const [runtime, owner] of [[sender, alice], [receiver, bob]] as const) {
+      await runtime.initForOwner(owner)
+      await runtime.registerCurrentDevice({ ownerPubkey: owner })
+      await runtime.republishInvite()
+    }
+    await sender.sendMessage(bob, 'warmup')
+    await receiver.sendMessage(alice, 'ready')
+    const data = createGroupData('delayed keys', alice, [bob])
+    if (bootstrap === 'known') await receiver.upsertGroup(data)
+    const group = new Group({ data, ourOwnerPubkey: alice, ourDevicePubkey: sender.getState().currentDevicePubkey! })
+    const held: import('../src/types.js').Rumor[] = []
+    const expected: Array<{ id: string; content: string }> = []
+    let groupAuthor = ''
+    for (let index = 0; index < 4; index++) {
+      const result = await group.sendMessage(`delayed ${index}`, {
+        publishOuter: async () => { throw new Error('Shared publication forbidden') },
+        sendPairwise: async (recipient, rumor) => { if (recipient === bob) held.push(structuredClone(rumor)) },
+      })
+      groupAuthor = result.outer.pubkey
+      expected.push({ id: result.inner.id, content: result.inner.content })
+    }
+    const deliveries = held.filter(rumor => rumor.kind === PRIVATE_GROUP_DELIVERY_KIND)
+    const keys = held.filter(rumor => rumor.kind !== PRIVATE_GROUP_DELIVERY_KIND)
+    expect(deliveries).toHaveLength(4)
+    expect(keys.length).toBeGreaterThan(0)
+    for (const rumor of deliveries) await sender.sendEvent(bob, rumor)
+    const sessions = await receiver.waitForSessionManager(bob)
+    const pending = () => [...sessions.getUserRecords().values()].flatMap(record => [...record.pendingDurableEvents.values()])
+    await vi.waitFor(() => expect(pending()).toHaveLength(4))
+    expect(committed.size).toBe(0)
+    // Let the ordinary failed drain establish backoff before supplying keys.
+    await new Promise(resolve => setTimeout(resolve, 30))
+    for (const rumor of keys) await sender.sendEvent(bob, rumor)
+    await vi.waitFor(() => expect(keysReceived).toBeGreaterThan(0), { timeout: 500 })
+    if (bootstrap === 'upsert') await receiver.upsertGroup(data)
+    if (bootstrap === 'sync') await receiver.syncGroups([data])
+    await vi.waitFor(() => expect(receiver.getGroupManager()!.knownSenderEventPubkeys()).toContain(groupAuthor), { timeout: 500 })
+    await vi.waitFor(() => expect(callbackCount).toBeGreaterThan(0), { timeout: 500 })
+    expect(pending()).toHaveLength(4)
+    releaseCommit()
+    await vi.waitFor(() => expect([...committed].sort()).toEqual(expected.map(event => [event.id, event.content]).sort()), { timeout: 500 })
+    await vi.waitFor(() => expect(pending()).toHaveLength(0), { timeout: 500 })
+    // Replayed controls cannot create another application message or strand an ACK.
+    for (const rumor of [...keys, deliveries[0]!]) await sender.sendEvent(bob, rumor)
+    await vi.waitFor(() => expect(callbackCount).toBe(5), { timeout: 500 })
+    await vi.waitFor(() => expect(pending()).toHaveLength(0), { timeout: 500 })
+    expect(committed.size).toBe(4)
+    const identities = [alice, bob, sender.getState().currentDevicePubkey!, receiver.getState().currentDevicePubkey!]
+    for (const frame of frames) {
+      const event = JSON.parse(frame)[1]
+      expect(event.kind === 37368 && event.tags.some((tag: string[]) => tag[0] === 'type' && tag[1] === 'group_roster')).toBe(false)
+      expect([10445, 10446, 10447, 21113]).not.toContain(event.kind)
+      if ([1059, 1060].includes(event.kind)) {
+        expect(identities).not.toContain(event.pubkey)
+        expect(event.tags.filter((tag: string[]) => tag[0] === 'p')).toHaveLength(1)
+      }
+    }
+    for (const request of requests) expect(JSON.parse(request)[2].authors ?? []).not.toContain(groupAuthor)
+  } finally { releaseCommit(); sender.close(); receiver.close() }
 })

@@ -4,8 +4,11 @@ import {
   type GroupData,
   type GroupDecryptedEvent,
   GROUP_ROSTER_FACT_KIND,
+  GROUP_INVITE_RUMOR_KIND,
   GROUP_SENDER_KEY_DISTRIBUTION_KIND,
+  GROUP_SENDER_KEY_REPAIR_REQUEST_KIND,
 } from "./Group.js";
+import { parseSenderKeyRepairRequestRumor, senderKeyRepairDefaultNextRetryAt } from "./SenderKeyRepair.js";
 import {
   classifyMessageOrigin,
   isCrossDeviceSelfOrigin,
@@ -81,6 +84,7 @@ export class SessionGroupRuntime {
   private privateDeliveryCleanup: Unsubscribe | null = null;
   private deliveryRetryTimer?: ReturnType<typeof setTimeout>;
   private readonly committingPrivateEvents = new Set<string>();
+  private readonly keyRepairAttempts = new Map<string, { count: number; nextAt: number }>();
   private readonly groupEventCallbacks = new Set<
     (event: GroupDecryptedEvent) => void | Promise<void>
   >();
@@ -156,7 +160,7 @@ export class SessionGroupRuntime {
 
   onGroupEvent(callback: (event: GroupDecryptedEvent) => void | Promise<void>): Unsubscribe {
     this.groupEventCallbacks.add(callback);
-    void this.sessionManager?.flushDurableSessionEvents();
+    this.sessionManager?.notifyDurableSessionEventReadiness();
     return () => {
       this.groupEventCallbacks.delete(callback);
     };
@@ -204,28 +208,56 @@ export class SessionGroupRuntime {
         ),
       ).catch(() => {});
     }
-    void this.groupManager?.handleIncomingSessionEvent(
+    const groups = this.groupManager;
+    const sessions = this.sessionManager;
+    void groups?.handleIncomingSessionEvent(
       event,
       senderOwnerPubkey,
       senderDevicePubkey,
-    );
+    ).then(async () => {
+      if (this.groupManager !== groups || this.sessionManager !== sessions) return;
+      if (event.kind === GROUP_SENDER_KEY_REPAIR_REQUEST_KIND && event.pubkey === senderDevicePubkey) {
+        const request = parseSenderKeyRepairRequestRumor(event);
+        const group = request && groups?.getGroup(request.groupId);
+        if (request && group?.members.includes(senderOwnerPubkey) && group.members.includes(this.getOwnerPubkey() || "") &&
+            this.allowKeyRepair(JSON.stringify(["reply", group.id, senderOwnerPubkey]))) {
+          await groups!.respondToSenderKeyRepairRequest(group.id, senderOwnerPubkey, request, {
+            sendPairwise: async (recipient, rumor) => {
+              if (this.groupManager !== groups || this.sessionManager !== sessions) throw new Error("Inactive group key repair");
+              await sessions!.sendEvent(recipient, rumor, { includeLocalSiblings: false });
+            },
+          });
+        }
+      }
+      if ([GROUP_INVITE_RUMOR_KIND, GROUP_ROSTER_FACT_KIND, GROUP_SENDER_KEY_DISTRIBUTION_KIND].includes(event.kind)) {
+        sessions?.notifyDurableSessionEventReadiness();
+      }
+    }).catch(() => { /* Unapplied controls retain their ordinary retry backoff. */ });
   }
 
   async upsertGroup(group: GroupData, ownerPubkey?: string): Promise<void> {
     const manager = await this.waitForManager(ownerPubkey);
+    const before = manager.privateDeliveryReadiness(group.id);
     await manager.upsertGroup(group);
+    if (before !== manager.privateDeliveryReadiness(group.id) && this.groupManager === manager) {
+      this.sessionManager?.notifyDurableSessionEventReadiness();
+    }
     await this.flushPrivateDeliveries();
   }
 
   async syncGroups(groups: GroupData[], ownerPubkey?: string): Promise<void> {
     const manager = await this.waitForManager(ownerPubkey);
     const nextGroupIds = new Set(groups.map((group) => group.id));
+    let readinessChanged = false;
     for (const group of groups) {
+      const before = manager.privateDeliveryReadiness(group.id);
       await manager.upsertGroup(group);
+      readinessChanged ||= before !== manager.privateDeliveryReadiness(group.id);
     }
     for (const groupId of manager.managedGroupIds()) {
       if (!nextGroupIds.has(groupId)) manager.removeGroup(groupId);
     }
+    if (readinessChanged && this.groupManager === manager) this.sessionManager?.notifyDurableSessionEventReadiness();
     await this.flushPrivateDeliveries();
   }
 
@@ -290,6 +322,7 @@ export class SessionGroupRuntime {
     this.groupManager = null;
     this.groupManagerInitPromise = null;
     this.sessionManager = null;
+    this.keyRepairAttempts.clear();
     this.onReadyStateChange?.(false);
   }
 
@@ -310,7 +343,8 @@ export class SessionGroupRuntime {
     if (
       event.kind === PRIVATE_GROUP_DELIVERY_KIND ||
       event.kind === GROUP_ROSTER_FACT_KIND ||
-      event.kind === GROUP_SENDER_KEY_DISTRIBUTION_KIND
+      event.kind === GROUP_SENDER_KEY_DISTRIBUTION_KIND ||
+      event.kind === GROUP_SENDER_KEY_REPAIR_REQUEST_KIND
     ) {
       return false;
     }
@@ -377,7 +411,10 @@ export class SessionGroupRuntime {
     const manager = this.groupManager;
     if (!manager) throw new Error("Group delivery waits for group state");
     const group = manager.groupForSenderEvent(outer.pubkey);
-    if (!group) throw new Error("Group delivery waits for sender keys");
+    if (!group) {
+      await this.requestMissingGroupKey(manager, rumor, outer, senderOwnerPubkey);
+      throw new Error("Group delivery waits for sender keys");
+    }
     const opts = { storage: this.groupStorage, ourOwnerPubkey: this.getOwnerPubkey()!,
       ourDevicePubkey: this.getCurrentDevicePubkey()!, group, event: outer, senderOwnerPubkey };
     const status = await privateGroupDeliverySenderStatus(opts);
@@ -387,7 +424,10 @@ export class SessionGroupRuntime {
     let decrypted = await this.groupStorage.get<GroupDecryptedEvent>(cacheKey);
     if (!decrypted) {
       decrypted = await previewPrivateGroupDelivery(opts) || undefined;
-      if (!decrypted) throw new Error("Group delivery waits for decryption keys");
+      if (!decrypted) {
+        await this.requestMissingGroupKey(manager, rumor, outer, senderOwnerPubkey);
+        throw new Error("Group delivery waits for decryption keys");
+      }
       await this.groupStorage.put(cacheKey, decrypted);
     }
     // The saved receive ratchet retains 21113 until application persistence succeeds.
@@ -396,6 +436,32 @@ export class SessionGroupRuntime {
     this.committingPrivateEvents.add(outer.id);
     try { await manager.handleOuterEvent(outer); }
     finally { this.committingPrivateEvents.delete(outer.id); }
+  }
+
+  private allowKeyRepair(key: string): boolean {
+    const now = Math.floor(Date.now() / 1000), previous = this.keyRepairAttempts.get(key);
+    if (previous && now < previous.nextAt) return false;
+    const count = (previous?.count || 0) + 1;
+    this.keyRepairAttempts.delete(key);
+    this.keyRepairAttempts.set(key, { count, nextAt: senderKeyRepairDefaultNextRetryAt(now, count) });
+    if (this.keyRepairAttempts.size > 512) this.keyRepairAttempts.delete(this.keyRepairAttempts.keys().next().value!);
+    return true;
+  }
+
+  private async requestMissingGroupKey(manager: GroupManager, rumor: Rumor, outer: VerifiedEvent, sender: string): Promise<void> {
+    const groupId = rumor.tags.find(tag => tag[0] === "l")?.[1];
+    const group = groupId && manager.getGroup(groupId), sessions = this.sessionManager;
+    if (!group || !sessions || !group.members.includes(sender) || !group.members.includes(this.getOwnerPubkey() || "")) return;
+    const request = manager.senderKeyRepairRequestForOuterEvent(group.id, outer);
+    if (!request || !this.allowKeyRepair(JSON.stringify(["request", group.id, sender]))) return;
+    await manager.requestSenderKeyRepair(group.id, request, {
+      sendPairwise: async (recipient, repair) => {
+        // Ask only the authenticated sender of this ratchet delivery, never other members.
+        if (recipient !== sender) return;
+        if (this.groupManager !== manager || this.sessionManager !== sessions) throw new Error("Inactive group key repair");
+        await sessions.sendEvent(recipient, repair, { includeLocalSiblings: false });
+      },
+    });
   }
 }
 

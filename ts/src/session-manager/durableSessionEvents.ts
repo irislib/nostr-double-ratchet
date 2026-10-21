@@ -21,6 +21,7 @@ export class DurableSessionEvents {
   private retryTimer?: ReturnType<typeof setTimeout>;
   private failures = 0;
   private closed = false;
+  private readinessPending = false;
   private readonly pendingPersistence = new Map<string, number>();
   private generation = 0;
 
@@ -46,7 +47,7 @@ export class DurableSessionEvents {
     const registration = { kinds: new Set(kinds), callback };
     for (const kind of kinds) this.kinds.add(kind);
     this.handlers.add(registration);
-    void this.flush();
+    this.notifyReady();
     return () => {
       this.handlers.delete(registration);
     };
@@ -56,6 +57,13 @@ export class DurableSessionEvents {
     if (!record.pendingDurableEvents.has(entry.id))
       record.pendingDurableEvents.set(entry.id, structuredClone(entry));
     this.pendingPersistence.set(record.publicKey, ++this.generation);
+    this.notifyReady();
+  }
+
+  /** A real state change warrants one coalesced followup, including during a drain. */
+  notifyReady(): void {
+    if (this.closed) return;
+    this.readinessPending = true;
     void this.flush();
   }
 
@@ -64,8 +72,12 @@ export class DurableSessionEvents {
     if (this.flushing) return this.flushing;
     clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
-    this.flushing = this.drain().finally(() => {
+    this.flushing = this.drainReady().finally(() => {
       this.flushing = undefined;
+      if (!this.closed && this.readinessPending) {
+        // Join a signal arriving between the last pass and this finalizer too.
+        return this.flush();
+      }
       if (
         !this.closed &&
         (this.pendingPersistence.size > 0 || this.hasDeliverable())
@@ -79,6 +91,14 @@ export class DurableSessionEvents {
       }
     });
     return this.flushing;
+  }
+
+  private async drainReady(): Promise<void> {
+    do {
+      this.readinessPending = false;
+      await this.drain();
+      // One followup per coalesced state change, never a poll of failed rows.
+    } while (!this.closed && this.readinessPending);
   }
 
   private matching(event: Rumor): Registration[] {
@@ -152,6 +172,7 @@ export class DurableSessionEvents {
 
   close(): void {
     this.closed = true;
+    this.readinessPending = false;
     clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
     this.handlers.clear();

@@ -41,6 +41,9 @@ export abstract class SessionManagerCore {
 
   flushDurableSessionEvents(): Promise<void> { return this.durableSessionEvents.flush(); }
 
+  /** Non-blocking: safe when readiness changes inside an application callback. */
+  notifyDurableSessionEventReadiness(): void { this.durableSessionEvents.notifyReady(); }
+
 
   protected readonly versionPrefix: string;
 

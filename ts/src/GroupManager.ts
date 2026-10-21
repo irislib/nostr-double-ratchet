@@ -74,6 +74,24 @@ export interface CreateGroupResult {
 }
 
 export class GroupManager extends GroupManagerBackfill {
+  /** Local receive readiness only; display metadata cannot release an inbox row. */
+  privateDeliveryReadiness(groupId: string): string | undefined {
+    const group = this.groups.get(groupId);
+    if (!group) return undefined;
+    return JSON.stringify([
+      [...new Set(group.data.members)].sort(),
+      [...(this.groupToSenderEvents.get(groupId) || [])].sort(),
+    ]);
+  }
+
+  override async upsertGroup(data: GroupData): Promise<void> {
+    await super.upsertGroup(data);
+    await this.enqueueOperation(async () => {
+      // Authenticated key controls can precede the app's local metadata restore.
+      this.emitDecryptedEvents(await this.drainPendingSessionEvents(data.id));
+    });
+  }
+
   getGroup(groupId: string): GroupData | undefined {
     return this.groups.get(groupId)?.data;
   }

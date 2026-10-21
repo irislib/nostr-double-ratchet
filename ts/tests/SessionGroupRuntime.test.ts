@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { generateSecretKey, getPublicKey } from "nostr-tools";
 import { SessionGroupRuntime } from "../src/RuntimeGroupController";
 import type { OnEventCallback } from "../src/SessionManager";
 import type { Rumor } from "../src/types";
+import { createGroupData } from "../src/Group.js";
 
 class FakeSessionManager {
   readonly ownerPubkey: string;
@@ -15,6 +16,7 @@ class FakeSessionManager {
     return () => { this.durable = undefined; };
   }
   async flushDurableSessionEvents() {}
+  notifyDurableSessionEventReadiness() {}
 
   constructor(ownerPubkey: string, devicePubkey: string) {
     this.ownerPubkey = ownerPubkey;
@@ -51,6 +53,32 @@ class FakeSessionManager {
 }
 
 describe("SessionGroupRuntime", () => {
+  it.each(["upsert", "sync"] as const)("signals changed existing-group readiness without looping on identical %s metadata", async method => {
+    const owner = getPublicKey(generateSecretKey()), device = getPublicKey(generateSecretKey());
+    const peer = getPublicKey(generateSecretKey());
+    const sessions = new FakeSessionManager(owner, device);
+    const notify = vi.spyOn(sessions, "notifyDurableSessionEventReadiness");
+    const runtime = new SessionGroupRuntime({ sessionManager: sessions as never,
+      ourOwnerPubkey: owner, ourDevicePubkey: device,
+      nostrSubscribe: () => () => {}, nostrPublish: async event => event as never });
+    const apply = (data: ReturnType<typeof createGroupData>) => method === "upsert"
+      ? runtime.upsertGroup(data) : runtime.syncGroups([data]);
+    try {
+      const group = createGroupData("metadata", owner, []);
+      await apply(group);
+      notify.mockClear();
+      await apply({ ...group, name: "renamed" });
+      expect(notify).not.toHaveBeenCalled();
+      const updated = { ...group, members: [...group.members, peer] };
+      await apply(updated);
+      expect(notify).toHaveBeenCalledTimes(1);
+      // Application reducers can persist the same metadata from a durable callback.
+      await apply(structuredClone(updated));
+      await apply({ ...updated, members: [...updated.members].reverse() });
+      expect(notify).toHaveBeenCalledTimes(1);
+    } finally { runtime.close(); }
+  });
+
   it("attaches group transport to an existing SessionManager", async () => {
     const aliceOwnerPubkey = getPublicKey(generateSecretKey());
     const bobOwnerPubkey = getPublicKey(generateSecretKey());
