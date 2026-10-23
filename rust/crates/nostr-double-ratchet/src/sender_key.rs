@@ -261,6 +261,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sender_key_derivation_matches_generic_hkdf_pair() {
+        for seed in [0, 1, 7, 255] {
+            let mut chain_key = [seed; 32];
+            for _ in 0..64 {
+                let expected = crate::kdf(&chain_key, SENDER_KEY_KDF_SALT, 2);
+                let actual = derive_message_key(&chain_key);
+                assert_eq!(actual, (expected[0], expected[1]));
+                chain_key = actual.0;
+            }
+        }
+    }
+
+    #[test]
     fn sender_key_roundtrip_single_message() {
         let chain_key = [7u8; 32];
         let mut sender = SenderKeyState::new(1, chain_key, 0);
