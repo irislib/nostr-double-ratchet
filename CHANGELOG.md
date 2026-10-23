@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## Rust 0.0.174 / Pairwise 0.0.172 - 2026-10-23
+
+- Reuse fixed-salt HKDF setup within each bounded group-key search while
+  preserving derived keys, authenticated results, trial budgets, and stored state.
+- Update the pairwise runtime dependency. Public APIs, wire formats, TypeScript,
+  and the pairwise codec are unchanged.
+
 ## Rust 0.0.173 / Pairwise 0.0.171 - 2026-10-23
 
 - Derive direct-ratchet key pairs in fixed buffers while preserving the exact
