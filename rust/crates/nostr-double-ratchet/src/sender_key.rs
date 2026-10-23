@@ -271,7 +271,7 @@ mod tests {
         for seed in [0, 1, 7, 255] {
             let mut chain_key = [seed; 32];
             for _ in 0..64 {
-                let expected = crate::kdf(&chain_key, SENDER_KEY_KDF_SALT, 2);
+                let expected = crate::utils::kdf(&chain_key, SENDER_KEY_KDF_SALT, 2);
                 let actual = derive_message_key(&chain_key);
                 assert_eq!(actual, (expected[0], expected[1]));
                 chain_key = actual.0;

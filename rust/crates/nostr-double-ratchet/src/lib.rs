@@ -123,7 +123,7 @@ pub use wire::{
 
 pub(crate) use ids::owner_pubkey_from_device_pubkey;
 pub(crate) use utils::{
-    device_pubkey_from_secret_bytes, kdf, random_secret_key_bytes, secret_key_from_bytes,
+    device_pubkey_from_secret_bytes, kdf2, random_secret_key_bytes, secret_key_from_bytes,
 };
 
 #[cfg(feature = "full")]

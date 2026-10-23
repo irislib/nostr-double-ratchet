@@ -1,5 +1,5 @@
 use crate::{
-    device_pubkey_from_secret_bytes, kdf, random_secret_key_bytes, secret_key_from_bytes,
+    device_pubkey_from_secret_bytes, kdf2, random_secret_key_bytes, secret_key_from_bytes,
     DevicePubkey, DomainError, ProtocolContext, Result, UnixSeconds, MAX_SKIP,
 };
 use base64::Engine;
@@ -228,7 +228,7 @@ impl Session {
                     our_next_keys.secret_key(),
                     &their_ephemeral_public_key.to_nostr()?,
                 )?;
-                let kdf_outputs = kdf(&shared_secret, conversation_key.as_bytes(), 2);
+                let kdf_outputs = kdf2(&shared_secret, conversation_key.as_bytes());
                 (
                     kdf_outputs[0],
                     Some(kdf_outputs[1]),
@@ -403,7 +403,7 @@ fn ratchet_encrypt(state: &mut SessionState, plaintext: &[u8]) -> Result<(Header
         .sending_chain_key
         .ok_or(DomainError::SessionNotReady)?;
 
-    let kdf_outputs = kdf(&sending_chain_key, &[1u8], 2);
+    let kdf_outputs = kdf2(&sending_chain_key, &[1u8]);
     state.sending_chain_key = Some(kdf_outputs[0]);
     let message_key = kdf_outputs[1];
 
@@ -441,7 +441,7 @@ fn ratchet_decrypt(
         .receiving_chain_key
         .ok_or(DomainError::SessionNotReady)?;
 
-    let kdf_outputs = kdf(&receiving_chain_key, &[1u8], 2);
+    let kdf_outputs = kdf2(&receiving_chain_key, &[1u8]);
     state.receiving_chain_key = Some(kdf_outputs[0]);
     let message_key = kdf_outputs[1];
     state.receiving_chain_message_number += 1;
@@ -469,7 +469,7 @@ where
 
     let conversation_key1 =
         nip44::v2::ConversationKey::derive(&our_next_sk, &their_next_pk.to_nostr()?)?;
-    let kdf_outputs = kdf(&state.root_key, conversation_key1.as_bytes(), 2);
+    let kdf_outputs = kdf2(&state.root_key, conversation_key1.as_bytes());
     state.receiving_chain_key = Some(kdf_outputs[1]);
     state.our_previous_nostr_key = state.our_current_nostr_key.clone();
     state.our_current_nostr_key = Some(state.our_next_nostr_key.clone());
@@ -483,7 +483,7 @@ where
     let our_next_sk2 = secret_key_from_bytes(&our_next_private_key)?;
     let conversation_key2 =
         nip44::v2::ConversationKey::derive(&our_next_sk2, &their_next_pk.to_nostr()?)?;
-    let kdf_outputs2 = kdf(&kdf_outputs[0], conversation_key2.as_bytes(), 2);
+    let kdf_outputs2 = kdf2(&kdf_outputs[0], conversation_key2.as_bytes());
     state.root_key = kdf_outputs2[0];
     state.sending_chain_key = Some(kdf_outputs2[1]);
     Ok(())
@@ -504,7 +504,7 @@ fn skip_message_keys(state: &mut SessionState, until: u32, sender: DevicePubkey)
         let receiving_chain_key = state
             .receiving_chain_key
             .ok_or(DomainError::SessionNotReady)?;
-        let kdf_outputs = kdf(&receiving_chain_key, &[1u8], 2);
+        let kdf_outputs = kdf2(&receiving_chain_key, &[1u8]);
         state.receiving_chain_key = Some(kdf_outputs[0]);
         entry
             .message_keys
