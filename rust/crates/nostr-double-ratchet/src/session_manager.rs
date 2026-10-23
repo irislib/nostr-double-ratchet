@@ -142,6 +142,8 @@ enum SendSessionSource {
 }
 
 mod lifecycle;
+#[cfg(test)]
+mod receive_fingerprint_tests;
 mod records;
 mod rosters;
 mod sending;
