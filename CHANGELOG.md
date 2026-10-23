@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## Rust 0.0.173 / Pairwise 0.0.171 - 2026-10-23
+
+- Derive direct-ratchet key pairs in fixed buffers while preserving the exact
+  HKDF outputs, authentication, skipped-key recovery, and stored state.
+- Add opaque, memory-only receive-input fingerprints so applications can avoid
+  repeating failed authentication until the relevant session or authorization
+  changes. Fingerprints borrow live state without copying secret snapshots.
+- Update the pairwise runtime dependency. Wire formats, TypeScript, and the
+  pairwise codec are unchanged.
+
 ## Rust 0.0.172 / Pairwise 0.0.170 - 2026-10-23
 
 - Reduce group key-search bookkeeping with a bounded ordered queue and fixed-size

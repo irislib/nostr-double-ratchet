@@ -787,7 +787,7 @@ dependencies = [
 
 [[package]]
 name = "nostr-double-ratchet"
-version = "0.0.172"
+version = "0.0.173"
 dependencies = [
  "base64",
  "hex",
@@ -805,7 +805,7 @@ dependencies = [
 
 [[package]]
 name = "nostr-double-ratchet-pairwise"
-version = "0.0.170"
+version = "0.0.171"
 dependencies = [
  "chacha20poly1305",
  "fs2",
