@@ -142,11 +142,14 @@ enum SendSessionSource {
 }
 
 mod lifecycle;
+mod receive_fingerprint;
 #[cfg(test)]
 mod receive_fingerprint_tests;
 mod records;
 mod rosters;
 mod sending;
+
+pub use receive_fingerprint::ReceiveInputFingerprint;
 
 fn apply_roster_snapshot(
     current_roster: Option<&DeviceRoster>,
