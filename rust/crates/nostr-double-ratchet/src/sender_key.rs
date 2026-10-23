@@ -12,6 +12,11 @@ pub(crate) use blind::{BlindDecryptCursor, BlindDecryptStep};
 
 const SENDER_KEY_KDF_SALT: &[u8] = b"ndr-sender-key-v1";
 
+#[cfg(test)]
+thread_local! {
+    static SENDER_KEY_EXTRACT_INITIALIZATIONS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SenderKeyState {
     pub key_id: u32,
@@ -238,6 +243,8 @@ impl SenderKeyState {
 }
 
 fn derive_message_key(chain_key: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
+    #[cfg(test)]
+    SENDER_KEY_EXTRACT_INITIALIZATIONS.with(|count| count.set(count.get().map(|n| n + 1)));
     let hk = hkdf::Hkdf::<sha2::Sha256>::new(Some(SENDER_KEY_KDF_SALT), chain_key);
     let mut next_chain_key = [0; 32];
     let mut message_key = [0; 32];

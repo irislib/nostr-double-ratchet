@@ -18,6 +18,10 @@ pub(crate) enum BlindDecryptStep {
     Complete(SenderKeyBlindDecryptPlan),
 }
 
+#[cfg(test)]
+#[path = "kdf_reuse_tests.rs"]
+mod kdf_reuse_tests;
+
 impl BlindDecryptCursor {
     pub(crate) fn new(state: &SenderKeyState) -> Self {
         // Keep one spare slot for insert-before-prune without growing on every
