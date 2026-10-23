@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## Rust 0.0.172 / Pairwise 0.0.170 - 2026-10-23
+
+- Reduce group key-search bookkeeping with a bounded ordered queue and fixed-size
+  key derivation buffers. Preserve the full recovery window, trial budgets,
+  retained-key ordering, and authenticated receive results.
+- Preserve oversized and unusual imported skipped-key states without changing
+  the persisted format or when those keys are pruned.
+- Update the pairwise runtime to consume the Rust library change. Public APIs,
+  wire formats, TypeScript, and the pairwise codec are unchanged.
+
 ## TypeScript 0.0.179 - 2026-10-20
 
 - Rebase prepared device registration onto fresh verified membership, adding only
