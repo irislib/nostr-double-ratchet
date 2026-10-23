@@ -1,9 +1,13 @@
 use super::*;
+use std::collections::VecDeque;
 
 #[derive(Clone)]
 pub(crate) struct BlindDecryptCursor {
-    next_state: SenderKeyState,
-    next_skipped: Option<u32>,
+    key_id: u32,
+    chain_key: [u8; 32],
+    iteration: u32,
+    skipped_message_keys: VecDeque<(u32, [u8; 32])>,
+    next_skipped: usize,
     searching_skipped: bool,
     max_message_number: u32,
 }
@@ -16,11 +20,65 @@ pub(crate) enum BlindDecryptStep {
 
 impl BlindDecryptCursor {
     pub(crate) fn new(state: &SenderKeyState) -> Self {
+        // Keep one spare slot for insert-before-prune without growing on every
+        // full tail. Do not prune unusual oversized snapshots before a key hit.
+        let capacity = state
+            .skipped_message_keys
+            .len()
+            .max(SENDER_KEY_MAX_STORED_SKIPPED_KEYS)
+            .saturating_add(1);
+        let mut skipped_message_keys = VecDeque::with_capacity(capacity);
+        skipped_message_keys.extend(state.skipped_message_keys.iter().map(|(&n, &key)| (n, key)));
         Self {
-            next_state: state.clone(),
-            next_skipped: None,
+            key_id: state.key_id,
+            chain_key: state.chain_key,
+            iteration: state.iteration,
+            skipped_message_keys,
+            next_skipped: 0,
             searching_skipped: true,
             max_message_number: state.iteration.saturating_add(SENDER_KEY_MAX_SKIP as u32),
+        }
+    }
+
+    fn planned_state(&self, consumed_skipped: Option<u32>) -> SenderKeyState {
+        SenderKeyState {
+            key_id: self.key_id,
+            chain_key: self.chain_key,
+            iteration: self.iteration,
+            skipped_message_keys: self
+                .skipped_message_keys
+                .iter()
+                .filter(|(number, _)| Some(*number) != consumed_skipped)
+                .copied()
+                .collect(),
+        }
+    }
+
+    fn retain_failed_key(&mut self, number: u32, key: [u8; 32]) {
+        if self
+            .skipped_message_keys
+            .back()
+            .is_none_or(|(last, _)| *last < number)
+        {
+            // Ordinary chain advancement is strictly increasing.
+            self.skipped_message_keys.push_back((number, key));
+        } else {
+            // Preserve ordered insert/replace semantics even for deserialized
+            // snapshots containing retained numbers ahead of the chain.
+            match self
+                .skipped_message_keys
+                .binary_search_by_key(&number, |(number, _)| *number)
+            {
+                Ok(index) => self.skipped_message_keys[index].1 = key,
+                Err(index) => self.skipped_message_keys.insert(index, (number, key)),
+            }
+        }
+        self.prune_skipped();
+    }
+
+    fn prune_skipped(&mut self) {
+        while self.skipped_message_keys.len() > SENDER_KEY_MAX_STORED_SKIPPED_KEYS {
+            self.skipped_message_keys.pop_front();
         }
     }
 
@@ -33,22 +91,13 @@ impl BlindDecryptCursor {
     ) -> Result<BlindDecryptStep> {
         while *remaining > 0 {
             if self.searching_skipped {
-                use std::ops::Bound::{Excluded, Unbounded};
-                let start = self.next_skipped.map_or(Unbounded, Excluded);
-                let next = self
-                    .next_state
-                    .skipped_message_keys
-                    .range((start, Unbounded))
-                    .next();
-                if let Some((&number, key)) = next {
+                if let Some(&(number, key)) = self.skipped_message_keys.get(self.next_skipped) {
                     *remaining -= 1;
-                    self.next_skipped = Some(number);
-                    if let Ok(plaintext) = decrypt_with_message_key(key, ciphertext) {
-                        let mut next_state = self.next_state.clone();
-                        next_state.skipped_message_keys.remove(&number);
+                    self.next_skipped += 1;
+                    if let Ok(plaintext) = decrypt_with_message_key(&key, ciphertext) {
                         return Ok(BlindDecryptStep::Complete(SenderKeyBlindDecryptPlan {
-                            key_id: next_state.key_id,
-                            next_state,
+                            key_id: self.key_id,
+                            next_state: self.planned_state(Some(number)),
                             message_number: number,
                             plaintext,
                         }));
@@ -57,31 +106,28 @@ impl BlindDecryptCursor {
                 }
                 self.searching_skipped = false;
             }
-            if self.next_state.iteration > self.max_message_number {
+            if self.iteration > self.max_message_number {
                 return Ok(BlindDecryptStep::Exhausted);
             }
             *remaining -= 1;
-            let number = self.next_state.iteration;
-            let (chain_key, message_key) = derive_message_key(&self.next_state.chain_key);
-            self.next_state.chain_key = chain_key;
-            self.next_state.iteration = number.checked_add(1).ok_or_else(|| {
+            let number = self.iteration;
+            let (chain_key, message_key) = derive_message_key(&self.chain_key);
+            self.chain_key = chain_key;
+            self.iteration = number.checked_add(1).ok_or_else(|| {
                 crate::Error::Decryption("sender-key iteration overflow".to_string())
             })?;
             if let Ok(plaintext) = decrypt_with_message_key(&message_key, ciphertext) {
-                prune_skipped(&mut self.next_state.skipped_message_keys);
+                self.prune_skipped();
                 return Ok(BlindDecryptStep::Complete(SenderKeyBlindDecryptPlan {
-                    next_state: self.next_state.clone(),
-                    key_id: self.next_state.key_id,
+                    next_state: self.planned_state(None),
+                    key_id: self.key_id,
                     message_number: number,
                     plaintext,
                 }));
             }
-            self.next_state
-                .skipped_message_keys
-                .insert(number, message_key);
             // The original complete plan retains only this same newest-key tail.
             // Pruning during search also bounds a suspended cursor's extra memory.
-            prune_skipped(&mut self.next_state.skipped_message_keys);
+            self.retain_failed_key(number, message_key);
         }
         Ok(BlindDecryptStep::Pending)
     }
@@ -286,7 +332,7 @@ mod tests {
                 }
                 BlindDecryptStep::Exhausted => panic!("lost original recovery window"),
             }
-            assert!(cursor.next_state.skipped_len() <= SENDER_KEY_MAX_STORED_SKIPPED_KEYS);
+            assert!(cursor.skipped_message_keys.len() <= SENDER_KEY_MAX_STORED_SKIPPED_KEYS);
         }
         assert_eq!(initial.iteration(), 0);
     }

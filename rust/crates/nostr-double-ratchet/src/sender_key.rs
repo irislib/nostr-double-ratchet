@@ -238,8 +238,14 @@ impl SenderKeyState {
 }
 
 fn derive_message_key(chain_key: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
-    let outputs = crate::kdf(chain_key, SENDER_KEY_KDF_SALT, 2);
-    (outputs[0], outputs[1])
+    let hk = hkdf::Hkdf::<sha2::Sha256>::new(Some(SENDER_KEY_KDF_SALT), chain_key);
+    let mut next_chain_key = [0; 32];
+    let mut message_key = [0; 32];
+    hk.expand(&[1], &mut next_chain_key)
+        .expect("32 bytes is valid length");
+    hk.expand(&[2], &mut message_key)
+        .expect("32 bytes is valid length");
+    (next_chain_key, message_key)
 }
 
 fn decrypt_with_message_key(message_key: &[u8; 32], ciphertext: &[u8]) -> Result<Vec<u8>> {
