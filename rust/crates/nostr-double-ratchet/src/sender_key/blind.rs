@@ -93,6 +93,9 @@ impl BlindDecryptCursor {
         ciphertext: &[u8],
         remaining: &mut usize,
     ) -> Result<BlindDecryptStep> {
+        // The salt is fixed. Reuse its empty extraction context only within
+        // this call; each chain key still gets its own extract and two expands.
+        let mut extract = None;
         while *remaining > 0 {
             if self.searching_skipped {
                 if let Some(&(number, key)) = self.skipped_message_keys.get(self.next_skipped) {
@@ -115,7 +118,9 @@ impl BlindDecryptCursor {
             }
             *remaining -= 1;
             let number = self.iteration;
-            let (chain_key, message_key) = derive_message_key(&self.chain_key);
+            let extract = extract.get_or_insert_with(sender_key_extract);
+            let (chain_key, message_key) =
+                derive_message_key_with_extract(&self.chain_key, extract.clone());
             self.chain_key = chain_key;
             self.iteration = number.checked_add(1).ok_or_else(|| {
                 crate::Error::Decryption("sender-key iteration overflow".to_string())

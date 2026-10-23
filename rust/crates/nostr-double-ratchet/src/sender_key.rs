@@ -243,9 +243,21 @@ impl SenderKeyState {
 }
 
 fn derive_message_key(chain_key: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
+    derive_message_key_with_extract(chain_key, sender_key_extract())
+}
+
+fn sender_key_extract() -> hkdf::HkdfExtract<sha2::Sha256> {
     #[cfg(test)]
     SENDER_KEY_EXTRACT_INITIALIZATIONS.with(|count| count.set(count.get().map(|n| n + 1)));
-    let hk = hkdf::Hkdf::<sha2::Sha256>::new(Some(SENDER_KEY_KDF_SALT), chain_key);
+    hkdf::HkdfExtract::new(Some(SENDER_KEY_KDF_SALT))
+}
+
+fn derive_message_key_with_extract(
+    chain_key: &[u8; 32],
+    mut extract: hkdf::HkdfExtract<sha2::Sha256>,
+) -> ([u8; 32], [u8; 32]) {
+    extract.input_ikm(chain_key);
+    let (_, hk) = extract.finalize();
     let mut next_chain_key = [0; 32];
     let mut message_key = [0; 32];
     hk.expand(&[1], &mut next_chain_key)
