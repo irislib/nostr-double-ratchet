@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## Rust 0.0.175 / TypeScript 0.0.183 - 2026-10-25
+
+- Add a pure Rust group receive probe for the locally expected next message,
+  with a caller-supplied trial budget and latest known key generation first.
+  Preserve skipped keys, suspended history searches and apply-time authorization
+  checks; a miss still requires ordinary history recovery.
+- Try the expected next message before TypeScript group history searches, using
+  a private local preference derived from authenticated key distributions.
+  Keep delayed messages, older stores and failed preference writes recoverable.
+- Keep public wire formats and identity boundaries unchanged. TypeScript history
+  fallback remains synchronous; applications must not infer background scheduling
+  guarantees from the new probe. Pairwise and codec versions are unchanged.
+- Verify and retain the Rust package archive in CI alongside the tested npm
+  artifact before publication.
+
 ## Rust 0.0.174 / Pairwise 0.0.172 - 2026-10-23
 
 - Reuse fixed-salt HKDF setup within each bounded group-key search while

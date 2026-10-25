@@ -1,11 +1,11 @@
 import { expect, it, vi } from "vitest";
 import { generateSecretKey, getPublicKey } from "nostr-tools";
+import * as nip44 from "nostr-tools/nip44";
 import { Group, type GroupData } from "../src/Group";
-import { SenderKeyState } from "../src/SenderKey";
 import { InMemoryStorageAdapter } from "../src/StorageAdapter";
 import type { Rumor } from "../src/types";
 
-it("ignores the current device's relay echoes before blind decryption, including after restart", async () => {
+it("ignores the current device's relay echoes before cryptographic decryption, including after restart", async () => {
   const owner = getPublicKey(generateSecretKey());
   const device = getPublicKey(generateSecretKey());
   const siblingDevice = getPublicKey(generateSecretKey());
@@ -18,7 +18,7 @@ it("ignores the current device's relay echoes before blind decryption, including
     sendPairwise: async (_to, rumor) => { distributions.push(rumor); }, publishOuter: async () => {},
   });
   const restored = new Group({ data, ourOwnerPubkey: owner, ourDevicePubkey: device, storage });
-  const decrypt = vi.spyOn(SenderKeyState.prototype, "decryptBlindFromBytes");
+  const decrypt = vi.spyOn(nip44.v2, "decrypt");
   try {
     expect(await restored.handleOuterEvent(sent.outer)).toBeNull();
     expect(decrypt).not.toHaveBeenCalled();

@@ -3,6 +3,9 @@ use nostr_double_ratchet::{
     GroupSenderKeyDecryptCursor, GroupSenderKeyReceivePlan, SenderKeyState,
 };
 
+#[path = "frontier_decrypt.rs"]
+mod frontier_decrypt;
+
 fn frame(fixture: &SenderKeyFixture, number: u32) -> Result<GroupSenderKeyMessage> {
     let snapshot = fixture.bob_groups.snapshot();
     let record = &snapshot.sender_keys[0];

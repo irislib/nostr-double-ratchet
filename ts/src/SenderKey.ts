@@ -219,6 +219,41 @@ export class SenderKeyState {
     return plaintext;
   }
 
+  /**
+   * Probe only the locally expected next message, without scanning retained keys.
+   * A miss leaves this state untouched and still requires ordinary history recovery.
+   */
+  planDecryptFrontier(
+    ciphertextBytes: Uint8Array,
+  ): SenderKeyBlindDecryptPlan | null {
+    if (this.iteration === 0xffff_ffff) return null;
+
+    const [nextChainKey, messageKey] = deriveMessageKey(this.chainKey);
+    let plaintext: string;
+    try {
+      plaintext = decryptWithMessageKeyBytes(messageKey, ciphertextBytes);
+    } catch {
+      return null;
+    }
+
+    // Copy retained keys only after authentication. Nothing in this plan consumes
+    // skipped keys, and the caller must validate the plaintext before committing it.
+    const nextState = new SenderKeyState(
+      this.keyId,
+      nextChainKey,
+      this.iteration + 1,
+    );
+    for (const [number, key] of this.skippedMessageKeys) {
+      nextState.skippedMessageKeys.set(number, new Uint8Array(key));
+    }
+    return {
+      nextState,
+      keyId: this.keyId,
+      messageNumber: this.iteration,
+      plaintext,
+    };
+  }
+
   planDecryptBlind(ciphertextBytes: Uint8Array): SenderKeyBlindDecryptPlan {
     for (const [
       messageNumber,

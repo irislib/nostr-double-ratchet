@@ -31,6 +31,126 @@ pub(super) struct GroupSenderKeyMutation {
 }
 
 impl<C: GroupPayloadCodec> GroupManager<C> {
+    /// Probe local next positions, trying the latest known key ID first and then
+    /// the other key IDs in descending order, with at most one trial per key ID.
+    /// Neither message counter fields nor its cover header select the position.
+    ///
+    /// This is a pure, non-resumable optimization: `None` means no authenticated
+    /// hit within the shared trial budget, not that the message is invalid. The
+    /// caller must retain ordinary history/distribution recovery and pace repeated
+    /// probes. No history cursor is read, replaced, or advanced by this method.
+    /// Successful plans use the normal validation and apply-time freshness checks.
+    pub fn plan_sender_key_message_frontier_with_budget(
+        &self,
+        message: &GroupSenderKeyMessage,
+        remaining_key_attempts: &mut usize,
+    ) -> Result<Option<GroupSenderKeyReceivePlan>> {
+        if *remaining_key_attempts == 0 {
+            return Ok(None);
+        }
+        let Some(id) = self.sender_event_index.get(&message.sender_event_pubkey) else {
+            return Ok(None);
+        };
+        let record = self
+            .sender_keys
+            .get(id)
+            .ok_or_else(|| group_error("sender-key index points to missing state"))?;
+        let group = self
+            .groups
+            .get(&id.group_id)
+            .ok_or_else(|| group_error(format!("unknown group `{}`", id.group_id)))?;
+        if id.group_id != message.group_id
+            || record.sender_event_secret_key.is_some()
+            || !group.protocol.is_sender_key_v1()
+            || !group.members.contains(&id.sender_owner)
+        {
+            return Ok(None);
+        }
+        let latest = record.latest_key_id.and_then(|key| record.states.get(&key));
+        let others = record
+            .states
+            .iter()
+            .rev()
+            .filter_map(|(key, state)| (Some(*key) != record.latest_key_id).then_some(state));
+        for state in latest.into_iter().chain(others) {
+            if *remaining_key_attempts == 0 {
+                break;
+            }
+            *remaining_key_attempts -= 1;
+            if let Ok(plan) = state.plan_decrypt_frontier(&message.ciphertext) {
+                return self.sender_key_receive_plan(id, message, plan).map(Some);
+            }
+        }
+        Ok(None)
+    }
+
+    pub(super) fn sender_key_receive_plan(
+        &self,
+        id: &SenderKeyRecordId,
+        message: &GroupSenderKeyMessage,
+        plan: crate::SenderKeyBlindDecryptPlan,
+    ) -> Result<GroupSenderKeyReceivePlan> {
+        let complete = |result| {
+            Ok(GroupSenderKeyReceivePlan {
+                result,
+                mutation: None,
+            })
+        };
+        let group = self
+            .groups
+            .get(&id.group_id)
+            .ok_or_else(|| group_error(format!("unknown group `{}`", id.group_id)))?;
+        let Some(plaintext) = self.payload_codec.decode_sender_key_plaintext(
+            GroupSenderKeyPlaintextDecodeContext {
+                group_id: &group.group_id,
+                current_revision: group.revision,
+            },
+            &plan.plaintext,
+        )?
+        else {
+            return complete(GroupSenderKeyHandleResult::Ignored);
+        };
+        if plaintext.group_id != group.group_id {
+            return complete(GroupSenderKeyHandleResult::Ignored);
+        }
+        if plaintext.revision > group.revision {
+            return complete(GroupSenderKeyHandleResult::PendingRevision {
+                group_id: group.group_id.clone(),
+                current_revision: group.revision,
+                required_revision: plaintext.revision,
+                key_id: plan.key_id,
+                message_number: plan.message_number,
+            });
+        }
+        if plaintext.revision < group.revision {
+            return complete(GroupSenderKeyHandleResult::Ignored);
+        }
+        let state = self
+            .sender_keys
+            .get(id)
+            .and_then(|record| record.states.get(&plan.key_id))
+            .ok_or_else(|| group_error("sender-key index points to missing state"))?;
+        Ok(GroupSenderKeyReceivePlan {
+            mutation: Some(GroupSenderKeyMutation {
+                identity: id.clone(),
+                author: message.sender_event_pubkey,
+                expected: state.clone(),
+                next: plan.next_state,
+                revision: group.revision,
+                local_member: group.members.contains(&self.local_owner_pubkey),
+            }),
+            result: GroupSenderKeyHandleResult::Event(GroupIncomingEvent::Message(
+                GroupReceivedMessage {
+                    group_id: plaintext.group_id,
+                    sender_owner: id.sender_owner,
+                    sender_device: Some(id.sender_device),
+                    body: plaintext.body,
+                    revision: plaintext.revision,
+                },
+            )),
+        })
+    }
+
     /// Commit a prepared receive only if its authenticated key/group inputs are
     /// still current. A stale plan never replaces newer ratchet state.
     pub fn apply_sender_key_receive_plan(

@@ -117,6 +117,30 @@ jobs:
     - name: Run clippy
       run: cargo clippy --locked -- -D warnings
 
+    - name: Verify Rust library package
+      id: rust_package
+      run: |
+        cargo package --locked -p nostr-double-ratchet
+        python3 - <<'PY'
+        import os
+        import tomllib
+        from pathlib import Path
+        manifest = tomllib.loads(Path("crates/nostr-double-ratchet/Cargo.toml").read_text())
+        version = manifest["package"]["version"]
+        archive = Path("target/package") / f"nostr-double-ratchet-{version}.crate"
+        with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+            output.write(f"archive={archive.resolve()}\n")
+        PY
+
+    - name: Save the verified Rust library package
+      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: rust-library-package-${{ github.sha }}
+        path: ${{ steps.rust_package.outputs.archive }}
+        if-no-files-found: error
+        retention-days: 30
+
   formal:
     name: Formal
     runs-on: ubuntu-latest

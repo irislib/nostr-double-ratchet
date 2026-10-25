@@ -155,6 +155,29 @@ impl SenderKeyState {
         }
     }
 
+    /// Probe only the locally known next position. Failed authentication does not
+    /// clone or scan retained skipped keys; a successful plan preserves them all.
+    pub(crate) fn plan_decrypt_frontier(
+        &self,
+        ciphertext: &[u8],
+    ) -> Result<SenderKeyBlindDecryptPlan> {
+        let iteration = self
+            .iteration
+            .checked_add(1)
+            .ok_or_else(|| crate::Error::Decryption("sender-key iteration overflow".to_string()))?;
+        let (chain_key, message_key) = derive_message_key(&self.chain_key);
+        let plaintext = decrypt_with_message_key(&message_key, ciphertext)?;
+        let mut next_state = self.clone();
+        next_state.chain_key = chain_key;
+        next_state.iteration = iteration;
+        Ok(SenderKeyBlindDecryptPlan {
+            next_state,
+            key_id: self.key_id,
+            message_number: self.iteration,
+            plaintext,
+        })
+    }
+
     pub fn apply_decrypt(&mut self, plan: SenderKeyDecryptPlan) -> SenderKeyDecryptOutcome {
         self.clone_from(&plan.next_state);
         SenderKeyDecryptOutcome {

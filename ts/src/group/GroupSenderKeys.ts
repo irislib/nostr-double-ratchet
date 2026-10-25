@@ -11,6 +11,23 @@ import { type Rumor } from "../types.js";
 import { GroupState } from "./GroupState.js";
 import { randomU32, type SenderKeyRepairSnapshot } from "./groupInternals.js";
 
+interface ReceivedKeyPreference {
+  keyId: number;
+  /** Existing authenticated distribution timestamp; absent for a legacy-store hint. */
+  createdAt?: number;
+}
+
+function parseReceivedKeyPreference(value: unknown): ReceivedKeyPreference | null {
+  if (!value || typeof value !== "object") return null;
+  const hint = value as Partial<ReceivedKeyPreference>;
+  if (typeof hint.keyId !== "number" || !Number.isInteger(hint.keyId) ||
+      hint.keyId < 0 || hint.keyId > 0xffff_ffff) return null;
+  if (hint.createdAt !== undefined &&
+      (typeof hint.createdAt !== "number" || !Number.isInteger(hint.createdAt) ||
+       hint.createdAt < 0)) return null;
+  return { keyId: hint.keyId, createdAt: hint.createdAt };
+}
+
 export abstract class GroupSenderKeys extends GroupState {
   protected async ensureOurSenderEventKeys(): Promise<{
     senderEventSecretKey: Uint8Array;
@@ -88,6 +105,57 @@ export abstract class GroupSenderKeys extends GroupState {
       }
     }
     return states.sort((a, b) => b.keyId - a.keyId);
+  }
+
+  private receivedKeyPreferenceKey(senderDevicePubkey: string): string {
+    return `${this.groupSenderPrefix(senderDevicePubkey)}/preferred-received-key`;
+  }
+
+  protected async loadPreferredReceivedSenderKeyState(
+    senderDevicePubkey: string,
+  ): Promise<SenderKeyState | null> {
+    if (senderDevicePubkey === this.ourDevicePubkey) return null;
+    try {
+      const hint = parseReceivedKeyPreference(await this.storage.get(
+        this.receivedKeyPreferenceKey(senderDevicePubkey),
+      ));
+      return hint ? await this.loadSenderKeyState(senderDevicePubkey, hint.keyId) : null;
+    } catch {
+      // This local optimization must not prevent the ordinary history lookup.
+      return null;
+    }
+  }
+
+  /** Called only after accepting a distribution or committing valid group plaintext. */
+  protected async rememberReceivedSenderKeyPreference(
+    senderDevicePubkey: string,
+    keyId: number,
+    createdAt?: number,
+  ): Promise<void> {
+    if (senderDevicePubkey === this.ourDevicePubkey) return;
+    if (!parseReceivedKeyPreference({ keyId, createdAt })) return;
+    try {
+      const key = this.receivedKeyPreferenceKey(senderDevicePubkey);
+      const previous = parseReceivedKeyPreference(await this.storage.get(key));
+      if (previous) {
+        if (createdAt === undefined) {
+          // A recovered message does not establish epoch ordering. Keep any
+          // existing usable hint instead of replacing it with historical traffic.
+          if (await this.loadSenderKeyState(senderDevicePubkey, previous.keyId)) return;
+        } else if (previous.createdAt !== undefined && createdAt <= previous.createdAt) {
+          // Timestamps only select a performance hint. Delayed or same-second
+          // ambiguous distributions cannot displace a newer known preference.
+          return;
+        }
+      }
+      if (!await this.loadSenderKeyState(senderDevicePubkey, keyId)) return;
+      const hint: ReceivedKeyPreference = { keyId };
+      if (createdAt !== undefined) hint.createdAt = createdAt;
+      await this.storage.put(key, hint);
+    } catch {
+      // The authoritative chain is stored separately. A failed hint read/write
+      // must not discard an accepted distribution or authenticated message.
+    }
   }
 
   protected async saveSenderKeyState(

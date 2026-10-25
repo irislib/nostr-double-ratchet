@@ -164,6 +164,9 @@ export class Group extends GroupSending {
       const st = SenderKeyState.fromDistribution(dist);
       await this.saveSenderKeyState(senderDevicePubkey, st);
     }
+    await this.rememberReceivedSenderKeyPreference(
+      senderDevicePubkey, dist.keyId, dist.createdAt,
+    );
 
     // If we have a sender-event pubkey, retry pending outer events for (senderEventPubkey,keyId).
     if (dist.senderEventPubkey && isHex32(dist.senderEventPubkey)) {
@@ -215,20 +218,33 @@ export class Group extends GroupSending {
     let keyId = parsed.keyId;
     let messageNumber = parsed.messageNumber;
     let nextState: SenderKeyState | null = null;
+    let needsReceivedKeyHint = false;
 
     if (parsed.isHiddenCounterMessage()) {
-      const states = await this.loadSenderKeyStates(senderDevicePubkey);
-      for (const state of states) {
-        const candidate = SenderKeyState.fromJSON(state.toJSON());
-        try {
-          const decrypted = candidate.decryptBlindFromBytes(parsed.ciphertext);
-          plaintext = decrypted.plaintext;
-          keyId = decrypted.keyId;
-          messageNumber = decrypted.messageNumber;
-          nextState = candidate;
-          break;
-        } catch {
-          // Try the next known sender key.
+      const preferred = await this.loadPreferredReceivedSenderKeyState(senderDevicePubkey);
+      needsReceivedKeyHint = !preferred;
+      const frontier = preferred?.planDecryptFrontier(parsed.ciphertext);
+      if (frontier) {
+        plaintext = frontier.plaintext;
+        keyId = frontier.keyId;
+        messageNumber = frontier.messageNumber;
+        nextState = frontier.nextState;
+      } else {
+        // A frontier miss is not an invalid message. Preserve skipped-key and
+        // older-epoch recovery, including stores created before local hints.
+        const states = await this.loadSenderKeyStates(senderDevicePubkey);
+        for (const state of states) {
+          const candidate = SenderKeyState.fromJSON(state.toJSON());
+          try {
+            const decrypted = candidate.decryptBlindFromBytes(parsed.ciphertext);
+            plaintext = decrypted.plaintext;
+            keyId = decrypted.keyId;
+            messageNumber = decrypted.messageNumber;
+            nextState = candidate;
+            break;
+          } catch {
+            // Try the next known sender key.
+          }
         }
       }
       if (!nextState) {
@@ -279,6 +295,9 @@ export class Group extends GroupSending {
     }
 
     await this.saveSenderKeyState(senderDevicePubkey, nextState);
+    if (needsReceivedKeyHint) {
+      await this.rememberReceivedSenderKeyPreference(senderDevicePubkey, keyId);
+    }
 
     const senderOwnerPubkey =
       this.senderDeviceToOwner.get(senderDevicePubkey) ||

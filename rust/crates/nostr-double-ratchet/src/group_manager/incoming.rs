@@ -231,57 +231,7 @@ where
                     }
                     BlindDecryptStep::Complete(plan) => plan,
                 };
-            let key_id = plan.key_id;
-            let Some(plaintext) = self.payload_codec.decode_sender_key_plaintext(
-                GroupSenderKeyPlaintextDecodeContext {
-                    group_id: &group.group_id,
-                    current_revision: group.revision,
-                },
-                &plan.plaintext,
-            )?
-            else {
-                return complete(GroupSenderKeyHandleResult::Ignored);
-            };
-            if plaintext.group_id != group.group_id {
-                return complete(GroupSenderKeyHandleResult::Ignored);
-            }
-            if plaintext.revision > group.revision {
-                return complete(GroupSenderKeyHandleResult::PendingRevision {
-                    group_id: group.group_id.clone(),
-                    current_revision: group.revision,
-                    required_revision: plaintext.revision,
-                    key_id: plan.key_id,
-                    message_number: plan.message_number,
-                });
-            }
-            if plaintext.revision < group.revision {
-                return complete(GroupSenderKeyHandleResult::Ignored);
-            }
-
-            let state = self
-                .sender_keys
-                .get(&id)
-                .and_then(|record| record.states.get(&key_id))
-                .ok_or_else(|| group_error("sender-key index points to missing state"))?;
-            return Ok(Some(GroupSenderKeyReceivePlan {
-                mutation: Some(super::decrypt::GroupSenderKeyMutation {
-                    identity: id.clone(),
-                    author: message.sender_event_pubkey,
-                    expected: state.clone(),
-                    next: plan.next_state,
-                    revision: group.revision,
-                    local_member: group.members.contains(&self.local_owner_pubkey),
-                }),
-                result: GroupSenderKeyHandleResult::Event(GroupIncomingEvent::Message(
-                    GroupReceivedMessage {
-                        group_id: plaintext.group_id,
-                        sender_owner: id.sender_owner,
-                        sender_device: Some(id.sender_device),
-                        body: plaintext.body,
-                        revision: plaintext.revision,
-                    },
-                )),
-            }));
+            return self.sender_key_receive_plan(&id, &message, plan).map(Some);
         }
 
         let (key_id, message_number) = known_position.expect("checked above");
