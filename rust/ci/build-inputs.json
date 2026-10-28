@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "runner": "ubuntu-24.04",
+  "architecture": "x86_64",
+  "target": "x86_64-unknown-linux-gnu",
+  "rust": {
+    "version": "1.99.0",
+    "manifest": {
+      "url": "https://static.rust-lang.org/dist/channel-rust-1.99.0.toml",
+      "sha256": "ce6dddc886364f8d786514771212cebe9b731ba82d6b859951c6b0ccc516b6a2"
+    },
+    "components": [
+      {
+        "name": "rustc",
+        "url": "https://static.rust-lang.org/dist/2026-10-01/rustc-1.99.0-x86_64-unknown-linux-gnu.tar.xz",
+        "sha256": "77171ba2a0345fdf2abc4fedda55d6de078dae7a68527c28be8c77dcc9604bd5",
+        "root": "rustc-1.99.0-x86_64-unknown-linux-gnu"
+      },
+      {
+        "name": "cargo",
+        "url": "https://static.rust-lang.org/dist/2026-10-01/cargo-1.99.0-x86_64-unknown-linux-gnu.tar.xz",
+        "sha256": "d7674918d28093097614cd9728b6ca60db9ea3038f640f0bd1e9a4188c7568ce",
+        "root": "cargo-1.99.0-x86_64-unknown-linux-gnu"
+      },
+      {
+        "name": "rust-std",
+        "url": "https://static.rust-lang.org/dist/2026-10-01/rust-std-1.99.0-x86_64-unknown-linux-gnu.tar.xz",
+        "sha256": "3e58dff2d0b72196b5ea4e90536e174d400de88564a52694686b81e091169933",
+        "root": "rust-std-1.99.0-x86_64-unknown-linux-gnu"
+      },
+      {
+        "name": "rustfmt-preview",
+        "url": "https://static.rust-lang.org/dist/2026-10-01/rustfmt-1.99.0-x86_64-unknown-linux-gnu.tar.xz",
+        "sha256": "b22c09ab9e258ec5571da170d88bd1624a4ea602e6d70d95720c5b47494cadce",
+        "root": "rustfmt-1.99.0-x86_64-unknown-linux-gnu"
+      },
+      {
+        "name": "clippy-preview",
+        "url": "https://static.rust-lang.org/dist/2026-10-01/clippy-1.99.0-x86_64-unknown-linux-gnu.tar.xz",
+        "sha256": "982442e32ad8dd3f0bb3a30db74038da5f71fd9bf1a865cc71da8ea5d4ec71ec",
+        "root": "clippy-1.99.0-x86_64-unknown-linux-gnu"
+      }
+    ]
+  },
+  "node": {
+    "version": "24.22.1",
+    "url": "https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-x64.tar.xz",
+    "sha256": "6c172a9ab6718f7b801fb5a7bd486af2ee5e32758086a04b84fcce2aa77095e6",
+    "root": "node-v24.22.1-linux-x64",
+    "checksumSource": "https://nodejs.org/dist/v24.22.1/SHASUMS256.txt"
+  },
+  "pnpm": {
+    "version": "9.15.0",
+    "url": "https://registry.npmjs.org/pnpm/-/pnpm-9.15.0.tgz",
+    "sha512": "76e2379760a4328ec4415815bcd6628dee727af3779aaa4c914e3944156c4299921a89f976381ee107d41f12cfa4b66681ca9c718f0668fa0831ed4c6d8ba56c",
+    "root": "package",
+    "checksumSource": "https://registry.npmjs.org/pnpm/9.15.0"
+  },
+  "rustCacheAction": "Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0"
+}

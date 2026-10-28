@@ -103,6 +103,49 @@ REGENERATE_VECTORS=true cargo test --workspace --manifest-path rust/Cargo.toml g
 
 ## Publishing
 
+The `test-rust` package job and `interop` job in `.github/workflows/ci.yml`
+use the reviewed inputs in `rust/ci/build-inputs.json`: Rust 1.99.0 for
+`x86_64-unknown-linux-gnu`, Node 24.22.1, pnpm 9.15.0, and a full-commit
+Rust-cache action. `rust/scripts/ci-build-inputs.py` verifies each downloaded
+archive against its digest in source before extracting or executing it. It does
+not trust a checksum downloaded alongside the archive at build time. Rust
+compiler, standard library, Cargo, rustfmt and Clippy components come from the
+dated official Rust distribution; Node and pnpm come from their official
+publishers. Pin provenance URLs are retained in the JSON. Updating inputs means
+reviewing and committing new versions and hashes together.
+
+These jobs run on GitHub's `ubuntu-24.04` x86-64 hosted image with two Cargo
+jobs. They use the default Rust features except the explicitly minimal pairwise
+FFI check, `Cargo.lock` with `--locked`, and `pnpm-lock.yaml` with
+`--frozen-lockfile`. The installer bypasses mutable toolchain/package-manager
+setup downloads and preserves the workspace's normal `rust/target` cache path.
+Its cache key includes the reviewed-input file and compiler identity; cached
+Cargo-installed helper binaries are disabled.
+
+The hosted image remains an external input: its kernel, glibc, C compiler,
+linker, Python 3.12 or newer, shell, certificate store, and GitHub Actions
+runtime are preinstalled and are not pinned by this change. No system packages
+are installed by these two jobs. Their receipt records the runner image version,
+OS release, Python, C compiler/linker/libc and installed tool versions, plus
+lockfile and pin-file hashes. The Rust package artifact includes that receipt,
+the reviewed pins and the `.crate` checksum. Cache contents and hosted-system
+updates can still affect builds; this is input verification, not proof of
+bit-for-bit binary reproducibility or a comprehensive dependency/Haps audit.
+The separate `test-ts`, formal/source-size jobs and npm publication workflow are
+outside this pinning scope. Their existing checks remain required where used.
+
+The source checks below run offline without installing tools or compiling:
+
+```bash
+python3 rust/scripts/ci-build-inputs.py --check
+python3 rust/scripts/test-ci-build-inputs.py
+./scripts/check-source-size.sh
+```
+
+Only the hosted jobs invoke `--install`. Package publication still requires a
+successful package verification at the exact source revision; a publish-script
+dry run that uses `--no-verify` is not that verification.
+
 ```bash
 ./rust/scripts/publish.sh --dry-run
 ./rust/scripts/publish.sh
