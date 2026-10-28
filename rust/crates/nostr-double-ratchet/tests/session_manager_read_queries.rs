@@ -1,3 +1,7 @@
+#[path = "session_manager_read_queries/app_keys.rs"]
+mod app_keys_queries;
+#[path = "session_manager_read_queries/readiness.rs"]
+mod readiness_queries;
 mod support;
 
 use nostr_double_ratchet::{
@@ -22,6 +26,36 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         unsafe { System.dealloc(ptr, layout) }
+    }
+}
+
+fn measured_allocations<T>(operation: impl FnOnce() -> T) -> (T, usize) {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            ALLOCATIONS.with(|count| count.set(None));
+        }
+    }
+    ALLOCATIONS.with(|count| assert!(count.replace(Some(0)).is_none()));
+    let reset = Reset;
+    let result = operation();
+    let count = ALLOCATIONS.with(|count| count.get().unwrap());
+    drop(reset);
+    (result, count)
+}
+
+fn populate_unrelated_query_state(manager: &mut SessionManager) {
+    for fill in 30..78 {
+        let peer = manager_device(fill, fill + 100);
+        observe_signed_peer_app_keys(manager, &peer, &[&peer], 10).unwrap();
+        observe_signed_peer_app_keys(manager, &peer, &[], 10).unwrap();
+        let device = key(10_000 + u32::from(fill) * 100);
+        manager.import_session_state(
+            OwnerPubkey::from_bytes(device.to_bytes()),
+            device,
+            state(10_000 + u32::from(fill) * 100, 4),
+            UnixSeconds(10),
+        );
     }
 }
 

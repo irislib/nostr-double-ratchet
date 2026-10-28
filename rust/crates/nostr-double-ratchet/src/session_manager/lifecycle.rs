@@ -122,6 +122,21 @@ impl SessionManager {
         self.users.get(&owner).and_then(|user| user.roster.as_ref())
     }
 
+    /// Borrow the current delivery-readiness projection without copying ratchets.
+    /// This is an advisory query; actual send preparation still enforces proof.
+    pub fn can_send_to_device(&self, owner: OwnerPubkey, device: DevicePubkey) -> bool {
+        self.users
+            .get(&owner)
+            .and_then(|user| user.devices.get(&device))
+            .is_some_and(|record| {
+                record.authorized
+                    && !record.is_stale
+                    && (record.active_session.is_some()
+                        || !record.inactive_sessions.is_empty()
+                        || record.public_invite.is_some())
+            })
+    }
+
     pub fn replace_local_invite(&mut self, invite: Invite) {
         self.local_invite = Some(invite);
     }
@@ -176,6 +191,18 @@ impl SessionManager {
             return RosterSnapshotDecision::Stale;
         }
         self.apply_roster_for_owner(owner_pubkey, roster)
+    }
+
+    /// Validate exact signed evidence and report whether observing it can change
+    /// peer authorization. No manager state is changed or copied. The result
+    /// applies only until the next mutation; observation validates again.
+    pub fn peer_app_keys_event_would_change(
+        &self,
+        event: &nostr::Event,
+        observed_at: UnixSeconds,
+    ) -> Result<bool> {
+        self.verified_peer_app_keys
+            .would_change(event, observed_at.get())
     }
 
     /// Observe exact AppKeys evidence signed by a peer owner.

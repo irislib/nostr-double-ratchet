@@ -49,10 +49,39 @@ pub struct VerifiedAppKeysIndex {
 }
 
 impl VerifiedAppKeysIndex {
+    pub(crate) fn would_change(&self, event: &Event, now_secs: u64) -> Result<bool> {
+        let app_keys = app_keys_authorization_candidate(event.pubkey, event, now_secs)?;
+        Ok(self.candidate_would_change(event.pubkey, event.created_at.as_secs(), &app_keys))
+    }
+
+    fn candidate_would_change(
+        &self,
+        owner: PublicKey,
+        created_at_secs: u64,
+        app_keys: &AppKeys,
+    ) -> bool {
+        let Some(current) = self.heads.get(&owner) else {
+            return true;
+        };
+        if created_at_secs != current.created_at_secs {
+            return created_at_secs > current.created_at_secs;
+        }
+        // Re-encrypted labels and other non-authoritative tags do not advance
+        // authorization. Keep conflicting equal-time rosters fail-closed.
+        !current.candidates.values().any(|candidate| {
+            candidate
+                .app_keys
+                .has_equivalent_authorization_roster(app_keys)
+        })
+    }
+
     pub fn ingest(&mut self, event: Event, now_secs: u64) -> Result<bool> {
         let owner = event.pubkey;
         let app_keys = app_keys_authorization_candidate(owner, &event, now_secs)?;
         let created_at_secs = event.created_at.as_secs();
+        if !self.candidate_would_change(owner, created_at_secs, &app_keys) {
+            return Ok(false);
+        }
         let Some(current) = self.heads.get_mut(&owner) else {
             self.heads.insert(
                 owner,
@@ -67,23 +96,9 @@ impl VerifiedAppKeysIndex {
             return Ok(true);
         };
 
-        if created_at_secs < current.created_at_secs {
-            return Ok(false);
-        }
         if created_at_secs > current.created_at_secs {
             current.created_at_secs = created_at_secs;
             current.candidates.clear();
-        }
-        // AppKeys publishers may re-encrypt labels or rotate non-authoritative
-        // tags without advancing the roster timestamp. Keep only one exact
-        // event for an equivalent authorization roster, while retaining
-        // genuinely different equal-time rosters so membership fails closed.
-        if current.candidates.values().any(|candidate| {
-            candidate
-                .app_keys
-                .has_equivalent_authorization_roster(&app_keys)
-        }) {
-            return Ok(false);
         }
         Ok(current
             .candidates
