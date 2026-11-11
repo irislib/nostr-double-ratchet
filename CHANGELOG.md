@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Stop naming the recipient device on message events. Kind 1060 envelopes from
+  the Rust and TypeScript session managers now carry only the version and
+  header tags, so a relay can no longer link deliveries, or a group fanout
+  burst, to recipient devices. Recipients find messages through the sender
+  ratchet keys they already subscribe to.
+- Rust `message_event` refuses an envelope with a recipient; TypeScript
+  `Session.sendEvent` refuses any outer tag. The TypeScript publisher and
+  persistent outbox refuse recipient-tagged kind 1060 envelopes, including ones
+  queued by an older version, and recognise shared group ciphertext by id
+  (`markSharedGroupCiphertext`) because it now has the same shape as a pairwise
+  carrier. Hosts with their own "exactly one `p`" check for kind 1060 must drop
+  it before upgrading.
+- Recipient-tagged envelopes from older clients still decrypt. No handshake,
+  session or ciphertext format changes.
+- Rust sessions keep header keys with skipped message keys, as TypeScript
+  already did, so a late message from an old sender chain no longer fails with
+  "invalid header" after the local ratchet key rotated out. Saved session state
+  without the new field still loads.
+
 ## Rust 0.0.175 / TypeScript 0.0.183 - 2026-10-25
 
 - Add a pure Rust group receive probe for the locally expected next message,

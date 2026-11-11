@@ -45,10 +45,9 @@ impl SessionManager {
                 claimed_owner,
             ) {
                 Ok((mut session, invite_response)) => {
-                    let mut envelope = session
+                    let envelope = session
                         .apply_send(session.plan_send(payload, ctx.now)?)
                         .envelope;
-                    envelope.recipient = Some(device_pubkey);
                     record.invite_response_generated = true;
                     record.upsert_session(session, ctx.now);
 
@@ -80,7 +79,7 @@ impl SessionManager {
                 }
             };
 
-            let mut envelope = match source {
+            let envelope = match source {
                 SendSessionSource::Active => {
                     record
                         .active_session
@@ -96,7 +95,6 @@ impl SessionManager {
                     outcome.envelope
                 }
             };
-            envelope.recipient = Some(device_pubkey);
 
             record.last_activity = Some(ctx.now);
             return Ok(Some((
@@ -125,10 +123,9 @@ impl SessionManager {
             }
             Err(error) => return Err(error),
         };
-        let mut envelope = session
+        let envelope = session
             .apply_send(session.plan_send(payload, ctx.now)?)
             .envelope;
-        envelope.recipient = Some(device_pubkey);
         record.invite_response_generated = true;
         record.upsert_session(session, ctx.now);
 
@@ -164,8 +161,7 @@ impl SessionManager {
         if let Some(active_session) = record.active_session.as_mut() {
             if active_session.can_send() {
                 let plan = active_session.plan_send(payload, ctx.now)?;
-                let mut envelope = active_session.apply_send(plan).envelope;
-                envelope.recipient = Some(device_pubkey);
+                let envelope = active_session.apply_send(plan).envelope;
                 deliveries.push(Delivery {
                     owner_pubkey,
                     device_pubkey,
@@ -178,8 +174,7 @@ impl SessionManager {
         for mut session in inactive_sessions {
             if session.can_send() {
                 let plan = session.plan_send(payload, ctx.now)?;
-                let mut envelope = session.apply_send(plan).envelope;
-                envelope.recipient = Some(device_pubkey);
+                let envelope = session.apply_send(plan).envelope;
                 deliveries.push(Delivery {
                     owner_pubkey,
                     device_pubkey,

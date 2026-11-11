@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { finalizeEvent, generateSecretKey, type VerifiedEvent } from "nostr-tools";
 import { InMemoryStorageAdapter } from "../src/StorageAdapter";
 import { createPersistentNostrOutbox } from "../src/PersistentNostrOutbox";
+import { markSharedGroupCiphertext } from "../src/sharedGroupCiphertext";
 
 const event = (content = "encrypted"): VerifiedEvent => finalizeEvent({
-  kind: 1060, created_at: 1, content, tags: [["v", "2"], ["p", "ab".repeat(32)], ["header", "encrypted-header"]],
+  kind: 1060, created_at: 1, content, tags: [["v", "2"], ["header", "encrypted-header"]],
 }, generateSecretKey());
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
@@ -217,11 +218,15 @@ it("quarantines restored unversioned publications without deleting them or retry
   await outbox.close();
 });
 
-it('quarantines saved group roster facts and shared ciphertext without deleting history', async () => {
+it('quarantines saved group roster facts, shared ciphertext and recipient-tagged envelopes without deleting history', async () => {
   const storage = new InMemoryStorageAdapter(), publish = vi.fn(async (event: VerifiedEvent) => event)
+  const shared = finalizeEvent({kind: 1060, created_at: 1, content: 'encrypted', tags: [['v', '2'], ['header', 'encrypted-header']]}, generateSecretKey())
+  markSharedGroupCiphertext(shared.id)
   const legacy = [
     finalizeEvent({kind: 37368, created_at: 1, content: '', tags: [['type', 'group_roster']]}, generateSecretKey()),
-    finalizeEvent({kind: 1060, created_at: 1, content: 'encrypted', tags: [['v', '2'], ['header', 'encrypted-header']]}, generateSecretKey()),
+    shared,
+    // Queued by a version that still named the recipient device to relays.
+    finalizeEvent({kind: 1060, created_at: 1, content: 'encrypted', tags: [['v', '2'], ['p', 'ab'.repeat(32)], ['header', 'encrypted-header']]}, generateSecretKey()),
   ]
   for (const event of legacy) await storage.put(`v1/runtime-outbox/${event.id}`, {event})
   const outbox = createPersistentNostrOutbox({storage, publish})

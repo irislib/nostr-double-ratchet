@@ -12,7 +12,7 @@ const keys = [1, 2].map((scalar) => {
 const owners = keys.map(getPublicKey);
 const outboxStorage = new InMemoryStorageAdapter();
 const outbox = createPersistentNostrOutbox({ storage: outboxStorage, publish: async (event) => event });
-const queued = finalizeEvent({ kind: 1060, created_at: 1, content: "encrypted", tags: [METADATA_PRIVACY_TAG, ["p", owners[1]], ["header", "encrypted"]] }, keys[0]);
+const queued = finalizeEvent({ kind: 1060, created_at: 1, content: "encrypted", tags: [METADATA_PRIVACY_TAG, ["header", "encrypted"]] }, keys[0]);
 await outbox.enqueue(queued);
 assert.equal((await outboxStorage.list()).length, 1);
 await outbox.retry();

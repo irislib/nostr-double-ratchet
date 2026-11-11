@@ -56,7 +56,6 @@ function fixture() {
   const event = () =>
     sender.sendEvent(
       { kind: 10452, content: '{"type":"private-contact-sync-request","v":2}' },
-      [["p", device]],
     ).event;
   return {
     owner,

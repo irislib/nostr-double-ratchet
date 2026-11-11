@@ -175,7 +175,7 @@ export abstract class SessionManagerInvites extends SessionManagerLifecycle {
     this.delegateToOwner.set(deviceId, ownerPublicKey);
     deviceRecord.installSession(session, false, { preferActive: true });
     await this.emitPublish(event);
-    await this.sendInviteBootstrap(session, deviceId);
+    await this.sendInviteBootstrap(session);
     if (invite.purpose === "link" && ownerPublicKey === this.ownerPublicKey) {
       await this.sendLinkBootstrap(ownerPublicKey, deviceId);
     }

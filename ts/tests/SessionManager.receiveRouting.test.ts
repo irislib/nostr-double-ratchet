@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { sendWithLegacyRecipientTag } from "./helpers/legacyRecipientTag";
 import { generateSecretKey, getPublicKey, verifyEvent, type VerifiedEvent } from "nostr-tools";
 import { Session } from "../src/Session";
 import { SessionManager } from "../src/SessionManager";
@@ -84,7 +85,7 @@ describe("incoming session routing", () => {
     const received = vi.fn();
     receiver.onEvent(received);
     try {
-      const first = peer.sendEvent(buildTextRumor("first contact"), [["p", receiver.getDeviceId()]]).event;
+      const first = peer.sendEvent(buildTextRumor("first contact")).event;
       expect(receiver.processReceivedEvent(first)).toBe(false);
       await Promise.all([
         receiver.receiveInviteResponse(response),
@@ -112,9 +113,10 @@ describe("incoming session routing", () => {
     const received = vi.fn();
     receiver.onEvent(received);
     try {
-      const event = alice.sendEvent(
+      const event = sendWithLegacyRecipientTag(
+        alice,
         { kind: 14, content: "one device's encrypted copy" },
-        [["p", receiver.getDeviceId()]],
+        receiver.getDeviceId(),
       ).event;
       expect(verifyEvent(event)).toBe(true);
       expect(sibling.processReceivedEvent(structuredClone(event))).toBe(true);
@@ -136,16 +138,15 @@ describe("incoming session routing", () => {
     }
   });
 
-  it.each(["owner", "device"])("retains %s recipient compatibility", async (alias) => {
+  it.each(["owner", "device"])("still reads envelopes that name the %s as recipient", async (alias) => {
     const receiver = await manager(getPublicKey(generateSecretKey()));
     const { alice, bob } = pair();
     receiver.installPeer(bob);
     const recipient = alias === "owner" ? receiver.localOwner : receiver.getDeviceId();
-    const tags = [["p", recipient]];
     const received = vi.fn();
     receiver.onEvent(received);
     try {
-      const event = alice.sendEvent({ kind: 14, content: alias }, tags).event;
+      const event = sendWithLegacyRecipientTag(alice, { kind: 14, content: alias }, recipient).event;
       expect(receiver.processReceivedEvent(event)).toBe(true);
       expect(received).toHaveBeenCalledWith(
         expect.objectContaining({ content: alias }),

@@ -21,6 +21,7 @@ export * from "./RuntimeGroupController.js"
 export * from "./NdrRuntime.js"
 export * from "./notificationPreview.js"
 export * from "./publishing.js"
+export * from "./sharedGroupCiphertext.js"
 export * from "./PersistentNostrOutbox.js"
 export { METADATA_PRIVACY_VERSION, METADATA_PRIVACY_TAG, hasMetadataPrivacyVersion } from "./metadataPrivacy.js"
 

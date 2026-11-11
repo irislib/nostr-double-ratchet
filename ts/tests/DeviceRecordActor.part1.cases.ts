@@ -360,7 +360,7 @@ it("sends with the active bidirectional session before a higher-count inactive c
     )
 
     expect(event?.pubkey).toBe(activeAuthor)
-    expect(event?.tags).toContainEqual(["p", deviceKey])
+    expect(event?.tags.map(tag => tag[0])).toEqual(["v", "header"])
     expect(actor.activeSession).toBe(active)
   })
 
@@ -410,7 +410,7 @@ it("sends with the newer ratchet epoch before an older chain with a higher send 
     )
 
     expect(event?.pubkey).toBe(newEpochAuthor)
-    expect(event?.tags).toContainEqual(["p", deviceKey])
+    expect(event?.tags.map(tag => tag[0])).toEqual(["v", "header"])
     expect(actor.activeSession).toBe(newEpoch)
   })
 });

@@ -4,6 +4,6 @@
 - Do not claim Rust/TS sync or feature existence without `rg` in both codebases and/or passing e2e/interop tests.
 - TDD for non-trivial changes: failing test, implementation, passing tests.
 - Fix build warnings and failing tests you encounter.
-- Metadata privacy is a protocol invariant: public event signers, tags, filters and authentication must never reveal both participants' identities. Prefer invite/session keys; a necessary recipient device tag is allowed only with an identity-unlinkable sender key. Public invite keys must never sign private messages, including the first reply, retries, restarts and pairwise group-key distribution.
+- Metadata privacy is a protocol invariant: public event signers, tags, filters and authentication must never reveal both participants' identities. Prefer invite/session keys; message events (kind 1060) must never name a recipient, even with an identity-unlinkable sender key; only an invite response names its target, the public invite key. Public invite keys must never sign private messages, including the first reply, retries, restarts and pairwise group-key distribution.
 - Protocol upgrades must reject old identity-linkable sessions and queued wire events while preserving local message history. Require serialized transcript privacy tests in both implementations and cross-language vectors before publishing.
 - After relevant checks pass, commit and push to hashtree unless this is explicitly GitHub PR/mirror work.

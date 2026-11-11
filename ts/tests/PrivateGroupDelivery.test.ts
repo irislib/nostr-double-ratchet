@@ -272,7 +272,7 @@ it.each(['known', 'upsert', 'sync'] as const)('automatically commits queued ratc
       expect([10445, 10446, 10447, 21113]).not.toContain(event.kind)
       if ([1059, 1060].includes(event.kind)) {
         expect(identities).not.toContain(event.pubkey)
-        expect(event.tags.filter((tag: string[]) => tag[0] === 'p')).toHaveLength(1)
+        expect(event.tags.filter((tag: string[]) => tag[0] === 'p')).toHaveLength(event.kind === 1059 ? 1 : 0)
       }
     }
     for (const request of requests) expect(JSON.parse(request)[2].authors ?? []).not.toContain(groupAuthor)

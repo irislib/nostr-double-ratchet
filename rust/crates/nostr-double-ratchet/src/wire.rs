@@ -83,17 +83,22 @@ pub fn message_event(envelope: &MessageEnvelope) -> Result<Event> {
         ));
     }
 
-    let mut builder = EventBuilder::new(
+    // The recipient already knows the sender's ratchet key and subscribes by
+    // author. Naming it here would let relays link deliveries to a device.
+    if envelope.recipient.is_some() {
+        return Err(Error::InvalidEvent(
+            "message events must not reveal a recipient key".to_string(),
+        ));
+    }
+
+    let unsigned = EventBuilder::new(
         Kind::from(MESSAGE_EVENT_KIND as u16),
         envelope.ciphertext.clone(),
     )
     .tag(tag(["v", "2"])?)
     .tag(tag(["header", envelope.encrypted_header.as_str()])?)
-    .custom_created_at(Timestamp::from(envelope.created_at.get()));
-    if let Some(recipient) = envelope.recipient {
-        builder = builder.tag(tag(["p", &recipient.to_string()])?);
-    }
-    let unsigned = builder.build(public_key(envelope.sender)?);
+    .custom_created_at(Timestamp::from(envelope.created_at.get()))
+    .build(public_key(envelope.sender)?);
 
     Ok(unsigned.sign_with_keys(&author_keys)?)
 }
@@ -617,17 +622,18 @@ mod tests {
         let event = message_event(&MessageEnvelope {
             metadata_privacy_version: crate::METADATA_PRIVACY_VERSION,
             sender,
-            recipient: Some(DevicePubkey::from_bytes([7u8; 32])),
+            recipient: None,
             signer_secret_key: signer_secret,
             created_at: UnixSeconds(10),
             encrypted_header: "header".to_string(),
             ciphertext: "ciphertext".to_string(),
         })
         .unwrap();
+        assert!(optional_tag_value(&event, "p").is_none());
 
         let parsed = parse_message_event(&event).unwrap();
         assert_eq!(parsed.sender, sender);
-        assert_eq!(parsed.recipient, Some(DevicePubkey::from_bytes([7u8; 32])));
+        assert_eq!(parsed.recipient, None);
         assert_eq!(parsed.encrypted_header, "header");
         assert_eq!(parsed.ciphertext, "ciphertext");
     }

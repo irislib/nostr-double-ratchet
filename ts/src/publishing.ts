@@ -2,13 +2,18 @@ import { type VerifiedEvent } from "nostr-tools";
 import { type NostrPublish, type NostrPublisherOptions, type NostrPublishContext, type Rumor } from "./types.js";
 
 import { GROUP_ROSTER_FACT_KIND } from "./GroupMeta.js";
+import { isSharedGroupCiphertext } from "./sharedGroupCiphertext.js";
 
-/** Group rosters and shared group ciphertext are local intermediates, never relay traffic. */
-export function isForbiddenGroupRelayEvent(event: Pick<Rumor, "kind" | "tags">): boolean {
+/**
+ * Group rosters and shared group ciphertext are local intermediates, never relay traffic.
+ * A message envelope that names its recipient would let relays link deliveries to a device.
+ */
+export function isForbiddenGroupRelayEvent(event: Pick<Rumor, "kind" | "tags"> & { id?: string }): boolean {
   if ([10445, 10446, 10447, 21113].includes(event.kind)) return true;
   if (event.kind === GROUP_ROSTER_FACT_KIND && event.tags.some(tag => tag[0] === "type" && tag[1] === "group_roster")) return true;
-  if (event.kind !== 1060 && event.kind !== 1059) return false;
   const recipients = event.tags.filter(tag => tag[0] === "p");
+  if (event.kind === 1060) return recipients.length > 0 || isSharedGroupCiphertext(event.id);
+  if (event.kind !== 1059) return false;
   return recipients.length !== 1 || !/^[a-f0-9]{64}$/i.test(recipients[0][1] || "");
 }
 
@@ -50,7 +55,11 @@ export function createNostrPublisher(
   if (localPublishers.has(publish)) return publish;
 
   const localPublish: NostrPublish = async (event, innerEventId, context) => {
-    if (isForbiddenGroupRelayEvent(event)) throw new Error("Shared group relay publication is forbidden");
+    if (isForbiddenGroupRelayEvent(event)) {
+      throw new Error(event.kind === 1060 && event.tags.some(tag => tag[0] === "p")
+        ? "Message envelopes must not name a recipient"
+        : "Shared group relay publication is forbidden");
+    }
     let signed: VerifiedEvent;
     if ("sig" in event && event.sig) {
       signed = event as VerifiedEvent;

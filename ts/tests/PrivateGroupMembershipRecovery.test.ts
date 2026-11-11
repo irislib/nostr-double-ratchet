@@ -8,12 +8,13 @@ import type { Rumor } from '../src/types.js'
 
 it('automatically repairs a new member key rejected before the admin membership update arrives', async () => {
   const frames: string[] = [], requests: string[] = [], held: VerifiedEvent[] = []
-  let holdRecipient: string | undefined
+  let holding = false
   class SerializedRelay extends MockRelay {
     override storeAndDeliver(event: VerifiedEvent) {
       const frame = JSON.stringify(['EVENT', event]); frames.push(frame)
       const serialized = JSON.parse(frame)[1] as VerifiedEvent
-      if (holdRecipient && serialized.kind === 1060 && serialized.tags.some(tag => tag[0] === 'p' && tag[1] === holdRecipient)) {
+      // Relays cannot see who an envelope is for; only the admin publishes while holding.
+      if (holding && serialized.kind === 1060) {
         held.push(serialized); return
       }
       super.storeAndDeliver(serialized)
@@ -56,11 +57,11 @@ it('automatically repairs a new member key rejected before the admin membership 
     await newcomer!.upsertGroup(updated)
     const membership = finalizeEvent(buildGroupRosterFactEvent(updated,
       { signerPubkey: alice!, revision: 2 }), secrets[0]!)
-    holdRecipient = receiver!.getState().currentDevicePubkey!
+    holding = true
     await admin!.sendEvent(bob!, { kind: membership.kind, content: membership.content,
       tags: membership.tags, pubkey: membership.pubkey, created_at: membership.created_at, id: membership.id })
     await vi.waitFor(() => expect(held.length).toBeGreaterThan(0), { timeout: 500 })
-    holdRecipient = undefined
+    holding = false
     const message = await newcomer!.sendGroupMessage(updated.id, 'sent before the membership arrives')
     const inbox = () => [...receiver!.getSessionUserRecords().values()].flatMap(record => [...record.pendingDurableEvents.values()])
     await vi.waitFor(() => expect(controls).toContain(10446), { timeout: 500 })
@@ -91,7 +92,7 @@ it('automatically repairs a new member key rejected before the admin membership 
       expect(event.kind === 37368 && event.tags.some((tag: string[]) => tag[0] === 'type' && tag[1] === 'group_roster')).toBe(false)
       if ([1059, 1060].includes(event.kind)) {
         expect(identities).not.toContain(event.pubkey)
-        expect(event.tags.filter((tag: string[]) => tag[0] === 'p')).toHaveLength(1)
+        expect(event.tags.filter((tag: string[]) => tag[0] === 'p')).toHaveLength(event.kind === 1059 ? 1 : 0)
       }
     }
     for (const request of requests) expect(JSON.parse(request)[2].authors ?? []).not.toContain(message.outer.pubkey)

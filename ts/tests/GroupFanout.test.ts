@@ -113,7 +113,7 @@ describe("group pairwise fanout", () => {
       expect(keyPublications).toHaveLength(2 * (clients.length - 1));
       expect(publishedInnerIds).toContain(sent.inner.id);
       for (const outer of keyPublications) {
-        expect(outer.tags.filter(tag => tag[0] === "p")).toHaveLength(1);
+        expect(outer.tags.map(tag => tag[0])).toEqual(["v", "header"]);
         expect(outer.pubkey).not.toBe(sent.outer.pubkey);
         expect(owners).not.toContain(outer.pubkey);
         expect(clients.map(client => client.getState().currentDevicePubkey)).not.toContain(outer.pubkey);

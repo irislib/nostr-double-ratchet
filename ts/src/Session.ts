@@ -138,8 +138,10 @@ export class Session {
     if (this.state.metadataPrivacyVersion !== METADATA_PRIVACY_VERSION) {
       throw new Error("Session requires a new private handshake");
     }
-    if (outerTags.some(tag => tag.length !== 2 || tag[0] !== "p" || !/^[0-9a-f]{64}$/.test(tag[1])) || outerTags.length > 1) {
-      throw new Error("Only one delivery recipient is allowed outside the encrypted message");
+    if (outerTags.length > 0) {
+      // The recipient subscribes by our ratchet key. Naming it, or anything
+      // else, outside the encryption would let relays link deliveries.
+      throw new Error("No recipient or identity is allowed outside the encrypted message");
     }
     if (!this.state.theirNextNostrPublicKey || !this.state.ourCurrentNostrKey) {
       throw new Error("we are not the initiator, so we can't send the first message");
@@ -173,7 +175,7 @@ export class Session {
     const nostrEvent = finalizeEvent({
       content: encryptedData,
       kind: MESSAGE_EVENT_KIND,
-      tags: [[...METADATA_PRIVACY_TAG], ["header", encryptedHeader], ...outerTags.map((tag) => [...tag])],
+      tags: [[...METADATA_PRIVACY_TAG], ["header", encryptedHeader]],
       created_at: Math.floor(now / 1000)
     }, this.state.ourCurrentNostrKey.privateKey);
 

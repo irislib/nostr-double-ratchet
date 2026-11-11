@@ -1,4 +1,5 @@
 import { METADATA_PRIVACY_TAG, hasMetadataPrivacyVersion } from "./metadataPrivacy.js";
+import { markSharedGroupCiphertext } from "./sharedGroupCiphertext.js";
 import {
   finalizeEvent,
   getPublicKey,
@@ -149,7 +150,9 @@ export class OneToManyChannel {
       created_at: createdAt,
     };
 
-    return finalizeEvent(template, senderEventSecretKey);
+    const event = finalizeEvent(template, senderEventSecretKey);
+    markSharedGroupCiphertext(event.id);
+    return event;
   }
 }
 

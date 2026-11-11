@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest"
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools"
 import { createNostrPublisher, groupPublicationContext, groupPublicationInnerEventId } from "../src/publishing"
+import { markSharedGroupCiphertext } from "../src/sharedGroupCiphertext"
 
 const secret = generateSecretKey()
 const unsigned = { pubkey: getPublicKey(secret), kind: 1, created_at: 1, content: "hello", tags: [] }
@@ -111,17 +112,25 @@ it("recovers direct recipient policy from queued plaintext without exposing it o
   expect(JSON.stringify(signed)).not.toContain(recipient)
 })
 
-it('refuses public group roster facts and bare shared group envelopes before signing or enqueueing', async () => {
+it('refuses public group roster facts and shared group envelopes before signing or enqueueing', async () => {
   const transport = vi.fn(async () => signed), enqueue = vi.fn(async () => {})
   const publish = createNostrPublisher(transport, { nostrEnqueue: enqueue })
+  const shared = finalizeEvent({...unsigned, kind: 1060, tags: [['v', '2'], ['header', 'ciphertext']]}, secret)
+  markSharedGroupCiphertext(shared.id)
   for (const event of [
     finalizeEvent({...unsigned, kind: 37368, tags: [['type', 'group_roster']]}, secret),
-    finalizeEvent({...unsigned, kind: 1060, tags: [['v', '2'], ['header', 'ciphertext']]}, secret),
+    shared,
     ...[10445, 10446, 10447, 21113].map(kind => finalizeEvent({...unsigned, kind}, secret)),
     finalizeEvent({...unsigned, kind: 1059, tags: [['p', 'ab'.repeat(32)], ['p', 'cd'.repeat(32)]]}, secret),
   ]) await expect(publish(event)).rejects.toThrow('group')
+  // A recipient tag on a message envelope would tell relays who it is for.
+  await expect(publish(finalizeEvent({...unsigned, kind: 1060,
+    tags: [['v', '2'], ['header', 'ciphertext'], ['p', 'ab'.repeat(32)]]}, secret))).rejects.toThrow('must not name a recipient')
   expect(transport).not.toHaveBeenCalled()
   expect(enqueue).not.toHaveBeenCalled()
+  // The pairwise carrier itself has the same shape as shared ciphertext and no recipient.
+  const carrier = finalizeEvent({...unsigned, kind: 1060, content: 'carrier', tags: [['v', '2'], ['header', 'ciphertext']]}, secret)
+  await expect(publish(carrier)).resolves.toBe(carrier)
 })
 
 

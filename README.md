@@ -107,7 +107,11 @@ events and does not own chat features such as reactions, typing, receipts, or ex
 ### Metadata Privacy Protocol v2
 
 Private event authors must not be linkable to an account or device identity.
-An identity recipient tag is permitted for cold delivery only with such an author.
+Message events (kind 1060) carry no recipient tag: the recipient already knows
+the sender's ratchet keys and subscribes by author, so naming its device would
+only let relays link deliveries to it. Only an invite response names a target,
+and that target is the public invite key. Envelopes from older clients that
+still carry a recipient tag are read, never written or republished.
 In particular, the public invite key must never sign the inviter's first reply.
 Both implementations derive a different initial responder key for each acceptance:
 `t = SHA256("NIP-118/responder-key-blinding/v2" || NIP44-conversation-key ||

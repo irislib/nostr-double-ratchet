@@ -396,7 +396,7 @@ export abstract class SessionManagerLifecycle extends SessionManagerRecords {
     }
 
     try {
-      const bootstrapEvents = planInviteBootstrapEvents(session, deviceId);
+      const bootstrapEvents = planInviteBootstrapEvents(session);
       const [initialBootstrap] = bootstrapEvents;
       if (!initialBootstrap) {
         return;
@@ -413,15 +413,9 @@ export abstract class SessionManagerLifecycle extends SessionManagerRecords {
     }
   }
 
-  protected async sendInviteBootstrap(
-    session: Session,
-    recipientDevicePubkey: string,
-  ): Promise<void> {
+  protected async sendInviteBootstrap(session: Session): Promise<void> {
     try {
-      const bootstrapEvents = planInviteBootstrapEvents(
-        session,
-        recipientDevicePubkey,
-      );
+      const bootstrapEvents = planInviteBootstrapEvents(session);
       const [initialBootstrap] = bootstrapEvents;
       if (!initialBootstrap) {
         return;

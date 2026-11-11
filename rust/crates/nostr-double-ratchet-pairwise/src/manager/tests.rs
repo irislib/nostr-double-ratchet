@@ -275,9 +275,22 @@ fn encrypt_unchecked(
     let plan = session
         .plan_send(&serde_json::to_vec(&inner).unwrap(), UnixSeconds(now))
         .unwrap();
-    let mut envelope = plan.envelope;
-    envelope.recipient = recipient;
-    let event = message_event(&envelope).unwrap();
+    let envelope = plan.envelope;
+    let event = match recipient {
+        None => message_event(&envelope).unwrap(),
+        // The codec no longer writes recipient tags; forge the legacy shape.
+        Some(recipient) => {
+            let signer =
+                Keys::new(nostr::SecretKey::from_slice(&envelope.signer_secret_key).unwrap());
+            nostr::EventBuilder::new(Kind::from(MESSAGE_EVENT_KIND as u16), &envelope.ciphertext)
+                .tag(nostr::Tag::parse(["v", "2"]).unwrap())
+                .tag(nostr::Tag::parse(["header", envelope.encrypted_header.as_str()]).unwrap())
+                .tag(nostr::Tag::parse(["p", recipient.to_string().as_str()]).unwrap())
+                .custom_created_at(nostr::Timestamp::from(envelope.created_at.get()))
+                .sign_with_keys(&signer)
+                .unwrap()
+        }
+    };
     let mut next = sender.state.clone();
     next.peers.get_mut(&peer_hex).unwrap().sessions[session_index].state = plan.next_state;
     sender

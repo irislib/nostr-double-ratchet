@@ -25,17 +25,17 @@ describe("public invite transcript privacy", () => {
       const receiving = turn % 2 === 0 ? bob : alice;
       const senderIdentity = turn % 2 === 0 ? aliceIdentity : bobIdentity;
       const recipient = turn % 2 === 0 ? bobIdentity : aliceIdentity;
-      const { event } = sending.sendEvent(
-        {
-          ...buildTextRumor(`turn ${turn}`, { pubkey: senderIdentity }),
-          kind: [14, GROUP_SENDER_KEY_DISTRIBUTION_KIND, 21112, 40][turn % 4],
-        },
-        [["p", recipient]],
-      );
+      const { event } = sending.sendEvent({
+        ...buildTextRumor(`turn ${turn}`, { pubkey: senderIdentity }),
+        kind: [14, GROUP_SENDER_KEY_DISTRIBUTION_KIND, 21112, 40][turn % 4],
+        tags: [["p", recipient]],
+      });
       expect(verifyEvent(event)).toBe(true);
       expect(event.pubkey).not.toBe(invitePublic);
-      expect(event.tags.filter(tag => tag[0] === "p")).toEqual([["p", recipient]]);
+      // Relays see neither end: no recipient tag, no identity anywhere.
+      expect(event.tags.map(tag => tag[0])).toEqual(["v", "header"]);
       expect(JSON.stringify(event)).not.toContain(senderIdentity);
+      expect(JSON.stringify(event)).not.toContain(recipient);
       expect(receiving.receiveEvent(event)?.content).toBe(`turn ${turn}`);
       alice = new Session(deserializeSessionState(serializeSessionState(alice.state)));
       bob = new Session(deserializeSessionState(serializeSessionState(bob.state)));
@@ -64,8 +64,9 @@ it("rejects unversioned state and arbitrary outer identity tags without advancin
   const before = serializeSessionState(session.state);
   for (const tags of [
     [["owner", getPublicKey(generateSecretKey())]],
+    [["p", getPublicKey(generateSecretKey())]],
     [["p", getPublicKey(generateSecretKey())], ["p", getPublicKey(generateSecretKey())]],
-  ]) expect(() => session.sendEvent(buildTextRumor("private"), tags)).toThrow("Only one delivery recipient");
+  ]) expect(() => session.sendEvent(buildTextRumor("private"), tags)).toThrow("outside the encrypted message");
   expect(serializeSessionState(session.state)).toBe(before);
   const legacy = JSON.parse(before);
   delete legacy.metadataPrivacyVersion;

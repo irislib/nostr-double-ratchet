@@ -3,6 +3,7 @@ import { Group, type GroupDecryptedEvent, type PairwiseSend } from './GroupChann
 import type { GroupData } from './GroupMeta.js'
 import { InMemoryStorageAdapter, type StorageAdapter } from './StorageAdapter.js'
 import { hasMetadataPrivacyVersion } from './metadataPrivacy.js'
+import { markSharedGroupCiphertext } from './sharedGroupCiphertext.js'
 import type { Rumor } from './types.js'
 
 export const PAIRWISE_GROUP_DELIVERY_VERSION = 1
@@ -15,6 +16,7 @@ export function parsePrivateGroupDelivery(rumor: Pick<Rumor, 'kind' | 'content'>
     const event = value?.event
     if (value?.v !== 1 || value.type !== 'group-wake' || !event || event.kind !== 1060 ||
         !hasMetadataPrivacyVersion(event) || event.tags.some((tag: string[]) => tag[0] === 'p') || !verifyEvent(event)) return
+    markSharedGroupCiphertext(event.id)
     return event
   } catch { return }
 }
