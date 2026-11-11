@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## Rust 0.0.178 / TypeScript 0.0.185 - 2026-11-11
+
 - Subscribe to message authors in chunks. Both clients sent every sender
   ratchet key in one filter, which relays refuse past roughly 1,950 authors,
   stopping all delivery. New helpers split authors into chunks of 1,000 with a
