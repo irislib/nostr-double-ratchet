@@ -30,6 +30,31 @@ pub(crate) mod option {
     }
 }
 
+pub(crate) mod vec {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub(crate) fn serialize<S>(value: &[[u8; 32]], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        value
+            .iter()
+            .map(hex::encode)
+            .collect::<Vec<_>>()
+            .serialize(serializer)
+    }
+
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<Vec<[u8; 32]>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Vec::<String>::deserialize(deserializer)?
+            .iter()
+            .map(|value| super::decode_32(value))
+            .collect()
+    }
+}
+
 pub(crate) mod btreemap_u32 {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use std::collections::BTreeMap;
@@ -78,6 +103,8 @@ mod tests {
         optional: Option<[u8; 32]>,
         #[serde(with = "btreemap_u32")]
         mapped: BTreeMap<u32, [u8; 32]>,
+        #[serde(with = "vec")]
+        listed: Vec<[u8; 32]>,
     }
 
     #[test]
@@ -86,11 +113,13 @@ mod tests {
             required: [0x11; 32],
             optional: Some([0x22; 32]),
             mapped: BTreeMap::from([(7, [0x33; 32])]),
+            listed: vec![[0x44; 32]],
         };
         let json = serde_json::to_value(&value).unwrap();
         assert_eq!(json["required"], "11".repeat(32));
         assert_eq!(json["optional"], "22".repeat(32));
         assert_eq!(json["mapped"]["7"], "33".repeat(32));
+        assert_eq!(json["listed"][0], "44".repeat(32));
         assert_eq!(serde_json::from_value::<WireShapes>(json).unwrap(), value);
 
         let value = WireShapes {

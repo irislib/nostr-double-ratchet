@@ -88,6 +88,7 @@ fn state(n: u32, skipped: usize) -> SessionState {
                     key(n + 2 + i as u32),
                     SkippedKeysEntry {
                         message_keys: (0..128).map(|j| (j, [2; 32])).collect(),
+                        header_keys: Vec::new(),
                     },
                 )
             })

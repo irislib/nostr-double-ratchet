@@ -31,12 +31,14 @@ fn state(byte: u8) -> SessionState {
                 key(90),
                 SkippedKeysEntry {
                     message_keys: BTreeMap::from([(1, [91; 32]), (2, [92; 32])]),
+                    header_keys: vec![[95; 32]],
                 },
             ),
             (
                 key(93),
                 SkippedKeysEntry {
                     message_keys: BTreeMap::from([(3, [94; 32])]),
+                    header_keys: Vec::new(),
                 },
             ),
         ]),
@@ -158,6 +160,16 @@ fn every_session_state_field_changes_the_receive_fingerprint() {
         }),
         ("skipped empty entry", |s| {
             s.skipped_keys.insert(key(200), SkippedKeysEntry::default());
+        }),
+        ("skipped header key", |s| {
+            s.skipped_keys.get_mut(&key(90)).unwrap().header_keys[0][0] ^= 1;
+        }),
+        ("skipped header key absent", |s| {
+            s.skipped_keys
+                .get_mut(&key(90))
+                .unwrap()
+                .header_keys
+                .clear();
         }),
         ("skipped number", |s| {
             let entry = s.skipped_keys.get_mut(&key(90)).unwrap();

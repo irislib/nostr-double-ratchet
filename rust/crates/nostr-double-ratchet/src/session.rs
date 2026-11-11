@@ -29,6 +29,15 @@ pub struct SerializableKeyPair {
 pub struct SkippedKeysEntry {
     #[serde(with = "crate::serde_hex::btreemap_u32")]
     pub message_keys: BTreeMap<u32, [u8; 32]>,
+    /// NIP-44 conversation keys that decrypt this sender's headers. Kept with
+    /// the skipped message keys so a late message stays readable after the
+    /// local ratchet key its header was encrypted to has rotated out.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        with = "crate::serde_hex::vec"
+    )]
+    pub header_keys: Vec<[u8; 32]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -103,6 +112,7 @@ enum HeaderDecryptionTarget {
     Current,
     Next,
     Previous,
+    Skipped,
 }
 
 impl Session {
@@ -373,12 +383,24 @@ impl Session {
             ratchet_step(&mut next_state, ctx.rng)?;
         }
 
-        let payload = ratchet_decrypt(
-            &mut next_state,
-            &header,
-            &envelope.ciphertext,
-            envelope.sender,
-        )?;
+        let payload = if decryption_target == HeaderDecryptionTarget::Skipped {
+            // Only a retained message key can open a chain whose header key
+            // is no longer one of ours; never advance the current chain for it.
+            try_skipped_message_keys(
+                &mut next_state,
+                &header,
+                &envelope.ciphertext,
+                envelope.sender,
+            )?
+            .ok_or_else(|| crate::Error::Decryption("no skipped message key".to_string()))?
+        } else {
+            ratchet_decrypt(
+                &mut next_state,
+                &header,
+                &envelope.ciphertext,
+                envelope.sender,
+            )?
+        };
 
         Ok(ReceivePlan {
             next_state,
@@ -498,7 +520,17 @@ fn skip_message_keys(state: &mut SessionState, until: u32, sender: DevicePubkey)
         return Err(DomainError::TooManySkippedMessages.into());
     }
 
+    let header_key = if state
+        .skipped_keys
+        .get(&sender)
+        .is_none_or(|entry| entry.header_keys.is_empty())
+    {
+        Some(skipped_header_key(state, sender)?)
+    } else {
+        None
+    };
     let entry = state.skipped_keys.entry(sender).or_default();
+    entry.header_keys.extend(header_key);
 
     while state.receiving_chain_message_number < until {
         let receiving_chain_key = state
@@ -566,7 +598,45 @@ fn decrypt_header(
         }
     }
 
+    if let Some(entry) = state.skipped_keys.get(&sender) {
+        for header_key in &entry.header_keys {
+            if let Some(header) = decrypt_header_with_key(header_key, encrypted_header) {
+                return Ok((header, HeaderDecryptionTarget::Skipped));
+            }
+        }
+    }
+
     Err(crate::Error::Parse("invalid header".to_string()))
+}
+
+/// The key a sender chain's headers are encrypted to is the local ratchet key
+/// that is current while that chain is being received, which is when its
+/// message keys get skipped.
+fn skipped_header_key(state: &SessionState, sender: DevicePubkey) -> Result<[u8; 32]> {
+    let our_key = state
+        .our_current_nostr_key
+        .as_ref()
+        .unwrap_or(&state.our_next_nostr_key);
+    let conversation_key = nip44::v2::ConversationKey::derive(
+        &secret_key_from_bytes(&our_key.private_key)?,
+        &sender.to_nostr()?,
+    )?;
+    conversation_key
+        .as_bytes()
+        .try_into()
+        .map_err(|_| crate::Error::Encryption("invalid conversation key".to_string()))
+}
+
+fn decrypt_header_with_key(header_key: &[u8; 32], encrypted_header: &str) -> Option<Header> {
+    let payload = base64::engine::general_purpose::STANDARD
+        .decode(encrypted_header)
+        .ok()?;
+    if payload.first() != Some(&Version::V2.as_u8()) {
+        return None;
+    }
+    let conversation_key = nip44::v2::ConversationKey::new(*header_key);
+    let decrypted = nip44::v2::decrypt_to_bytes(&conversation_key, &payload).ok()?;
+    serde_json::from_slice(&decrypted).ok()
 }
 
 fn prune_skipped_message_keys(map: &mut BTreeMap<u32, [u8; 32]>) {
@@ -715,6 +785,106 @@ mod tests {
         let replay = bob.plan_receive(&mut replay_ctx, &envelope);
         assert!(replay.is_err());
         assert_eq!(bob.state, after_first);
+    }
+
+    fn session_pair(seed: u8) -> (Session, Session) {
+        let alice_secret = [seed; 32];
+        let bob_secret = [seed + 1; 32];
+        let alice_pub = device_pubkey_from_secret_bytes(&alice_secret).unwrap();
+        let bob_pub = device_pubkey_from_secret_bytes(&bob_secret).unwrap();
+        let shared_secret = [seed + 2; 32];
+        let mut alice_ctx = context(u64::from(seed));
+        let alice =
+            Session::new_initiator(&mut alice_ctx, bob_pub, alice_secret, shared_secret).unwrap();
+        let mut bob_ctx = context(u64::from(seed) + 1);
+        let bob =
+            Session::new_responder(&mut bob_ctx, alice_pub, bob_secret, shared_secret).unwrap();
+        (alice, bob)
+    }
+
+    fn send(session: &mut Session, payload: &[u8]) -> MessageEnvelope {
+        let plan = session
+            .plan_send(payload, UnixSeconds(1_700_000_100))
+            .unwrap();
+        session.apply_send(plan).envelope
+    }
+
+    fn receive(session: &mut Session, seed: u64, envelope: &MessageEnvelope) -> Result<Vec<u8>> {
+        let mut ctx = context(seed);
+        let plan = session.plan_receive(&mut ctx, envelope)?;
+        Ok(session.apply_receive(plan).payload)
+    }
+
+    /// Bob misses one message of Alice's first chain, then both sides ratchet
+    /// until Bob no longer holds the key that chain's headers were encrypted to.
+    fn bob_with_late_message(seed: u8) -> (Session, MessageEnvelope) {
+        let (mut alice, mut bob) = session_pair(seed);
+        let first = send(&mut alice, b"first");
+        let late = send(&mut alice, b"late");
+        assert_eq!(receive(&mut bob, 100, &first).unwrap(), b"first");
+
+        for round in 0..3u64 {
+            let reply = send(&mut bob, b"reply");
+            assert_eq!(receive(&mut alice, 200 + round, &reply).unwrap(), b"reply");
+            let next = send(&mut alice, b"next");
+            assert_ne!(next.sender, late.sender);
+            assert_eq!(receive(&mut bob, 300 + round, &next).unwrap(), b"next");
+        }
+        (bob, late)
+    }
+
+    #[test]
+    fn late_message_from_old_chain_decrypts_after_our_keys_rotated_out() {
+        let (mut bob, late) = bob_with_late_message(40);
+        assert!(bob.state.skipped_keys.contains_key(&late.sender));
+
+        assert_eq!(receive(&mut bob, 400, &late).unwrap(), b"late");
+        assert!(!bob.state.skipped_keys.contains_key(&late.sender));
+    }
+
+    #[test]
+    fn replayed_late_message_fails_without_corrupting_state() {
+        let (mut bob, late) = bob_with_late_message(50);
+        let mut other = bob.clone();
+        assert_eq!(receive(&mut bob, 400, &late).unwrap(), b"late");
+        let after = bob.state.clone();
+
+        assert!(receive(&mut bob, 401, &late).is_err());
+        assert_eq!(bob.state, after);
+
+        // A header that decrypts with a retained header key but names a
+        // message whose key is gone must not advance the current chain.
+        let entry = other.state.skipped_keys.get_mut(&late.sender).unwrap();
+        entry.message_keys.clear();
+        entry.message_keys.insert(999, [1u8; 32]);
+        let before = other.state.clone();
+        assert!(receive(&mut other, 402, &late).is_err());
+        assert_eq!(other.state, before);
+    }
+
+    #[test]
+    fn skipped_header_keys_survive_serialization_and_old_state_still_loads() {
+        let (bob, late) = bob_with_late_message(60);
+        let json = serde_json::to_value(&bob.state).unwrap();
+        let mut restored = Session::from_state(serde_json::from_value(json.clone()).unwrap());
+        assert_eq!(restored.state, bob.state);
+        assert_eq!(receive(&mut restored, 400, &late).unwrap(), b"late");
+
+        // State written before header keys were retained has no such field.
+        let mut old = json;
+        for entry in old["skipped_keys"].as_object_mut().unwrap().values_mut() {
+            entry.as_object_mut().unwrap().remove("header_keys");
+        }
+        let mut old = Session::from_state(serde_json::from_value(old).unwrap());
+        assert!(old.state.skipped_keys.contains_key(&late.sender));
+        let before = old.state.clone();
+        assert!(receive(&mut old, 401, &late).is_err());
+        assert_eq!(old.state, before);
+
+        // A session with nothing skipped serializes exactly as before.
+        let (_, fresh) = session_pair(70);
+        let fresh = serde_json::to_string(&fresh.state).unwrap();
+        assert!(!fresh.contains("header_keys"));
     }
 
     #[test]

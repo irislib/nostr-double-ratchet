@@ -138,10 +138,17 @@ impl FingerprintWriter {
         self.len(skipped_keys.len());
         for (sender, entry) in skipped_keys {
             self.0.update(sender.to_bytes());
-            let SkippedKeysEntry { message_keys } = entry;
+            let SkippedKeysEntry {
+                message_keys,
+                header_keys,
+            } = entry;
             self.len(message_keys.len());
             for (number, key) in message_keys {
                 self.0.update(number.to_be_bytes());
+                self.0.update(key);
+            }
+            self.len(header_keys.len());
+            for key in header_keys {
                 self.0.update(key);
             }
         }
