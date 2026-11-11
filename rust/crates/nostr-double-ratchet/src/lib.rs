@@ -14,6 +14,8 @@ pub mod group_wire;
 pub mod ids;
 pub mod invite;
 #[cfg(feature = "full")]
+pub mod message_author_subscriptions;
+#[cfg(feature = "full")]
 pub mod message_builders;
 #[cfg(feature = "full")]
 pub mod message_origin;
@@ -57,12 +59,10 @@ pub use device_link::{
 pub use direct_message_subscriptions::{
     app_keys_subscription_authors, build_app_keys_backfill_filter,
     build_direct_message_backfill_filter, build_invite_backfill_filter,
-    build_invite_response_backfill_filter, build_message_author_subscription_filters,
-    build_protocol_discovery_filters, build_runtime_backfill_filters,
-    direct_message_subscription_authors, invite_response_subscription_recipients,
-    prioritized_message_authors, DirectMessageSubscriptionTracker, MessageAuthorSubscriptionPlan,
-    RuntimeSubscriptionRegistration, RuntimeSubscriptionTracker, MESSAGE_AUTHOR_FILTER_CHUNK_SIZE,
-    MESSAGE_AUTHOR_SUBSCRIPTION_LIMIT,
+    build_invite_response_backfill_filter, build_protocol_discovery_filters,
+    build_runtime_backfill_filters, direct_message_subscription_authors,
+    invite_response_subscription_recipients, DirectMessageSubscriptionTracker,
+    RuntimeSubscriptionRegistration, RuntimeSubscriptionTracker,
 };
 pub use error::{DomainError, Error, Result};
 #[cfg(feature = "full")]
@@ -78,6 +78,12 @@ pub use group_wire::{
 };
 pub use ids::{DevicePubkey, OwnerPubkey, UnixSeconds};
 pub use invite::{Invite, InviteResponse, InviteResponseEnvelope, OwnerClaimVerifier};
+#[cfg(feature = "full")]
+pub use message_author_subscriptions::{
+    build_message_author_subscription_filters, prioritized_message_authors,
+    MessageAuthorSubscriptionPlan, MESSAGE_AUTHOR_FILTER_CHUNK_SIZE,
+    MESSAGE_AUTHOR_SUBSCRIPTION_LIMIT,
+};
 #[cfg(feature = "full")]
 pub use message_builders::*;
 #[cfg(feature = "full")]

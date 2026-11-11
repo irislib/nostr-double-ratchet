@@ -15,6 +15,8 @@ import { MockRelay } from "./helpers/mockRelay";
 const author = (index: number) => bytesToHex(sha256(new TextEncoder().encode(`author-${index}`)));
 const authors = (count: number, from = 0) => Array.from({ length: count }, (_, index) => author(from + index));
 const authorsOf = (filters: Filter[]) => filters.flatMap((filter) => filter.authors ?? []);
+const layoutDigest = (filters: Filter[]) =>
+  bytesToHex(sha256(new TextEncoder().encode(JSON.stringify(filters.map((filter) => filter.authors)))));
 
 describe("message author subscription filters", () => {
   it("keeps a small author set in the single filter clients have always sent", () => {
@@ -51,8 +53,20 @@ describe("message author subscription filters", () => {
     for (const filter of plan.filters) expect(filter.authors!.length).toBeLessThanOrEqual(4);
     expect(buildMessageAuthorSubscriptionFilters(authors(MESSAGE_AUTHOR_SUBSCRIPTION_LIMIT + 7)).dropped).toHaveLength(7);
     // The same layout as the Rust implementation, for hosts that share relays.
-    expect(bytesToHex(sha256(new TextEncoder().encode(JSON.stringify(plan.filters.map((filter) => filter.authors))))))
-      .toBe("790c1c4646399fbc11069a6e30c318509935f0a06af4796acf07af94703b8e21");
+    expect(layoutDigest(plan.filters)).toBe("0cad60712eeb59d4a141dc7ae83491e0f422f4bad79b181b2c39381a2dc6f565");
+  });
+
+  it("always returns, with no oversized filter, for keys that cannot be spread by prefix", () => {
+    // A peer can grind ratchet keys that share a prefix; that must not hang the client.
+    const samePrefix = Array.from({ length: 2_500 }, (_, index) => "ab".repeat(8) + author(index).slice(16));
+    const plan = buildMessageAuthorSubscriptionFilters(samePrefix);
+    expect(plan.filters).toHaveLength(3);
+    for (const filter of plan.filters) expect(filter.authors!.length).toBeLessThanOrEqual(MESSAGE_AUTHOR_FILTER_CHUNK_SIZE);
+    expect(authorsOf(plan.filters)).toEqual([...samePrefix].sort());
+
+    const ordered = buildMessageAuthorSubscriptionFilters(authors(40), { chunkSize: 1 });
+    expect(ordered.filters).toHaveLength(40);
+    expect(layoutDigest(ordered.filters)).toBe("fa8be9cabff1ef9e7c5c898a02e878c62fac20c384790679fc2840d1b4e028fe");
   });
 
   it("ranks live ratchet keys of every session above keys that only have missed messages", () => {

@@ -117,11 +117,17 @@ export interface MessageAuthorSubscriptionPlan {
   dropped: string[]
 }
 
+/** Chunk counts tried before giving up on a key-selected layout. */
+const KEYED_LAYOUT_ATTEMPTS = 8
+
 /**
  * Split message authors, most important first, into filters every relay
- * accepts. Past `maxAuthors` the tail is dropped. An author always lands in
- * the chunk its key selects, so one ratchet step replaces one subscription,
- * not all of them.
+ * accepts. Past `maxAuthors` the tail is dropped.
+ *
+ * An author normally lands in the chunk its key selects, so one ratchet step
+ * replaces one subscription, not all of them. Keys chosen to defeat that (many
+ * sharing a prefix) fall back to fixed-size chunks in key order, so the
+ * function always returns and no chunk exceeds `chunkSize`.
  */
 export function buildMessageAuthorSubscriptionFilters(
   authors: Iterable<string>,
@@ -132,22 +138,33 @@ export function buildMessageAuthorSubscriptionFilters(
   const ranked = normalizePubkeys(authors)
   const kept = ranked.slice(0, maxAuthors)
   const dropped = ranked.slice(maxAuthors)
-  if (kept.length === 0) return { filters: [], dropped }
 
-  // Aim for chunks four fifths full so uneven key distribution rarely needs another.
-  let count = kept.length <= chunkSize ? 1 : Math.ceil((kept.length * 5) / (chunkSize * 4))
-  for (;;) {
-    const chunks: string[][] = Array.from({ length: count }, () => [])
-    for (const author of kept) chunks[Number.parseInt(author.slice(0, 4), 16) % count]!.push(author)
-    if (chunks.every((chunk) => chunk.length <= chunkSize)) {
-      return {
-        filters: chunks.filter((chunk) => chunk.length > 0)
-          .map((chunk) => ({ kinds: [MESSAGE_EVENT_KIND], authors: chunk.sort() })),
-        dropped,
-      }
+  let chunks = keyedAuthorChunks(kept, chunkSize)
+  if (!chunks) {
+    const ordered = [...kept].sort()
+    chunks = []
+    for (let start = 0; start < ordered.length; start += chunkSize) {
+      chunks.push(ordered.slice(start, start + chunkSize))
     }
-    count += 1
   }
+  return {
+    filters: chunks.filter((chunk) => chunk.length > 0)
+      .map((chunk) => ({ kinds: [MESSAGE_EVENT_KIND], authors: chunk.sort() })),
+    dropped,
+  }
+}
+
+function keyedAuthorChunks(authors: string[], chunkSize: number): string[][] | null {
+  // Aim for chunks four fifths full so uneven key distribution rarely needs another.
+  const first = authors.length <= chunkSize ? 1 : Math.ceil((authors.length * 5) / (chunkSize * 4))
+  for (let count = first; count < first + KEYED_LAYOUT_ATTEMPTS; count++) {
+    const chunks: string[][] = Array.from({ length: count }, () => [])
+    for (const author of authors) {
+      chunks[Number(BigInt(`0x${author.slice(0, 16)}`) % BigInt(count))]!.push(author)
+    }
+    if (chunks.every((chunk) => chunk.length <= chunkSize)) return chunks
+  }
+  return null
 }
 
 export function buildDirectMessageRecipientBackfillFilter(

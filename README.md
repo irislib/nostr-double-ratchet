@@ -144,8 +144,11 @@ Read this before adding any routing tag to a private event.
 - **How the limits are handled.** `build_message_author_subscription_filters`
   (Rust) and `buildMessageAuthorSubscriptionFilters` (TypeScript) split authors
   into chunks of 1,000, one subscription each, and keep at most 12,000. An
-  author always falls in the chunk its key selects, so one ratchet step replaces
-  one subscription. Past the limit, authors are dropped from the end of the
+  author normally falls in the chunk its key selects, so one ratchet step
+  replaces one subscription. A peer can grind keys that share a prefix, so the
+  key-selected layout is tried a bounded number of times and then replaced by
+  fixed-size chunks in key order; the helpers always return and never emit an
+  oversized filter. Past the limit, authors are dropped from the end of the
   priority order in `prioritized_message_authors` /
   `prioritizedSessionMessageAuthorPubkeys`: keys that only have missed messages
   from older ratchet periods go first, live keys of active sessions last. Both
