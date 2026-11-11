@@ -133,6 +133,14 @@ export abstract class GroupState {
     return `${this.groupSenderPrefix(senderDevicePubkey)}/key/${keyId >>> 0}`;
   }
 
+  /** Earliest chain point a received key was built from; not under `key/`, which lists states. */
+  protected senderKeyOriginKey(
+    senderDevicePubkey: string,
+    keyId: number,
+  ): string {
+    return `${this.groupSenderPrefix(senderDevicePubkey)}/key-origin/${keyId >>> 0}`;
+  }
+
   protected senderKeyRepairSnapshotsKey(senderDevicePubkey: string): string {
     return `${this.groupSenderPrefix(senderDevicePubkey)}/repair-snapshots`;
   }

@@ -60,6 +60,17 @@ impl GroupRecord {
         }
     }
 
+    /// Total order over different snapshots of one revision: the later edit
+    /// wins, and a digest of the content breaks an exact tie.
+    pub(super) fn wins_same_revision_conflict(&self, other: &Self) -> Result<bool> {
+        use sha2::{Digest, Sha256};
+        let rank = |record: &Self| -> Result<(UnixSeconds, [u8; 32])> {
+            let encoded = serde_json::to_vec(&record.snapshot())?;
+            Ok((record.updated_at, Sha256::digest(encoded).into()))
+        };
+        Ok(rank(self)? > rank(other)?)
+    }
+
     pub(super) fn metadata_payload(&self) -> GroupPairwiseCommand {
         GroupPairwiseCommand::MetadataSnapshot {
             snapshot: self.snapshot(),

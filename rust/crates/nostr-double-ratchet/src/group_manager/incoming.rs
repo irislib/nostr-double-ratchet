@@ -45,11 +45,6 @@ where
                     }
                     if record.revision < existing.revision || existing == &record {
                         GroupIncomingEvent::MetadataUpdated(existing.snapshot())
-                    } else if record.revision == existing.revision {
-                        return Err(group_error(format!(
-                            "conflicting metadata snapshot for group `{}` at revision {}",
-                            record.group_id, record.revision
-                        )));
                     } else {
                         if !is_self_sync && !existing.admins.contains(&sender_owner) {
                             return Err(group_error(format!(
@@ -57,9 +52,18 @@ where
                                 record.group_id
                             )));
                         }
-                        let snapshot = record.snapshot();
-                        self.groups.insert(record.group_id.clone(), record);
-                        GroupIncomingEvent::MetadataUpdated(snapshot)
+                        // Two admins can edit the same revision while apart.
+                        // Every device keeps the same one of the two, so the
+                        // group settles on one roster in any arrival order.
+                        if record.revision == existing.revision
+                            && !record.wins_same_revision_conflict(existing)?
+                        {
+                            GroupIncomingEvent::MetadataUpdated(existing.snapshot())
+                        } else {
+                            let snapshot = record.snapshot();
+                            self.groups.insert(record.group_id.clone(), record);
+                            GroupIncomingEvent::MetadataUpdated(snapshot)
+                        }
                     }
                 } else {
                     if !record.members.contains(&self.local_owner_pubkey) {
@@ -277,7 +281,11 @@ where
                 message_number,
             });
         }
-        if plaintext.revision < group.revision {
+        // A device catching up applies roster changes before its backlog, so a
+        // message sent under an older revision is still delivered while both
+        // the sender (checked above) and this owner are current members.
+        if plaintext.revision < group.revision && !group.members.contains(&self.local_owner_pubkey)
+        {
             return complete(GroupSenderKeyHandleResult::Ignored);
         }
 

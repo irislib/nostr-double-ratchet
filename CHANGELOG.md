@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Deliver group backlog across roster changes in Rust. A sender-key message
+  sent under an older roster revision was dropped once the receiver held a
+  newer one, so a device coming back online lost everything sent before the
+  roster changes it had just applied. It is now delivered while both the sender
+  and the local owner are members of the current roster. TypeScript never had
+  this check.
+- Accept an earlier copy of a sender-key distribution after a later one, in
+  both implementations. Copies are made at different chain positions and can
+  arrive in any order; the first to arrive used to decide which earlier
+  messages were readable forever. Nothing becomes readable twice.
+- Settle conflicting Rust roster snapshots of one revision deterministically
+  (later edit, then content digest) instead of each device keeping its own, so
+  two admins editing at once no longer split the group. The sender must still
+  be an admin of the roster the receiver holds.
+- No wire or handshake change. Messages from a member who was removed while the
+  receiver was offline are still dropped, by design.
+
 ## Rust 0.0.177 / TypeScript 0.0.184 - 2026-11-11
 
 - Stop naming the recipient device on message events. Kind 1060 envelopes from

@@ -122,7 +122,11 @@ impl<C: GroupPayloadCodec> GroupManager<C> {
                 message_number: plan.message_number,
             });
         }
-        if plaintext.revision < group.revision {
+        // A device catching up applies roster changes before its backlog, so a
+        // message sent under an older revision is still delivered while both
+        // the sender (checked above) and this owner are current members.
+        if plaintext.revision < group.revision && !group.members.contains(&self.local_owner_pubkey)
+        {
             return complete(GroupSenderKeyHandleResult::Ignored);
         }
         let state = self

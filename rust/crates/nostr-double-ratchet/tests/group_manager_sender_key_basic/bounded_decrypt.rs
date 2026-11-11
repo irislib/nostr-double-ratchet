@@ -170,11 +170,19 @@ fn bounded_receive_revalidates_authenticated_membership_and_revision() -> Result
             .is_err());
         assert_eq!(fixture.bob_groups.snapshot(), before);
         let next = finish(&fixture.bob_groups, &message, &mut cursor)?;
-        assert!(matches!(
-            fixture.bob_groups.apply_sender_key_receive_plan(next)?,
-            GroupSenderKeyHandleResult::Ignored
-        ));
-        assert_eq!(fixture.bob_groups.snapshot(), before);
+        let result = fixture.bob_groups.apply_sender_key_receive_plan(next)?;
+        if mode == 0 {
+            // Only the revision moved; both ends are still members, so the
+            // message sent under the previous revision is delivered.
+            assert!(matches!(
+                result,
+                GroupSenderKeyHandleResult::Event(GroupIncomingEvent::Message(_))
+            ));
+            assert_ne!(fixture.bob_groups.snapshot(), before);
+        } else {
+            assert!(matches!(result, GroupSenderKeyHandleResult::Ignored));
+            assert_eq!(fixture.bob_groups.snapshot(), before);
+        }
     }
     Ok(())
 }

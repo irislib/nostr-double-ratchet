@@ -392,6 +392,48 @@ export class SenderKeyState {
     );
   }
 
+  /**
+   * Make the messages before this state's first known chain position readable,
+   * given an earlier point of the same chain.
+   *
+   * `origin` is the earliest chain point this state was built from, so no
+   * message below it can have been read yet and nothing becomes readable twice.
+   * Returns false, changing nothing, unless `earlier` advances exactly to `origin`.
+   */
+  extendBackwards(
+    originIteration: number,
+    originChainKey: Uint8Array,
+    earlierIteration: number,
+    earlierChainKey: Uint8Array,
+  ): boolean {
+    if (
+      !Number.isInteger(originIteration) ||
+      !Number.isInteger(earlierIteration) ||
+      earlierIteration < 0 ||
+      earlierIteration >= originIteration ||
+      originIteration - earlierIteration > SENDER_KEY_MAX_STORED_SKIPPED_KEYS ||
+      originChainKey.length !== 32 ||
+      earlierChainKey.length !== 32
+    ) {
+      return false;
+    }
+    let chainKey = earlierChainKey;
+    const messageKeys: Array<[number, Uint8Array]> = [];
+    for (let number = earlierIteration; number < originIteration; number++) {
+      const [nextChainKey, messageKey] = deriveMessageKey(chainKey);
+      messageKeys.push([number, messageKey]);
+      chainKey = nextChainKey;
+    }
+    if (bytesToHex(chainKey) !== bytesToHex(originChainKey)) return false;
+    for (const [number, messageKey] of messageKeys) {
+      if (!this.skippedMessageKeys.has(number)) {
+        this.skippedMessageKeys.set(number, messageKey);
+      }
+    }
+    this.pruneSkipped();
+    return true;
+  }
+
   private pruneSkipped(): void {
     if (this.skippedMessageKeys.size <= SENDER_KEY_MAX_STORED_SKIPPED_KEYS) {
       return;

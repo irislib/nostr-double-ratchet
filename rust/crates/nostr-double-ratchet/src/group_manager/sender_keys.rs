@@ -362,17 +362,37 @@ where
         self.sender_event_index
             .insert(distribution.sender_event_pubkey, id);
         record.latest_key_id = Some(distribution.key_id);
-        record
-            .distribution_history
-            .entry(distribution.key_id)
-            .or_insert_with(|| distribution.clone());
-        record.states.entry(distribution.key_id).or_insert_with(|| {
-            SenderKeyState::new(
-                distribution.key_id,
-                distribution.chain_key,
-                distribution.iteration,
-            )
-        });
+        let known = record.distribution_history.get(&distribution.key_id);
+        match (known, record.states.get_mut(&distribution.key_id)) {
+            (Some(known), Some(state)) => {
+                // Copies of one distribution are made at different chain
+                // positions and arrive in any order. An earlier copy opens the
+                // messages before the first position this device learned.
+                if state.extend_backwards(
+                    known.iteration,
+                    &known.chain_key,
+                    distribution.iteration,
+                    &distribution.chain_key,
+                ) {
+                    record
+                        .distribution_history
+                        .insert(distribution.key_id, distribution);
+                }
+            }
+            _ => {
+                record
+                    .distribution_history
+                    .entry(distribution.key_id)
+                    .or_insert_with(|| distribution.clone());
+                record.states.entry(distribution.key_id).or_insert_with(|| {
+                    SenderKeyState::new(
+                        distribution.key_id,
+                        distribution.chain_key,
+                        distribution.iteration,
+                    )
+                });
+            }
+        }
         Ok(())
     }
 

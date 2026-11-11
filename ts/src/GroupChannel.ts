@@ -15,6 +15,7 @@ import { OneToManyChannel } from "./OneToManyChannel.js";
 import { parseSenderKeyRepairRequestRumor } from "./SenderKeyRepair.js";
 import type { SenderKeyStateSerialized } from "./SenderKey.js";
 import { parseSenderKeyDistribution, SenderKeyState } from "./SenderKey.js";
+import { hexToBytes } from "@noble/hashes/utils";
 import { type StorageAdapter } from "./StorageAdapter.js";
 import { CHAT_MESSAGE_KIND, MESSAGE_EVENT_KIND, type Rumor, type NostrPublisherOptions } from "./types.js";
 import { GroupSending } from "./group/GroupSending.js";
@@ -160,9 +161,27 @@ export class Group extends GroupSending {
     const existing = await this.storage.get<SenderKeyStateSerialized>(
       this.senderKeyStateKey(senderDevicePubkey, dist.keyId),
     );
+    const originKey = this.senderKeyOriginKey(senderDevicePubkey, dist.keyId);
     if (!existing) {
       const st = SenderKeyState.fromDistribution(dist);
       await this.saveSenderKeyState(senderDevicePubkey, st);
+      await this.storage.put(originKey, { iteration: dist.iteration, chainKey: dist.chainKey });
+    } else {
+      // Copies of one distribution are made at different chain positions and
+      // arrive in any order. An earlier copy opens the messages before the
+      // first position this device learned.
+      const origin = await this.storage.get<{ iteration: number; chainKey: string }>(originKey);
+      if (origin && typeof origin.chainKey === "string" && dist.iteration < origin.iteration) {
+        try {
+          const st = SenderKeyState.fromJSON(existing);
+          if (st.extendBackwards(origin.iteration, hexToBytes(origin.chainKey), dist.iteration, hexToBytes(dist.chainKey))) {
+            await this.saveSenderKeyState(senderDevicePubkey, st);
+            await this.storage.put(originKey, { iteration: dist.iteration, chainKey: dist.chainKey });
+          }
+        } catch {
+          // A corrupt saved state or origin leaves the existing key as it is.
+        }
+      }
     }
     await this.rememberReceivedSenderKeyPreference(
       senderDevicePubkey, dist.keyId, dist.createdAt,

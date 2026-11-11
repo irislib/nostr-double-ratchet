@@ -96,6 +96,44 @@ impl SenderKeyState {
         self.skipped_message_keys.len()
     }
 
+    /// Makes the messages before this state's first known chain position
+    /// readable, given an earlier point of the same chain.
+    ///
+    /// `origin` is the earliest chain point this state was built from, so no
+    /// message below it can have been read yet and nothing becomes readable
+    /// twice. Returns false, changing nothing, unless `earlier` advances
+    /// exactly to `origin`.
+    pub fn extend_backwards(
+        &mut self,
+        origin_iteration: u32,
+        origin_chain_key: &[u8; 32],
+        earlier_iteration: u32,
+        earlier_chain_key: &[u8; 32],
+    ) -> bool {
+        if earlier_iteration >= origin_iteration
+            || (origin_iteration - earlier_iteration) as usize > SENDER_KEY_MAX_STORED_SKIPPED_KEYS
+        {
+            return false;
+        }
+        let mut chain_key = *earlier_chain_key;
+        let mut message_keys = Vec::with_capacity((origin_iteration - earlier_iteration) as usize);
+        for number in earlier_iteration..origin_iteration {
+            let (next_chain_key, message_key) = derive_message_key(&chain_key);
+            message_keys.push((number, message_key));
+            chain_key = next_chain_key;
+        }
+        if chain_key != *origin_chain_key {
+            return false;
+        }
+        for (number, message_key) in message_keys {
+            self.skipped_message_keys
+                .entry(number)
+                .or_insert(message_key);
+        }
+        prune_skipped(&mut self.skipped_message_keys);
+        true
+    }
+
     pub fn plan_encrypt(&self, plaintext: &[u8]) -> Result<SenderKeyEncryptPlan> {
         let mut next_state = self.clone();
         let message_number = next_state.iteration;
