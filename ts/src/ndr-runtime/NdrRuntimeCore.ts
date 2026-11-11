@@ -54,7 +54,7 @@ export abstract class NdrRuntimeCore {
   protected sessionManagerInitPromise: Promise<SessionManager> | null = null;
   protected appKeysSubscriptionCleanup: Unsubscribe | null = null;
   protected appKeysSubscriptionOwnerPubkey: string | null = null;
-  protected directMessageSubscriptionCleanup: Unsubscribe | null = null;
+  protected directMessageSubscriptionChunks = new Map<string, Unsubscribe>();
   protected directMessageRecipientSubscriptionCleanup: Unsubscribe | null =
     null;
   protected directMessageSubscriptionAuthors: string[] = [];

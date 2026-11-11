@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Subscribe to message authors in chunks. Both clients sent every sender
+  ratchet key in one filter, which relays refuse past roughly 1,950 authors,
+  stopping all delivery. New helpers split authors into chunks of 1,000 with a
+  stable layout shared by Rust and TypeScript, cap the total at 12,000, and drop
+  keys that only have missed messages from old ratchet periods first. The
+  TypeScript runtime uses them and replaces only the chunk that changed. The
+  README records why message events carry no recipient tag and what these
+  limits are based on.
 - Deliver group backlog across roster changes in Rust. A sender-key message
   sent under an older roster revision was dropped once the receiver held a
   newer one, so a device coming back online lost everything sent before the

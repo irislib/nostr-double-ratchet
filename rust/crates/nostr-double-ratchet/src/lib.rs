@@ -57,10 +57,12 @@ pub use device_link::{
 pub use direct_message_subscriptions::{
     app_keys_subscription_authors, build_app_keys_backfill_filter,
     build_direct_message_backfill_filter, build_invite_backfill_filter,
-    build_invite_response_backfill_filter, build_protocol_discovery_filters,
-    build_runtime_backfill_filters, direct_message_subscription_authors,
-    invite_response_subscription_recipients, DirectMessageSubscriptionTracker,
-    RuntimeSubscriptionRegistration, RuntimeSubscriptionTracker,
+    build_invite_response_backfill_filter, build_message_author_subscription_filters,
+    build_protocol_discovery_filters, build_runtime_backfill_filters,
+    direct_message_subscription_authors, invite_response_subscription_recipients,
+    prioritized_message_authors, DirectMessageSubscriptionTracker, MessageAuthorSubscriptionPlan,
+    RuntimeSubscriptionRegistration, RuntimeSubscriptionTracker, MESSAGE_AUTHOR_FILTER_CHUNK_SIZE,
+    MESSAGE_AUTHOR_SUBSCRIPTION_LIMIT,
 };
 pub use error::{DomainError, Error, Result};
 #[cfg(feature = "full")]

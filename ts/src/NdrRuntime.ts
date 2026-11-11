@@ -102,8 +102,8 @@ export class NdrRuntime extends NdrRuntimeRegistration {
     this.stopAppKeysSubscription();
     this.messagePushAuthorCleanup?.();
     this.messagePushAuthorCleanup = null;
-    this.directMessageSubscriptionCleanup?.();
-    this.directMessageSubscriptionCleanup = null;
+    for (const close of this.directMessageSubscriptionChunks.values()) close();
+    this.directMessageSubscriptionChunks.clear();
     this.directMessageRecipientSubscriptionCleanup?.();
     this.directMessageRecipientSubscriptionCleanup = null;
     this.directMessageSubscriptionRecipient = null;

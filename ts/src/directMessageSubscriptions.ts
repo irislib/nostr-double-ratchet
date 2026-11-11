@@ -102,6 +102,54 @@ export function buildDirectMessageBackfillFilter(
   }
 }
 
+/**
+ * Sized for the tightest relays in common use: 131,072-byte frames (about
+ * 1,950 hex authors per REQ), 2,047 items per filter, 20 subscriptions per
+ * connection. One chunk per subscription stays well inside all three.
+ */
+export const MESSAGE_AUTHOR_FILTER_CHUNK_SIZE = 1_000
+export const MESSAGE_AUTHOR_SUBSCRIPTION_LIMIT = 12_000
+
+export interface MessageAuthorSubscriptionPlan {
+  /** One live subscription each. A small author set stays in a single filter. */
+  filters: Filter[]
+  /** Authors left out because the limit was reached, least important last. */
+  dropped: string[]
+}
+
+/**
+ * Split message authors, most important first, into filters every relay
+ * accepts. Past `maxAuthors` the tail is dropped. An author always lands in
+ * the chunk its key selects, so one ratchet step replaces one subscription,
+ * not all of them.
+ */
+export function buildMessageAuthorSubscriptionFilters(
+  authors: Iterable<string>,
+  options: { chunkSize?: number; maxAuthors?: number } = {},
+): MessageAuthorSubscriptionPlan {
+  const chunkSize = Math.max(1, Math.floor(options.chunkSize ?? MESSAGE_AUTHOR_FILTER_CHUNK_SIZE))
+  const maxAuthors = Math.max(0, Math.floor(options.maxAuthors ?? MESSAGE_AUTHOR_SUBSCRIPTION_LIMIT))
+  const ranked = normalizePubkeys(authors)
+  const kept = ranked.slice(0, maxAuthors)
+  const dropped = ranked.slice(maxAuthors)
+  if (kept.length === 0) return { filters: [], dropped }
+
+  // Aim for chunks four fifths full so uneven key distribution rarely needs another.
+  let count = kept.length <= chunkSize ? 1 : Math.ceil((kept.length * 5) / (chunkSize * 4))
+  for (;;) {
+    const chunks: string[][] = Array.from({ length: count }, () => [])
+    for (const author of kept) chunks[Number.parseInt(author.slice(0, 4), 16) % count]!.push(author)
+    if (chunks.every((chunk) => chunk.length <= chunkSize)) {
+      return {
+        filters: chunks.filter((chunk) => chunk.length > 0)
+          .map((chunk) => ({ kinds: [MESSAGE_EVENT_KIND], authors: chunk.sort() })),
+        dropped,
+      }
+    }
+    count += 1
+  }
+}
+
 export function buildDirectMessageRecipientBackfillFilter(
   recipients: Iterable<string>,
   limit: number = 200,

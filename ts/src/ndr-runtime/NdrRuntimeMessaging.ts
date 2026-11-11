@@ -16,6 +16,7 @@ import {
   type Rumor,
 } from "../types.js";
 import { type VerifiedEvent } from "nostr-tools";
+import { buildMessageAuthorSubscriptionFilters } from "../directMessageSubscriptions.js";
 import { NdrRuntimeCore } from "./NdrRuntimeCore.js";
 import type { NdrRuntimeState } from "../NdrRuntime.js";
 import { cloneAppKeys } from "./runtimeInternals.js";
@@ -282,9 +283,15 @@ export abstract class NdrRuntimeMessaging extends NdrRuntimeCore {
     //      comes along to call us again.
     const THROTTLE_MS = 1500;
 
-    const nextAuthors = [
-      ...new Set(this.sessionManager?.getAllMessagePushAuthorPubkeys() ?? []),
-    ].sort();
+    // Relays refuse one filter with thousands of authors, and refusing it
+    // stops all delivery. Subscribe in chunks, and past the limit leave out
+    // keys that only have missed messages from old ratchet periods.
+    // A host-supplied session manager may predate the prioritized query.
+    const manager = this.sessionManager;
+    const plan = buildMessageAuthorSubscriptionFilters(
+      manager?.getPrioritizedMessageAuthorPubkeys?.() ?? manager?.getAllMessagePushAuthorPubkeys() ?? [],
+    );
+    const nextAuthors = plan.filters.flatMap((filter) => filter.authors ?? []).sort();
 
     if (
       nextAuthors.length === this.directMessageSubscriptionAuthors.length &&
@@ -317,21 +324,22 @@ export abstract class NdrRuntimeMessaging extends NdrRuntimeCore {
       this.directMessageSubscriptionThrottleTimer = null;
     }
 
-    this.directMessageSubscriptionCleanup?.();
-    this.directMessageSubscriptionCleanup = null;
     this.directMessageSubscriptionAuthors = nextAuthors;
     this.directMessageSubscriptionLastChangeMs = now;
 
-    if (nextAuthors.length === 0) {
-      return;
+    // Only chunks whose authors changed are replaced; the rest keep running.
+    const wanted = new Map(plan.filters.map((filter) => [filter.authors!.join(), filter]));
+    for (const [key, close] of this.directMessageSubscriptionChunks) {
+      if (wanted.has(key)) continue;
+      close();
+      this.directMessageSubscriptionChunks.delete(key);
     }
-
-    this.directMessageSubscriptionCleanup = this.nostrSubscribe(
-      { kinds: [MESSAGE_EVENT_KIND], authors: nextAuthors },
-      (event) => {
+    for (const [key, filter] of wanted) {
+      if (this.directMessageSubscriptionChunks.has(key)) continue;
+      this.directMessageSubscriptionChunks.set(key, this.nostrSubscribe(filter, (event) => {
         this.processReceivedEvent(event);
-      },
-    );
+      }));
+    }
   }
 
   async refreshOwnAppKeysFromRelay(

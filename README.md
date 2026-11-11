@@ -112,6 +112,49 @@ the sender's ratchet keys and subscribes by author, so naming its device would
 only let relays link deliveries to it. Only an invite response names a target,
 and that target is the public invite key. Envelopes from older clients that
 still carry a recipient tag are read, never written or republished.
+
+#### Why message events carry no recipient tag
+
+Read this before adding any routing tag to a private event.
+
+- **What the tag gave away.** Device keys are public (AppKeys), and anyone can
+  query a relay. A recipient tag on every kind 1060 let anyone list which
+  devices receive messages and when. A group message went out as a burst of
+  events with one timestamp, each naming one member's device: the bursts give
+  the membership, and the device missing from a burst is the sender.
+- **History.** Removed in 0.0.104 (2026-04). Reintroduced in 2026-07 to route
+  first-contact messages by recipient device, and in 2026-10 publish guards
+  were built on "exactly one recipient tag". Removed again in Rust 0.0.177 /
+  TypeScript 0.0.184 (2026-11-11). It came back once as a routing convenience;
+  that is the mistake to avoid.
+- **How delivery works without it.** A receiver subscribes to kind 1060 by
+  `authors`: the sender's current and next ratchet key for every session, plus
+  keys that still have missed messages. The first author of a session is learned
+  from the invite response (kind 1059), which is found by `#p` on the public
+  invite key, and the receiver then fetches that author's stored events. No
+  event a receiver could decrypt was reachable only through the recipient tag.
+- **The cost, and its limits.** Authors = people × devices per person × keys per
+  device (2 for a healthy session; up to 10 inactive sessions are kept). Relay
+  limits measured on 2026-11-11: strfry refuses a filter whose items exceed
+  65,535 bytes (2,047 authors); its default frame of 131,072 bytes holds about
+  1,950 hex authors per REQ; some relays allow 20 subscriptions per connection.
+  A filter over a limit is refused whole, which stops all delivery from that
+  relay rather than part of it. With two keys per device that cliff is about
+  490 people with two devices each if everything is sent in one filter.
+- **How the limits are handled.** `build_message_author_subscription_filters`
+  (Rust) and `buildMessageAuthorSubscriptionFilters` (TypeScript) split authors
+  into chunks of 1,000, one subscription each, and keep at most 12,000. An
+  author always falls in the chunk its key selects, so one ratchet step replaces
+  one subscription. Past the limit, authors are dropped from the end of the
+  priority order in `prioritized_message_authors` /
+  `prioritizedSessionMessageAuthorPubkeys`: keys that only have missed messages
+  from older ratchet periods go first, live keys of active sessions last. Both
+  implementations must produce the same layout; a shared digest test checks it.
+- **If this proves unworkable.** Receivers still read tagged envelopes, so a
+  rollback is a sender-side release. Prefer fewer authors (expire idle sessions
+  and old missed-message keys) over any tag that names an identity.
+- **Still visible to relays.** The invite response names the public invite key,
+  and applications' call-wake events (kind 21111) name the callee device.
 In particular, the public invite key must never sign the inviter's first reply.
 Both implementations derive a different initial responder key for each acceptance:
 `t = SHA256("NIP-118/responder-key-blinding/v2" || NIP44-conversation-key ||

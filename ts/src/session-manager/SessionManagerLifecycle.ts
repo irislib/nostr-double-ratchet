@@ -26,6 +26,7 @@ import {
 import {
   collectAllMessagePushAuthorPubkeys,
   collectMessagePushAuthorPubkeys,
+  collectPrioritizedMessageAuthorPubkeys,
 } from "./messageAuthors.js";
 import {
   queuedMessageDiagnostics,
@@ -136,6 +137,11 @@ export abstract class SessionManagerLifecycle extends SessionManagerRecords {
 
   getAllMessagePushAuthorPubkeys(): string[] {
     return collectAllMessagePushAuthorPubkeys(this.userRecords.values());
+  }
+
+  /** The same authors, most important first, for subscriptions that must fit relay limits. */
+  getPrioritizedMessageAuthorPubkeys(): string[] {
+    return collectPrioritizedMessageAuthorPubkeys(this.userRecords.values());
   }
 
   feedEvent(event: VerifiedEvent): boolean {

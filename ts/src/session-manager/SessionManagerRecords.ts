@@ -1,4 +1,4 @@
-import { Rumor, Unsubscribe, MESSAGE_EVENT_KIND } from "../types.js";
+import { Rumor, Unsubscribe } from "../types.js";
 import { AppKeys } from "../AppKeys.js";
 import {
   type AppKeysSnapshotDecision,
@@ -14,6 +14,7 @@ import {
 import { DeviceRecordActor } from "./DeviceRecordActor.js";
 import { UserRecordActor } from "./UserRecordActor.js";
 import { sessionMessageAuthorPubkeys } from "./messageAuthors.js";
+import { buildMessageAuthorSubscriptionFilters } from "../directMessageSubscriptions.js";
 import type { OnEventCallback, OnEventMeta } from "./types.js";
 import { SessionManagerCore } from "./SessionManagerCore.js";
 import {
@@ -377,7 +378,8 @@ export abstract class SessionManagerRecords extends SessionManagerCore {
 
   protected syncLegacyDirectMessageSubscription(): void {
     if (!this.legacyNostrSubscribe) return;
-    const nextAuthors = this.getAllMessagePushAuthorPubkeys();
+    const plan = buildMessageAuthorSubscriptionFilters(this.getPrioritizedMessageAuthorPubkeys());
+    const nextAuthors = plan.filters.flatMap((filter) => filter.authors ?? []).sort();
     if (
       nextAuthors.length === this.legacyDirectMessageAuthors.length &&
       nextAuthors.every(
@@ -394,15 +396,13 @@ export abstract class SessionManagerRecords extends SessionManagerCore {
       return;
     }
 
-    this.legacyDirectMessageSubscription = this.legacyNostrSubscribe(
-      {
-        kinds: [MESSAGE_EVENT_KIND],
-        authors: nextAuthors,
-      },
-      (event) => {
-        this.processReceivedEvent(event);
-      },
-    );
+    const subscribe = this.legacyNostrSubscribe;
+    const closers = plan.filters.map((filter) => subscribe(filter, (event) => {
+      this.processReceivedEvent(event);
+    }));
+    this.legacyDirectMessageSubscription = () => {
+      for (const close of closers) close();
+    };
   }
 
   abstract applyTrustedAppKeysSnapshot(
@@ -410,6 +410,8 @@ export abstract class SessionManagerRecords extends SessionManagerCore {
   ): Promise<AppKeysSnapshotDecision>;
 
   abstract getAllMessagePushAuthorPubkeys(): string[];
+
+  abstract getPrioritizedMessageAuthorPubkeys(): string[];
 
   abstract processReceivedEvent(event: VerifiedEvent): boolean;
 
