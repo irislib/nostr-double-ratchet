@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## Rust 0.0.177 / TypeScript 0.0.184 - 2026-11-11
+
 - Stop naming the recipient device on message events. Kind 1060 envelopes from
   the Rust and TypeScript session managers now carry only the version and
   header tags, so a relay can no longer link deliveries, or a group fanout
