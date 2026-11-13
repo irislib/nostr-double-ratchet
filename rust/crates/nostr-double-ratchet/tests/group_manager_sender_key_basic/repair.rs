@@ -369,3 +369,82 @@ fn sender_key_distribution_requires_authenticated_device_provenance() -> Result<
 
     Ok(())
 }
+
+#[test]
+fn known_key_repair_targets_its_writer_and_revision_repair_can_reach_others() -> Result<()> {
+    let mut f = late_member_repair_fixture(93, 1_900_100_100)?;
+    // A prior, authenticated distribution established Bob's per-group sender author.
+    // Keep a second authorized device under that account to exercise precise routing.
+    let sibling = manager_device(94, 176);
+    observe_signed_peer_app_keys(
+        &mut f.carol_manager,
+        &f.bob,
+        &[&f.bob, &sibling],
+        1_900_100_130,
+    )?;
+    f.carol_manager.observe_device_invite(
+        f.bob.owner_pubkey,
+        manager_public_device_invite(&mut f.bob_manager, &f.bob, 1_900_100_131, 1_900_100_131)?,
+    )?;
+    let payload = GroupPairwiseCommand::SenderKeyDistribution {
+        distribution: f
+            .bob_groups
+            .snapshot()
+            .sender_keys
+            .iter()
+            .find(|record| record.sender_event_pubkey == f.post_join_outer.sender_event_pubkey)
+            .unwrap()
+            .distribution_history[0]
+            .clone(),
+    };
+    let codec = JsonGroupPayloadCodecV1;
+    let bytes = codec.encode_pairwise_command(
+        GroupPayloadEncodeContext {
+            local_device_pubkey: f.bob.device_pubkey,
+            created_at: UnixSeconds(1_900_100_131),
+        },
+        &payload,
+    )?;
+    f.carol_groups
+        .handle_pairwise_payload(f.bob.owner_pubkey, f.bob.device_pubkey, &bytes)?;
+    let mut receiver = GroupManager::from_snapshot(f.carol_groups.snapshot())?;
+    let mut request = SenderKeyRepairRequest {
+        group_id: f.group_id.clone(),
+        sender_event_pubkey: f.post_join_outer.sender_event_pubkey,
+        key_id: None,
+        message_number: None,
+        required_revision: None,
+        created_at: UnixSeconds(1_900_100_132),
+    };
+    let result = receiver.request_sender_key_repair(
+        &mut f.carol_manager,
+        &mut context(132, 1_900_100_132),
+        &request,
+    )?;
+    assert_eq!(
+        result
+            .remote
+            .deliveries
+            .iter()
+            .map(|d| d.device_pubkey)
+            .collect::<Vec<_>>(),
+        [f.bob.device_pubkey]
+    );
+    assert!(
+        result.remote.relay_gaps.is_empty(),
+        "no invite should be requested for Bob's non-author sibling"
+    );
+    assert!(result.local_sibling.deliveries.is_empty());
+    request.required_revision = Some(12);
+    let result = receiver.request_sender_key_repair(
+        &mut f.carol_manager,
+        &mut context(133, 1_900_100_133),
+        &request,
+    )?;
+    assert!(result
+        .remote
+        .deliveries
+        .iter()
+        .any(|d| d.owner_pubkey != f.bob.owner_pubkey));
+    Ok(())
+}

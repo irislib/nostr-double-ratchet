@@ -328,6 +328,63 @@ where
         let command = GroupPairwiseCommand::SenderKeyRepairRequest {
             request: request.clone(),
         };
+        // Only the device holding this per-group sending key can reissue its chain.
+        // A missing roster revision can be supplied by other members.
+        if request.required_revision.is_none() {
+            if let Some(id) = self
+                .sender_event_index
+                .get(&request.sender_event_pubkey)
+                .filter(|id| {
+                    id.group_id == request.group_id
+                        && record.members.contains(&id.sender_owner)
+                        && session_manager
+                            .roster(id.sender_owner)
+                            .is_some_and(|roster| roster.get_device(&id.sender_device).is_some())
+                })
+            {
+                let payload = self
+                    .payload_codec
+                    .encode_pairwise_command(encode_context(session_manager, ctx), &command)?;
+                let mut result = empty_group_prepared_send(request.group_id.clone());
+                let sibling = id.sender_owner == self.local_owner_pubkey;
+                if sibling && id.sender_device == session_manager.local_device_pubkey() {
+                    return Ok(result);
+                }
+                let prepared = if sibling {
+                    session_manager.prepare_local_sibling_send_to_devices(
+                        ctx,
+                        [id.sender_device],
+                        payload.clone(),
+                    )?
+                } else {
+                    session_manager.prepare_remote_send_to_devices(
+                        ctx,
+                        id.sender_owner,
+                        [id.sender_device],
+                        payload.clone(),
+                    )?
+                };
+                let target = if sibling {
+                    &mut result.local_sibling
+                } else {
+                    &mut result.remote
+                };
+                if !prepared.relay_gaps.is_empty() {
+                    target.pending_fanouts.push(if sibling {
+                        GroupPendingFanout::LocalSiblings { payload }
+                    } else {
+                        GroupPendingFanout::Remote {
+                            recipient_owner: id.sender_owner,
+                            payload,
+                        }
+                    });
+                }
+                target.deliveries = prepared.deliveries;
+                target.invite_responses = prepared.invite_responses;
+                target.relay_gaps = prepared.relay_gaps;
+                return Ok(result);
+            }
+        }
         Ok(GroupPreparedSend {
             group_id: request.group_id.clone(),
             remote: self.fanout_payload(
