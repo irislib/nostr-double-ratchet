@@ -1,0 +1,42 @@
+{
+  "source": "Claude simulator output, 2026-11-11, MDK d276681b. Aggregated under the original scoring rules.",
+  "scenarios": [
+    {
+      "scenario": "a10-d1-seq-harsh",
+      "seeds": 3,
+      "legacy_mean_delivery_percent": 97.58,
+      "legacy_min_delivery_percent": 92.75,
+      "mean_withdrawn": 0.0,
+      "mean_refusals": 4.3,
+      "mean_published_KiB_per_accepted_send": 1.5
+    },
+    {
+      "scenario": "a10-d1-static-flaky",
+      "seeds": 3,
+      "legacy_mean_delivery_percent": 99.11,
+      "legacy_min_delivery_percent": 97.33,
+      "mean_withdrawn": 0.0,
+      "mean_refusals": 0.0,
+      "mean_published_KiB_per_accepted_send": 1.2
+    },
+    {
+      "scenario": "a100-d1-relay64k-ideal",
+      "seeds": 1,
+      "legacy_mean_delivery_percent": 100.0,
+      "legacy_min_delivery_percent": 100.0,
+      "mean_withdrawn": 0.0,
+      "mean_refusals": 100.0,
+      "mean_published_KiB_per_accepted_send": 0.0
+    },
+    {
+      "scenario": "a2-d1-harsh",
+      "seeds": 3,
+      "legacy_mean_delivery_percent": 100.0,
+      "legacy_min_delivery_percent": 100.0,
+      "mean_withdrawn": 0.0,
+      "mean_refusals": 0.0,
+      "mean_published_KiB_per_accepted_send": 1.1
+    }
+  ],
+  "cap_run_output": "== mdk a100-d1-relay64k-ideal-s1: 100+0 accts x 1 dev, net=ideal, seed=1  wall=1.3s virtual=2426s\n   msgs sent=100 refused=100 expected=0 delivered=0 ratio=1.0000 before_heal=1.0000 undelivered_msgs=0 withdrawn=0 leaks=0\n   latency p50/p95/p99 ms = 0/0/0\n   online recipients: n=0 p50/p95/p99 ms = 0/0/0 within10s=1.0000 within60s=1.0000\n   state: expected_members=100 largest_cluster=1 not_in_group=99 removed_still_in=0 clusters=[['epoch 1 ctx a3c19176726f', 1]]\n   setup: 198 ev 15386342 B | rx/dev avg 0 B max 0 B, 0 ev | cpu total 281 ms avg/dev 2.8 max 277.3 | gave_up 99\n      mls_key_package_30443:99ev/196871B, mls_welcome_1059:99ev/15189471B\n   steady: 0 ev 0 B | rx/dev avg 0 B max 0 B, 0 ev | cpu total 1012 ms avg/dev 10.1 max 668.6 | gave_up 0"
+}

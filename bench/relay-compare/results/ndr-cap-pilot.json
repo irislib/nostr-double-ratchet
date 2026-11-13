@@ -1,0 +1,139 @@
+{
+  "protocol": "ndr+wip",
+  "scenario": {
+    "label": "cap-1",
+    "seed": 1,
+    "accounts": 100,
+    "devices_per_account": 1,
+    "spare_accounts": 0,
+    "admins": 2,
+    "duration_s": 1800,
+    "heal_s": 600,
+    "messages": 100,
+    "msg_bytes": 120,
+    "churn_ops": 0,
+    "concurrent_admin_frac": 0.5,
+    "partition_s": null,
+    "churn_window_s": null,
+    "net": {
+      "name": "ideal",
+      "relays": 3,
+      "publish_loss": 0.0,
+      "live_loss": 0.0,
+      "relay_down_frac": 0.0,
+      "relay_down_mean_s": 60.0,
+      "dev_offline_frac": 0.0,
+      "dev_offline_mean_s": 300.0,
+      "long_offline_devs": 0,
+      "long_offline_s": 0.0,
+      "latency_ms": [
+        40,
+        250
+      ],
+      "resync_s": 120,
+      "relay_max_bytes": 65536,
+      "relay_retention_s": 0
+    }
+  },
+  "setup": {
+    "by_class": {
+      "ndr_app_keys": {
+        "events": 100,
+        "bytes": 74400
+      },
+      "ndr_device_invite": {
+        "events": 100,
+        "bytes": 73600
+      },
+      "ndr_group_control_1060": {
+        "events": 297,
+        "bytes": 3001284
+      },
+      "ndr_invite_response_1059": {
+        "events": 99,
+        "bytes": 332442
+      },
+      "ndr_recovery_1060": {
+        "events": 108,
+        "bytes": 618336
+      }
+    },
+    "events": 704,
+    "bytes": 4100062,
+    "relay_upload_bytes": 12300186,
+    "rx_bytes_avg_per_device": 39520,
+    "rx_bytes_max_per_device": 49618,
+    "rx_events_avg_per_device": 5,
+    "adapter_wall_ms_total": 7144,
+    "adapter_wall_ms_avg_per_device": 71.44860319000004,
+    "adapter_wall_ms_max_per_device": 5368.265445,
+    "publish_gave_up": 0
+  },
+  "steady": {
+    "by_class": {
+      "ndr_invite_response_1059": {
+        "events": 4072,
+        "bytes": 13673776
+      },
+      "ndr_recovery_1060": {
+        "events": 32936,
+        "bytes": 171177412
+      },
+      "ndr_retry_1060": {
+        "events": 9900,
+        "bytes": 27403200
+      }
+    },
+    "events": 46908,
+    "bytes": 212254388,
+    "relay_upload_bytes": 636763164,
+    "rx_bytes_avg_per_device": 2122543,
+    "rx_bytes_max_per_device": 8734974,
+    "rx_events_avg_per_device": 469,
+    "adapter_wall_ms_total": 503819,
+    "adapter_wall_ms_avg_per_device": 5038.192529820001,
+    "adapter_wall_ms_max_per_device": 51926.148058,
+    "publish_gave_up": 0
+  },
+  "sends_scheduled": 100,
+  "sends_attempted": 100,
+  "sends_refused": 0,
+  "expected_deliveries": 9900,
+  "delivered": 9900,
+  "delivered_before_heal": 9900,
+  "delivery_ratio": 1.0,
+  "delivery_ratio_before_heal": 1.0,
+  "undelivered_messages": 0,
+  "latency_ms_p50": 1096,
+  "latency_ms_p95": 2115,
+  "latency_ms_p99": 2732,
+  "online_expected": 9900,
+  "online_latency_ms_p50": 1096,
+  "online_latency_ms_p95": 2115,
+  "online_latency_ms_p99": 2732,
+  "online_within_10s": 0.9901010101010101,
+  "online_within_60s": 0.9901010101010101,
+  "withdrawn_after_delivery": 0,
+  "delivery_outside_intended_roster_after_removal": 0,
+  "state_clusters": [
+    [
+      "rev 2 roster 245c12cdbc58",
+      100
+    ]
+  ],
+  "members_expected": 100,
+  "members_in_largest_cluster": 100,
+  "members_not_in_group": 0,
+  "removed_still_in_group": 0,
+  "counters": {
+    "ndr_context_replies": 9824,
+    "ndr_context_requests_sent": 17343,
+    "ndr_group_messages_recovered_on_retry": 9900,
+    "ndr_metadata_updates_applied": 15998,
+    "ndr_wake_before_key": 25399
+  },
+  "storage_bytes_avg": 1911925,
+  "storage_bytes_max": 3408768,
+  "wall_s": 539.171323125,
+  "virtual_s": 2427
+}

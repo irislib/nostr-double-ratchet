@@ -1,0 +1,11 @@
+[package]
+name = "simnet"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+# Use the same workload RNG as the pinned MDK workspace.
+rand = "=0.8.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

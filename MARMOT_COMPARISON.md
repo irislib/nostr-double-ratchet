@@ -15,6 +15,8 @@ Marmot's additional rules should be distinguished from the underlying MLS standa
 See [NDR's group model](./README.md#group-messaging-model) and
 [Marmot's MLS profile][marmot-mls].
 
+The [November relay benchmark](bench/relay-compare/RESULTS.md) compares the implementations under the same requested membership and device outages. Its measurements use the revisions listed in the report.
+
 ## Architecture
 
 | Dimension | NDR | Marmot / MLS |
@@ -156,9 +158,14 @@ both systems:
 
 ## Scaling and evaluation
 
-NDR publishes one ciphertext per steady-state group message, then relies on
-transport fanout. Distributing a sender key requires pairwise deliveries to the
-intended members/devices; rotating every active sender's key multiplies that work.
+NDR creates one sender-key ciphertext for each group message. In NDR 0.0.178
+with Iris Chat Protocol 0.3.17, the sender embeds that ciphertext in a separate
+pairwise envelope for every recipient device. Relay uploads therefore grow with
+group size even when the roster stays fixed. The November 13 upgrade publishes
+one sender-key event per accepted group send. Updated clients learn the anonymous
+sender author privately and subscribe by that author. Relays can correlate
+those subscriptions. Key distribution, rekeying, and repair still require
+private deliveries and can dominate the total cost when membership changes.
 See [NDR's scaling model](./README.md#scalability-and-tradeoffs).
 
 MLS also supports shared group ciphertexts. Tree-based key updates can reduce
@@ -172,9 +179,10 @@ A comparative evaluation should hold group size, device count, membership churn,
 relay behavior, and retention goals constant. Useful measurements include
 delivery latency and failure rate under loss/reordering, removal propagation,
 offline recovery, bandwidth, storage, and recovery after restart or state loss.
-This assessment contains no such comparative measurements and assigns no overall
-winner. The relevant tradeoff is independent session/sender state with separate
-membership coordination versus shared group state with explicit commit convergence.
+The [paired relay benchmark](bench/relay-compare/RESULTS.md) measures delivery,
+bandwidth and recovery under those conditions. The architectural distinction
+is independent sender state with separate membership coordination in NDR, and
+shared group state with explicit commit convergence in Marmot.
 
 [double-ratchet]: https://signal.org/docs/specifications/doubleratchet/
 [mls-evolution]: https://www.rfc-editor.org/rfc/rfc9420.html#section-12

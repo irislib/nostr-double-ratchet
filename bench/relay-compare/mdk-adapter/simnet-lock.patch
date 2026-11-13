@@ -1,0 +1,24 @@
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -971,6 +971,7 @@
+  "serde_json",
+  "serde_yaml_ng",
+  "sha2 0.10.9",
++ "simnet",
+  "stateright",
+  "storage-sqlite",
+  "tempfile",
+@@ -6031,4 +6032,13 @@
+ [[package]]
++name = "simnet"
++version = "0.1.0"
++dependencies = [
++ "rand 0.8.6",
++ "serde",
++ "serde_json",
++]
++
++[[package]]
+ name = "siphasher"
+ version = "0.3.11"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
