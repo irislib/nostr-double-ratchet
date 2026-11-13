@@ -183,6 +183,50 @@ fn sender_key_group_create_syncs_to_local_sibling() -> Result<()> {
         1
     );
 
+    // Ordinary messages reuse the metadata/key handoff, including after restart.
+    let mut restored = GroupManager::from_snapshot(alice1_groups.snapshot())?;
+    let send = |groups: &mut GroupManager, sessions: &mut SessionManager, n| {
+        groups.send_message(
+            sessions,
+            &mut context(n, 1_900_031_000 + n),
+            &created.group.group_id,
+            b"hello".to_vec(),
+        )
+    };
+    let settled = send(&mut restored, &mut alice1_manager, 47)?;
+    assert!(settled.local_sibling.deliveries.is_empty());
+    assert!(settled.local_sibling.sender_key_messages.is_empty());
+    assert_eq!(settled.remote.sender_key_messages.len(), 1);
+    let alice3 = manager_device(30, 35);
+    alice1_manager.apply_local_roster(roster_for(&[&alice1, &alice2, &alice3], 49));
+    let added = send(&mut restored, &mut alice1_manager, 50)?;
+    assert!(
+        !added.local_sibling.pending_fanouts.is_empty(),
+        "new offline sibling needs a durable bootstrap"
+    );
+    let again = send(&mut restored, &mut alice1_manager, 51)?;
+    assert!(
+        again.local_sibling.pending_fanouts.is_empty(),
+        "existing durable fanout owns the retry"
+    );
+    let prior_key_id = again.remote.sender_key_messages[0].key_id;
+    alice1_manager.apply_local_roster(roster_for(&[&alice1, &alice3], 52));
+    let removed = send(&mut restored, &mut alice1_manager, 53)?;
+    assert_ne!(
+        removed.remote.sender_key_messages[0].key_id, prior_key_id,
+        "a revoked sibling held the prior chain"
+    );
+
+    let bob2 = manager_device(33, 36);
+    observe_signed_peer_app_keys(&mut alice1_manager, &bob, &[&bob, &bob2], 54)?;
+    let extended = send(&mut restored, &mut alice1_manager, 55)?;
+    assert!(!extended.remote.pending_fanouts.is_empty());
+    observe_signed_peer_app_keys(&mut alice1_manager, &bob, &[&bob2], 56)?;
+    let revoked = send(&mut restored, &mut alice1_manager, 57)?;
+    assert_ne!(
+        extended.remote.sender_key_messages[0].key_id,
+        revoked.remote.sender_key_messages[0].key_id
+    );
     Ok(())
 }
 
@@ -300,7 +344,7 @@ fn sender_key_local_sibling_can_repair_missed_rotated_distribution() -> Result<(
         b"after sibling missed rotation".to_vec(),
     )?;
     let outer = sent
-        .local_sibling
+        .remote
         .sender_key_messages
         .first()
         .expect("local sibling sender-key outer")

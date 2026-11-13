@@ -248,6 +248,17 @@ pub struct GroupSenderKeyRecordSnapshot {
     pub distributed_to: Vec<GroupSenderKeyDistributionRecipientsSnapshot>,
     #[serde(default)]
     pub repair_snapshots: Vec<GroupSenderKeyRepairSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_state: Option<GroupSenderDeliveryState>,
+}
+
+/// Local handoff state for this sending device. Older snapshots rotate on first send.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GroupSenderDeliveryState {
+    pub key_id: u32,
+    pub roster_digest: [u8; 32],
+    pub device_rosters:
+        std::collections::BTreeMap<OwnerPubkey, std::collections::BTreeSet<DevicePubkey>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

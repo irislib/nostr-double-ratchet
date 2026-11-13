@@ -55,6 +55,7 @@ struct SenderKeyRecord {
     distribution_history: BTreeMap<u32, SenderKeyDistribution>,
     distributed_to: BTreeMap<u32, BTreeSet<OwnerPubkey>>,
     repair_snapshots: Vec<GroupSenderKeyRepairSnapshot>,
+    delivery_state: Option<crate::GroupSenderDeliveryState>,
 }
 
 mod decrypt;

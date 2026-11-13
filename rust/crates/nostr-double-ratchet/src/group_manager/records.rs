@@ -363,6 +363,7 @@ impl SenderKeyRecord {
                 .map(|entry| (entry.key_id, entry.recipients.into_iter().collect()))
                 .collect(),
             repair_snapshots: snapshot.repair_snapshots,
+            delivery_state: snapshot.delivery_state,
         })
     }
 
@@ -435,6 +436,7 @@ impl SenderKeyRecord {
                 )
                 .collect(),
             repair_snapshots: self.repair_snapshots.clone(),
+            delivery_state: self.delivery_state.clone(),
         }
     }
 }

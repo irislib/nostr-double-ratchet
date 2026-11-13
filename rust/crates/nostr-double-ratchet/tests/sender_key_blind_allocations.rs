@@ -69,6 +69,7 @@ fn blind_search_exhaustion_has_constant_bookkeeping_allocations() {
             distribution_history: Vec::new(),
             distributed_to: Vec::new(),
             repair_snapshots: Vec::new(),
+            delivery_state: None,
         }],
     })
     .unwrap();

@@ -16,39 +16,68 @@ where
         R: RngCore + CryptoRng,
     {
         let mut remote = GroupPreparedPublish::empty();
-        let mut local_sibling = self.local_sibling_sync(session_manager, ctx, record)?;
         let local_device = session_manager.local_device_pubkey();
-        let force_rotate = self.local_sender_key_has_removed_recipients(record, local_device);
-        let (distribution, _created) =
-            self.ensure_local_sender_key_record(ctx, record, local_device, force_rotate)?;
-
-        let recipients = self.sender_key_distribution_recipients(
-            record,
-            local_device,
-            distribution.key_id,
-            record.remote_members(self.local_owner_pubkey),
-        );
-        if !recipients.is_empty() {
-            remote = self.fanout_sender_key_distribution(
-                session_manager,
-                ctx,
-                recipients,
-                &distribution,
-            )?;
-        }
-        let sibling_distribution =
-            self.local_sibling_sender_key_distribution(session_manager, ctx, &distribution)?;
-        merge_group_prepared_publish(&mut local_sibling, sibling_distribution);
-
         let id = SenderKeyRecordId::new(
             record.group_id.clone(),
             self.local_owner_pubkey,
             local_device,
         );
+        let devices = Self::group_recipient_devices(record, session_manager);
+        let previous = self
+            .sender_keys
+            .get(&id)
+            .and_then(|s| s.delivery_state.as_ref());
+        let force_rotate = self.local_sender_key_has_removed_recipients(record, local_device)
+            || self.device_removal_requires_rotation(&id, &devices);
+        let digest = Self::group_roster_digest(record)?;
+        let siblings_changed = previous.is_none_or(|state| {
+            state.roster_digest != digest
+                || state.device_rosters.get(&self.local_owner_pubkey)
+                    != devices.get(&self.local_owner_pubkey)
+        });
+        let changed_owners: BTreeSet<_> = record
+            .remote_members(self.local_owner_pubkey)
+            .into_iter()
+            .filter(|owner| {
+                previous.is_none_or(|p| p.device_rosters.get(owner) != devices.get(owner))
+            })
+            .collect();
+        let (distribution, rotated) =
+            self.ensure_local_sender_key_record(ctx, record, local_device, force_rotate)?;
+        let mut recipients: BTreeSet<_> = self
+            .sender_key_distribution_recipients(
+                record,
+                local_device,
+                distribution.key_id,
+                record.remote_members(self.local_owner_pubkey),
+            )
+            .into_iter()
+            .collect();
+        recipients.extend(changed_owners);
+        if !recipients.is_empty() {
+            remote = self.fanout_sender_key_distribution(
+                session_manager,
+                ctx,
+                recipients.into_iter().collect(),
+                &distribution,
+            )?;
+        }
+        let mut local_sibling = GroupPreparedPublish::empty();
+        if rotated || siblings_changed {
+            local_sibling = self.local_sibling_sync(session_manager, ctx, record)?;
+            let key =
+                self.local_sibling_sender_key_distribution(session_manager, ctx, &distribution)?;
+            merge_group_prepared_publish(&mut local_sibling, key);
+        }
         let sender_record = self
             .sender_keys
             .get_mut(&id)
             .ok_or_else(|| group_error("missing local sender-key record"))?;
+        sender_record.delivery_state = Some(crate::GroupSenderDeliveryState {
+            key_id: distribution.key_id,
+            roster_digest: digest,
+            device_rosters: devices,
+        });
         let key_id = sender_record
             .latest_key_id
             .ok_or_else(|| group_error("missing local sender-key id"))?;
@@ -82,16 +111,78 @@ where
             created_at: ctx.now,
             ciphertext,
         };
-        remote.sender_key_messages.push(sender_key_message.clone());
-        if session_manager.has_authorized_local_siblings() {
-            local_sibling.sender_key_messages.push(sender_key_message);
-        }
+        remote.sender_key_messages.push(sender_key_message);
 
         Ok(GroupPreparedSend {
             group_id: record.group_id.clone(),
             remote,
             local_sibling,
         })
+    }
+
+    fn group_roster_digest(group: &GroupRecord) -> Result<[u8; 32]> {
+        use sha2::{Digest, Sha256};
+        Ok(Sha256::digest(serde_json::to_vec(&group.snapshot())?).into())
+    }
+
+    fn group_recipient_devices(
+        group: &GroupRecord,
+        sessions: &SessionManager,
+    ) -> BTreeMap<OwnerPubkey, BTreeSet<DevicePubkey>> {
+        group
+            .members
+            .iter()
+            .filter_map(|owner| {
+                let roster = sessions.roster(*owner)?;
+                Some((
+                    *owner,
+                    roster
+                        .devices()
+                        .iter()
+                        .map(|entry| entry.device_pubkey)
+                        .collect(),
+                ))
+            })
+            .collect()
+    }
+
+    fn device_removal_requires_rotation(
+        &self,
+        id: &SenderKeyRecordId,
+        current: &BTreeMap<OwnerPubkey, BTreeSet<DevicePubkey>>,
+    ) -> bool {
+        let Some(sender) = self.sender_keys.get(id) else {
+            return false;
+        };
+        sender.delivery_state.as_ref().is_none_or(|old| {
+            Some(old.key_id) != sender.latest_key_id
+                || old.device_rosters.iter().any(|(owner, devices)| {
+                    current.get(owner).is_none_or(|now| !devices.is_subset(now))
+                })
+        })
+    }
+
+    fn remember_bootstrap(
+        &mut self,
+        group: &GroupRecord,
+        sessions: &SessionManager,
+        key_id: u32,
+    ) -> Result<()> {
+        let id = SenderKeyRecordId::new(
+            group.group_id.clone(),
+            self.local_owner_pubkey,
+            sessions.local_device_pubkey(),
+        );
+        let sender = self
+            .sender_keys
+            .get_mut(&id)
+            .ok_or_else(|| group_error("missing sender-key record"))?;
+        sender.delivery_state = Some(crate::GroupSenderDeliveryState {
+            key_id,
+            roster_digest: Self::group_roster_digest(group)?,
+            device_rosters: Self::group_recipient_devices(group, sessions),
+        });
+        Ok(())
     }
 
     pub(super) fn prepare_sender_key_bootstrap<R>(
@@ -105,8 +196,17 @@ where
         R: RngCore + CryptoRng,
     {
         let local_device = session_manager.local_device_pubkey();
+        let id = SenderKeyRecordId::new(
+            record.group_id.clone(),
+            self.local_owner_pubkey,
+            local_device,
+        );
+        let rotate = self.device_removal_requires_rotation(
+            &id,
+            &Self::group_recipient_devices(record, session_manager),
+        );
         let (distribution, _) =
-            self.ensure_local_sender_key_record(ctx, record, local_device, false)?;
+            self.ensure_local_sender_key_record(ctx, record, local_device, rotate)?;
         let remote = self.fanout_sender_key_distribution(
             session_manager,
             ctx,
@@ -117,6 +217,7 @@ where
         let local =
             self.local_sibling_sender_key_distribution(session_manager, ctx, &distribution)?;
         merge_group_prepared_publish(&mut prepared.local_sibling, local);
+        self.remember_bootstrap(record, session_manager, distribution.key_id)?;
         Ok(prepared)
     }
 
@@ -143,6 +244,7 @@ where
         let local =
             self.local_sibling_sender_key_distribution(session_manager, ctx, &distribution)?;
         merge_group_prepared_publish(&mut prepared.local_sibling, local);
+        self.remember_bootstrap(record, session_manager, distribution.key_id)?;
         Ok(prepared)
     }
 
@@ -176,6 +278,7 @@ where
                 distribution_history: BTreeMap::new(),
                 distributed_to: BTreeMap::new(),
                 repair_snapshots: Vec::new(),
+                delivery_state: None,
             };
             self.sender_event_index
                 .insert(sender_event_pubkey, sender_record.id());
@@ -330,6 +433,7 @@ where
                         distribution_history: BTreeMap::new(),
                         distributed_to: BTreeMap::new(),
                         repair_snapshots: Vec::new(),
+                        delivery_state: None,
                     };
                     prefer_new_duplicate_sender_key(self.local_owner_pubkey, existing, &incoming)
                 })
@@ -354,6 +458,7 @@ where
                 distribution_history: BTreeMap::new(),
                 distributed_to: BTreeMap::new(),
                 repair_snapshots: Vec::new(),
+                delivery_state: None,
             });
         if record.sender_event_pubkey != distribution.sender_event_pubkey {
             self.sender_event_index.remove(&record.sender_event_pubkey);
