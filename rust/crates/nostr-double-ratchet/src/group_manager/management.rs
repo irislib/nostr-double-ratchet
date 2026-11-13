@@ -121,6 +121,26 @@ where
         self.local_sibling_sync(session_manager, ctx, &record)
     }
 
+    /// Anonymous subscription candidates learned through private sender-key distributors.
+    /// Hosts use a read connection with no account/device authentication.
+    pub fn subscribable_sender_event_pubkeys(&self) -> Vec<SenderEventPubkey> {
+        self.sender_event_index
+            .iter()
+            .filter_map(|(author, id)| {
+                let group = self.groups.get(&id.group_id)?;
+                let record = self.sender_keys.get(id)?;
+                (group.members.contains(&self.local_owner_pubkey)
+                    && group.members.contains(&id.sender_owner)
+                    && record.sender_event_secret_key.is_none()
+                    && author.to_bytes() != id.sender_device.to_bytes()
+                    && !group
+                        .members
+                        .contains(&OwnerPubkey::from_bytes(author.to_bytes())))
+                .then_some(*author)
+            })
+            .collect()
+    }
+
     pub fn known_sender_event_pubkeys(&self) -> Vec<SenderEventPubkey> {
         self.sender_event_index.keys().copied().collect()
     }

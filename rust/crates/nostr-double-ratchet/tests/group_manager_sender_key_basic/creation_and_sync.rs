@@ -56,6 +56,34 @@ fn sender_key_group_create_distributes_key_and_shared_message_decrypts() -> Resu
     assert_eq!(sent.remote.sender_key_messages.len(), 1);
 
     let outer = sent.remote.sender_key_messages[0].clone();
+    let signed = nostr_double_ratchet::group_sender_key_message_event(&outer)?;
+    let authors = bob_groups.subscribable_sender_event_pubkeys();
+    assert_eq!(authors, [outer.sender_event_pubkey]);
+    assert!(alice_groups.subscribable_sender_event_pubkeys().is_empty());
+    let filter = nostr_double_ratchet::build_message_author_subscription_filters(
+        [signed.pubkey],
+        1000,
+        12000,
+    );
+    let transcript = serde_json::to_string(&(&signed, &filter.filters)).unwrap();
+    for hidden in [
+        created.group.group_id.clone(),
+        alice.owner_pubkey.to_string(),
+        bob.owner_pubkey.to_string(),
+        alice.device_pubkey.to_string(),
+        bob.device_pubkey.to_string(),
+        "hello sender-key group".to_owned(),
+    ] {
+        assert!(!transcript.contains(&hidden));
+    }
+    assert_eq!(
+        signed
+            .tags
+            .iter()
+            .map(|tag| tag.as_slice()[0].as_str())
+            .collect::<Vec<_>>(),
+        ["v", "header"]
+    );
     let result = bob_groups.handle_sender_key_message(GroupSenderKeyMessage {
         group_id: outer.group_id,
         sender_event_pubkey: outer.sender_event_pubkey,
