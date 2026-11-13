@@ -27,6 +27,7 @@ export class DeviceRecordActor implements DeviceRecordShape {
   public state: DeviceSetupState = "new"
   public createdAt: number
 
+  private flushTail: Promise<void> = Promise.resolve()
   private ensurePromise?: Promise<void>
   private inviteSubscription?: Unsubscribe
   private inviteAcceptancePromise?: Promise<Session>
@@ -403,7 +404,15 @@ export class DeviceRecordActor implements DeviceRecordShape {
     }
   }
 
-  async flushMessageQueue(): Promise<void> {
+  flushMessageQueue(): Promise<void> {
+    // Reconnect, startup and new handoffs can wake the same device together.
+    // Read its queue after the preceding drain retires accepted entries.
+    const next = this.flushTail.then(() => this.drainMessageQueue())
+    this.flushTail = next.catch(() => {})
+    return next
+  }
+
+  private async drainMessageQueue(): Promise<void> {
     if (this.state === "revoked") {
       return
     }

@@ -1,3 +1,4 @@
+import type { RepairSendOptions } from "../group/GroupSending.js";
 import { buildMessageAuthorSubscriptionFilters } from "../directMessageSubscriptions.js";
 import { getEventHash, verifyEvent, type VerifiedEvent } from "nostr-tools";
 import {
@@ -218,7 +219,7 @@ export abstract class GroupManagerOperations extends GroupManagerState {
   async requestSenderKeyRepair(
     groupId: string,
     request: SenderKeyRepairRequest,
-    opts: { sendPairwise: PairwiseSend; nowMs?: number },
+    opts: RepairSendOptions,
   ): Promise<Rumor | null> {
     return this.enqueueOperation(async () => {
       const group = this.groups.get(groupId);

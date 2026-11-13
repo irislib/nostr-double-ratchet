@@ -1,3 +1,4 @@
+import { parseSenderKeyRepairRequestRumor } from "./SenderKeyRepair.js";
 import { groupPublicationContext, groupPublicationInnerEventId } from "./publishing.js";
 import {
   IdentityKey,
@@ -65,6 +66,24 @@ export class SessionManager extends SessionManagerInvites {
       }
     }
     return [...devices].sort();
+  }
+
+  /** Queue a chain-only repair on its writer's existing private device route. */
+  async sendGroupRepairToDevice(owner: string, device: string, rumor: Rumor): Promise<boolean> {
+    const request = parseSenderKeyRepairRequestRumor(rumor);
+    if (!request || request.requiredRevision !== undefined || rumor.pubkey !== this.deviceId) return false;
+    await this.init();
+    const record = this.userRecords.get(owner);
+    if (!record?.ownerProofForDevice(device) || this.resolveToOwner(device) !== owner) return false;
+    if (device === this.deviceId) return true;
+    await this.messageQueue.add(device, rumor);
+    if (!record.ownerProofForDevice(device) || this.resolveToOwner(device) !== owner) {
+      await this.messageQueue.removeByTargetAndEventId(device, rumor.id);
+      return false;
+    }
+    // An offline writer keeps the intent until its device invite/session is ready.
+    await record.ensureDevice(device).ensureSetup();
+    return true;
   }
 
   static createForRuntime(

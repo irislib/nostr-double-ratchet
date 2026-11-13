@@ -149,11 +149,15 @@ export class SessionGroupRuntime {
           }
           await this.emitGroupEvent(event);
         },
-        onUnreadyDistribution: async (groupId, owner, author) => {
+        onUnreadyDistribution: async (groupId, owner, author, device) => {
           if (this.groupManager !== groupManager || !this.allowKeyRepair(JSON.stringify([groupId, owner, author]))) return;
           const request = {groupId, senderEventPubkey: author, createdAt: Math.floor(Date.now()/1000)};
           const sessions = await this.waitForSessionManagerFn();
-          await sessions.sendEvent(owner, buildSenderKeyRepairRequestRumor(request, currentDevicePubkey), {includeLocalSiblings: false});
+          if (this.groupManager !== groupManager || this.sessionManager !== sessions) return;
+          const repair = buildSenderKeyRepairRequestRumor(request, currentDevicePubkey);
+          if (!await sessions.sendGroupRepairToDevice(owner, device, repair)) {
+            await sessions.sendEvent(owner, repair, {includeLocalSiblings: false});
+          }
         },
         onDecryptedEvent: (event) => {
           if (event.outerEventId !== event.inner.id) return;
@@ -446,6 +450,11 @@ export class SessionGroupRuntime {
     const request = manager.senderKeyRepairRequestForOuterEvent(group.id, outer);
     if (!request || !this.allowKeyRepair(JSON.stringify(["request", group.id, sender]))) return;
     await manager.requestSenderKeyRepair(group.id, request, {
+      sendToWriter: async (owner, device, repair) => {
+        if (owner !== sender) return false;
+        if (this.groupManager !== manager || this.sessionManager !== sessions) throw new Error("Inactive group key repair");
+        return sessions.sendGroupRepairToDevice(owner, device, repair);
+      },
       sendPairwise: async (recipient, repair) => {
         // Ask only the authenticated sender of this ratchet delivery, never other members.
         if (recipient !== sender) return;

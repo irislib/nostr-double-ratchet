@@ -30,7 +30,7 @@ export interface GroupManagerErrorContext {
 export interface GroupManagerOptions {
   groupDevicePubkeys?: (owners: readonly string[]) => string[];
   beforeConsume?: (event: GroupDecryptedEvent) => Promise<void>;
-  onUnreadyDistribution?: (groupId: string, owner: string, author: string) => Promise<void>;
+  onUnreadyDistribution?: (groupId: string, owner: string, author: string, device: string) => Promise<void>;
   ourOwnerPubkey: string;
   ourDevicePubkey: string;
   suppressLocalDeviceEcho?: boolean;
@@ -78,7 +78,7 @@ export interface CreateGroupResult {
 }
 
 export class GroupManager extends GroupManagerBackfill {
-  private readonly rejectedAuthors = new Map<string, {groupId:string; owner:string; author:string}>();
+  private readonly rejectedAuthors = new Map<string, {groupId:string; owner:string; author:string; device:string}>();
 
   /** Local receive readiness only; display metadata cannot release an inbox row. */
   privateDeliveryReadiness(groupId: string): string | undefined {
@@ -117,7 +117,7 @@ export class GroupManager extends GroupManagerBackfill {
   ): Promise<GroupDecryptedEvent[]> {
     if (distribution?.senderEventPubkey && fromSenderDevicePubkey && event.pubkey === fromSenderDevicePubkey &&
         !group.data.members.includes(fromOwnerPubkey)) {
-      const entry = {groupId, owner: fromOwnerPubkey, author: distribution.senderEventPubkey};
+      const entry = {groupId, owner: fromOwnerPubkey, author: distribution.senderEventPubkey, device: fromSenderDevicePubkey};
       this.rejectedAuthors.set(JSON.stringify(entry), entry);
       if (this.rejectedAuthors.size > 128) this.rejectedAuthors.delete(this.rejectedAuthors.keys().next().value!);
     }
@@ -169,7 +169,7 @@ export class GroupManager extends GroupManagerBackfill {
     this.groupToSenderEvents.set(groupId, next);
     for (const [key, hint] of this.rejectedAuthors) {
       if (hint.groupId !== groupId || !group.data.members.includes(hint.owner)) continue;
-      if (!next.has(hint.author)) await this.onUnreadyDistribution?.(groupId, hint.owner, hint.author);
+      if (!next.has(hint.author)) await this.onUnreadyDistribution?.(groupId, hint.owner, hint.author, hint.device);
       this.rejectedAuthors.delete(key);
     }
   }

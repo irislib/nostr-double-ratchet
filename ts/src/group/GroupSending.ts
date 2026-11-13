@@ -9,6 +9,13 @@ import { createNostrPublisher } from "../publishing.js";
 import { GroupSenderKeys } from "./GroupSenderKeys.js";
 import type { PairwiseSend, PublishOuter } from "../GroupChannel.js";
 
+export interface RepairSendOptions {
+  sendPairwise: PairwiseSend;
+  /** Returns false when the sender lacks a current verified binding for this device. */
+  sendToWriter?: (owner: string, device: string, rumor: Rumor) => Promise<boolean>;
+  nowMs?: number;
+}
+
 export abstract class GroupSending extends GroupSenderKeys {
   protected senderKeyRecipientOwnerPubkeys(): string[] {
     return Array.from(
@@ -208,7 +215,7 @@ export abstract class GroupSending extends GroupSenderKeys {
 
   async requestSenderKeyRepair(
     request: SenderKeyRepairRequest,
-    opts: { sendPairwise: PairwiseSend; nowMs?: number },
+    opts: RepairSendOptions,
   ): Promise<Rumor | null> {
     await this.init();
 
@@ -220,6 +227,13 @@ export abstract class GroupSending extends GroupSenderKeys {
       this.ourDevicePubkey,
       opts.nowMs,
     );
+    // Roster repairs may need an admin. Only chain repair has a unique writer.
+    const writer = this.senderEventToDevice.get(request.senderEventPubkey);
+    const owner = writer && this.senderDeviceToOwner.get(writer);
+    if (request.requiredRevision === undefined && writer && owner && this.isMemberOwnerPubkey(owner)
+        && await opts.sendToWriter?.(owner, writer, rumor)) {
+      return rumor;
+    }
     const recipients = this.senderKeyRecipientOwnerPubkeys();
     await Promise.allSettled(
       recipients.map((pk) => opts.sendPairwise(pk, rumor)),

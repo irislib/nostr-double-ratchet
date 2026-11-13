@@ -61,6 +61,7 @@ it('automatically repairs a new member key rejected before the admin membership 
       tags: membership.tags, pubkey: membership.pubkey, created_at: membership.created_at, id: membership.id })
     await vi.waitFor(() => expect(held.length).toBeGreaterThan(0), { timeout: 500 })
     holding = false
+    const targetWriter = vi.spyOn(receiver!.getSessionManager()!, "sendGroupRepairToDevice")
     const message = await newcomer!.sendGroupMessage(updated.id, 'sent before the membership arrives')
     const inbox = () => [...receiver!.getSessionUserRecords().values()].flatMap(record => [...record.pendingDurableEvents.values()])
     await vi.waitFor(() => expect(controls).toContain(10446), { timeout: 500 })
@@ -74,6 +75,9 @@ it('automatically repairs a new member key rejected before the admin membership 
     await vi.waitFor(() => expect(committed.get(message.inner.id)).toBe(message.inner.content), { timeout: 500 })
     await vi.waitFor(() => expect(inbox()).toHaveLength(0), { timeout: 500 })
     expect(repairs).toHaveLength(1)
+    expect(targetWriter).toHaveBeenCalledTimes(1)
+    expect(targetWriter).toHaveBeenCalledWith(carol, newcomer!.getState().currentDevicePubkey, expect.objectContaining({kind: 10447}))
+    await expect(targetWriter.mock.results[0]?.value).resolves.toBe(true)
     expect(controls.filter(kind => kind === 10446)).toHaveLength(2)
     // Retries preserve canonical message identity and do not cause key-response loops.
     relay.storeAndDeliver(message.outer)
