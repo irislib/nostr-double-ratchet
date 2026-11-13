@@ -382,10 +382,6 @@ fn known_key_repair_targets_its_writer_and_revision_repair_can_reach_others() ->
         &[&f.bob, &sibling],
         1_900_100_130,
     )?;
-    f.carol_manager.observe_device_invite(
-        f.bob.owner_pubkey,
-        manager_public_device_invite(&mut f.bob_manager, &f.bob, 1_900_100_131, 1_900_100_131)?,
-    )?;
     let payload = GroupPairwiseCommand::SenderKeyDistribution {
         distribution: f
             .bob_groups
@@ -416,6 +412,20 @@ fn known_key_repair_targets_its_writer_and_revision_repair_can_reach_others() ->
         required_revision: None,
         created_at: UnixSeconds(1_900_100_132),
     };
+    let offline = receiver.request_sender_key_repair(
+        &mut f.carol_manager,
+        &mut context(131, 1_900_100_131),
+        &request,
+    )?;
+    assert!(offline.remote.deliveries.is_empty());
+    assert!(matches!(offline.remote.relay_gaps.as_slice(),
+        [nostr_double_ratchet::RelayGap::MissingDeviceInvite{ owner_pubkey,device_pubkey }] if
+        *owner_pubkey==f.bob.owner_pubkey && *device_pubkey==f.bob.device_pubkey));
+    assert_eq!(offline.remote.pending_fanouts.len(), 1);
+    f.carol_manager.observe_device_invite(
+        f.bob.owner_pubkey,
+        manager_public_device_invite(&mut f.bob_manager, &f.bob, 1_900_100_131, 1_900_100_131)?,
+    )?;
     let result = receiver.request_sender_key_repair(
         &mut f.carol_manager,
         &mut context(132, 1_900_100_132),
@@ -442,6 +452,19 @@ fn known_key_repair_targets_its_writer_and_revision_repair_can_reach_others() ->
         &request,
     )?;
     assert!(result
+        .remote
+        .deliveries
+        .iter()
+        .any(|d| d.owner_pubkey != f.bob.owner_pubkey));
+    // An unbound author cannot redirect a request to an attacker-chosen device.
+    request.required_revision = None;
+    request.sender_event_pubkey = sibling.device_pubkey;
+    let unknown = receiver.request_sender_key_repair(
+        &mut f.carol_manager,
+        &mut context(134, 1_900_100_134),
+        &request,
+    )?;
+    assert!(unknown
         .remote
         .deliveries
         .iter()
