@@ -2,6 +2,18 @@ use super::*;
 use iris_chat_protocol::invite_unsigned_event;
 
 impl NdrSim {
+    pub(super) fn account_index(&self, owner: PublicKey) -> usize {
+        self.owner_keys
+            .iter()
+            .position(|k| k.public_key() == owner)
+            .unwrap_or(usize::MAX)
+    }
+
+    pub(super) fn owner_of(&self, dev: Dev) -> PublicKey {
+        self.owner_keys[self.sc.account_of(dev)].public_key()
+    }
+
+
     pub(super) fn bootstrap(&mut self, out: &mut Out<Event>) -> anyhow::Result<()> {
         let accounts = self.sc.accounts + self.sc.spare_accounts;
         let created = secs(0) - 10;

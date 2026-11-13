@@ -6,6 +6,8 @@ import re
 import shutil
 import subprocess
 
+from retry_audit import instrument
+
 
 HERE = Path(__file__).resolve().parent
 BASELINE_NDR = "37c4733c73fa1c5104c1e9a01bff19a0bead5edf"
@@ -15,6 +17,8 @@ IRIS = "a721434ba675ba0c1e3300afa0e75677c7167446"
 RELEASE_NDR = "ecc81c4e1fe73fb84c520fbc1b7d31fd9fc90185"
 RELEASE_IRIS = "6a989bb8010013ae85330a1f22f99698c44c196f"
 CONTROL_IRIS = "8265422e6353d6308c9740c7e7323d52314656e6"
+REPAIR_NDR = "d19a25fbeb55ca5c1808588ace21dbb40f098476"
+REPAIR_IRIS = "659cf1ad5bd3f1e561c919343c6967e492852245"
 MDK = "6f6d2017de1f2cc595cc10da9d575f3aa16cb21e"
 
 
@@ -41,8 +45,9 @@ def main():
     version.add_argument("--baseline", action="store_true", help="prepare the per-device NDR comparison build")
     version.add_argument("--release", action="store_true", help="use the pinned 0.0.179 / 0.3.18 sources")
     version.add_argument("--control-fix", action="store_true", help="prepare the linked-device forwarding fix")
+    version.add_argument("--target-repairs", action="store_true", help="use device-directed sender-key repair")
     args = parser.parse_args()
-    if (args.baseline or args.release or args.control_fix) and args.engine != "ndr":
+    if (args.baseline or args.release or args.control_fix or args.target_repairs) and args.engine != "ndr":
         parser.error("version selection applies only to NDR")
     dest = args.output.resolve()
     dest.mkdir(parents=True, exist_ok=True)
@@ -64,14 +69,17 @@ def main():
     ndr, iris = (BASELINE_NDR, BASELINE_IRIS) if args.baseline else (NDR, IRIS)
     if args.release or args.control_fix:
         ndr, iris = RELEASE_NDR, CONTROL_IRIS if args.control_fix else RELEASE_IRIS
+    if args.target_repairs:
+        ndr, iris = REPAIR_NDR, REPAIR_IRIS
     archive(HERE.parents[1], ndr, dest / "ndr", "rust")
     archive(os.getenv("IRIS_REPO", HERE.parents[2] / "iris-chat-rs"), iris, dest / "iris", "chat-protocol")
     shutil.copytree(HERE / "ndr", dest / "sim-ndr")
-    if args.release or args.control_fix:
+    if args.release or args.control_fix or args.target_repairs:
         # Both are local path dependencies. All registry and Git packages retain their pins.
         lock = dest / "sim-ndr/Cargo.lock"
+        protocol_version = "0.3.19" if args.target_repairs else "0.3.18"
         replace(lock, 'name = "iris-chat-protocol"\nversion = "0.3.17"',
-                      'name = "iris-chat-protocol"\nversion = "0.3.18"')
+                      f'name = "iris-chat-protocol"\nversion = "{protocol_version}"')
         replace(lock, 'name = "nostr-double-ratchet"\nversion = "0.0.178"',
                       'name = "nostr-double-ratchet"\nversion = "0.0.179"')
     protocol = dest / "iris/chat-protocol"
@@ -90,6 +98,7 @@ def main():
                 text = text.replace("use std::time::{SystemTime, UNIX_EPOCH};", "use std::time::UNIX_EPOCH;")
             source.write_text(text)
     shutil.copy(HERE / "sim_clock.rs", library / "src")
+    instrument(HERE, dest, replace)
     for root, declaration in [(library, "pub mod sim_clock;"), (protocol, "pub use nostr_double_ratchet::sim_clock;")]:
         with (root / "src/lib.rs").open("a") as source:
             source.write(f"\n{declaration}\n")

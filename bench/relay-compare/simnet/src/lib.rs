@@ -53,7 +53,7 @@ pub enum Action {
 }
 
 impl Action {
-    fn dev(&self) -> Dev {
+    pub fn dev(&self) -> Dev {
         match self {
             Action::Create { creator, .. } => *creator,
             Action::Send { dev, .. } => *dev,
@@ -108,6 +108,7 @@ pub struct DeviceView {
 
 pub trait Protocol {
     type P;
+    fn begin_workload(&mut self) {}
     fn interest(&mut self, dev: Dev) -> Vec<String>;
     fn act(&mut self, now: Ms, action: &Action, out: &mut Out<Self::P>);
     fn deliver(&mut self, dev: Dev, now: Ms, wires: &[Rc<Wire<Self::P>>], out: &mut Out<Self::P>);
@@ -446,6 +447,7 @@ impl<Pr: Protocol> Sim<Pr> {
         self.push(1_000, Ev::Act(0));
         self.run_until_quiet(SETUP_LIMIT_MS);
         let setup_end = self.now;
+        self.proto.begin_workload();
         self.snapshot_phase();
         self.setup_cost = Some(std::mem::take(&mut self.cur));
         for d in &mut self.devs {

@@ -28,6 +28,12 @@ For the November 13 per-device baseline, prepare a separate directory with `prep
 
 `run.py` refuses to overwrite a completed result. `compare.py` accepts either directories or JSON Lines files. It checks the seed, engine, full scenario, fingerprint of the generated action and outage schedule, intended recipient count, online recipient count and accounting consistency. Cryptographic randomness, setup completion time, and per-publish network draws can still vary. Each engine experiences loss on the traffic it produces.
 
+## Tracing sender-key repair
+
+Use `prepare.py ndr BEFORE --control-fix` and `prepare.py ndr AFTER --target-repairs`. Build both with the locked release command and `--features group-broadcast`. For each binary, create an empty trace directory, set `NDR_RETRY_AUDIT` to that directory, and run `run.py BINARY REPORTS small-edits --seeds 1 2 3 4 5`. Use independent trace and report directories for a second repetition. Run `retry_summary.py TRACES REPORTS small-edits` to reproduce the stage, payload and destination matrix. `compare.py AFTER_REPORTS BEFORE_REPORTS small-edits --previous-ndr` verifies matched schedules and recipient obligations.
+
+The hooks are installed only in the simulator’s source archive. In-memory joins identify the signed event’s original payload; no group keys, plaintext or device identities appear in the output. Synthetic device numbers identify senders/recipients; device 2n and 2n+1 belong to account n in this workload. Stream and digest numbers are run-local labels, assigned on first observation. A repeated logical request matches the requesting device, destination device, group-stream selector and optional key, position and revision, ignoring the timestamp and new outer encryption. The summary derives the writer from its observed signed data, reports unknown writers separately, and rejects any trace that does not reconcile with the existing retry-byte and event counters.
+
 ## What the simulator measures
 
 - Each scheduled message is owed to every device in the requested membership at that instant, including the sender's other devices. Deferral, refusal, withdrawal or later removal cannot reduce the denominator. Final delivery counts unique copies that remain in the recipient's message history after the recovery period. A later redelivery can restore a withdrawn copy.

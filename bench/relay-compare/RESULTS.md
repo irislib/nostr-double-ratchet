@@ -1,5 +1,26 @@
 # MDK and NDR under relay failures
 
+## What was retried, and who received it?
+
+The November 13 five-account/two-device benchmark attributed 16.03 KiB per scheduled send to the protocol retry callback after two membership edits. To identify its contents, the simulator joined each submitted pairwise event to the synthetic plaintext passed to the real sender before encryption, the local destination device, and the retry stage. It reconciles the traced event count and byte total with the existing workload score for every seed. The extra uploads caused by the transport retrying a given signed event are counted separately in relay-upload bytes.
+
+In the first five-seed rerun, **all 10,044 retry events were sender-key repair requests**. Each was 1,572 serialized bytes. 70.2% of those bytes came from scheduled repair attempts and 29.8% from retrying pending group ciphertext. Across 1,000 scheduled chat sends, this produced 15.42 KiB/send. The second repetition measured 16.14. Only 10.1% of the first run’s bytes went to the device that authored the stream. Its other linked device received 9.8%, and devices belonging to other accounts received 80.1%. The recipient of each envelope is local simulation metadata; it is absent from the signed message.
+
+**Example from seed 4.** Synthetic devices 8 and 9 belong to one account; device 1 belongs to another. Device 8 sent its own device 9 the same broad repair selector for stream 8 **88 times**. The simulator observed device 1 publishing that stream’s signed messages. After the routing change, the corresponding requests in that run went from device 8 to device 1. Across the baseline, 83.1% of retry bytes repeated a logical request already submitted by the same requesting device to the same destination. A repeat can be warranted when a peer is offline; only the authenticated stream writer holds the original chain needed to answer a key-only request. [Per-publication baseline trace](results/2026-11-13-repair-seed4-before.tsv.gz) and [device-directed trace](results/2026-11-13-repair-seed4-after.tsv.gz).
+
+The fix uses the existing private session to the verified writer device when its binding is known, current and in the group. An offline writer retains a device-specific pending delivery. Requests for a missing roster revision and requests with no usable verified binding preserve existing broader recovery. Membership updates, group data, wire formats and recipient-free outer tags use their existing paths. The benchmark tested NDR `d19a25fb` against the previously released NDR implementation, with identical chat-protocol production sources. The Rust production source matches release 0.0.180. No change to the retry interval was necessary. The TypeScript 0.0.187 runtime also targets an authenticated writer device; its transport behavior was tested separately. All KiB figures in this section are from the Rust simulation.
+
+| Same five seeds, two repetitions | Before | Device-directed |
+| --- | ---: | ---: |
+| Scheduled messages | 2,000 | 2,000 |
+| Retry envelopes | 20,555 | 2,370 |
+| Retry KiB / scheduled send | 15.78 | 1.82 |
+| All published KiB / scheduled send | 32.29 | 18.00 |
+| Retained recipient copies / owed | 16,507 / 17,140 | 16,513 / 17,140 |
+| Post-removal reads, sender had already excluded account | 0 | 0 |
+
+Retry traffic fell **88.5%**, and total published bytes fell **44.3%**. The delivery difference changed direction between repetitions (14 fewer copies, then 20 more); it does not establish a reliability improvement. A separate cooldown-only experiment produced 13.34 retry KiB/send and increased traffic in three of five seeds. It was not selected. [Per-seed full reports, stage totals, source/destination matrices and schedule fingerprints](results/2026-11-13-repair-traces.jsonl).
+
 ## Follow-up on linked-device control traffic
 
 A sender-key distribution used to trigger two independent pairwise deliveries to a linked device. The device needed the newly learned sender key, while the accompanying roster was unchanged. Iris Chat Protocol 0.3.19 forwards only the key in that case. A real roster edit still forwards the updated roster, and duplicate key input produces no new forward. This change requires no new on-wire fields, group version, or device advertisement.

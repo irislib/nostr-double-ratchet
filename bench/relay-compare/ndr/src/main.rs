@@ -75,6 +75,7 @@ struct NdrSim {
     now: Ms,
     errors_logged: usize,
     trace: bool,
+    audit: Option<retry_trace::RetryTrace>,
     /// Per-delivery diagnostics (NDR_DIAG): which carrier belongs to which
     /// simulated message, and what became of it.
     diag: bool,
@@ -120,6 +121,7 @@ impl NdrSim {
             stores.push(store);
         }
         Ok(Self {
+            audit: retry_trace::RetryTrace::open(&sc.label),
             direct: sc.accounts == 2 && sc.spare_accounts == 0 && sc.churn_ops == 0,
             sc: sc.clone(),
             engines,
@@ -141,20 +143,12 @@ impl NdrSim {
         })
     }
 
-    fn set_time(&mut self, now: Ms) {
+    fn enter_callback(&mut self, dev: Dev, now: Ms) {
+        if let Some(trace) = &mut self.audit {
+            trace.sender = dev;
+        }
         self.now = now;
         nostr_double_ratchet::sim_clock::set_ms(BASE_UNIX_MS + now);
-    }
-
-    fn account_index(&self, owner: PublicKey) -> usize {
-        self.owner_keys
-            .iter()
-            .position(|k| k.public_key() == owner)
-            .unwrap_or(usize::MAX)
-    }
-
-    fn owner_of(&self, dev: Dev) -> PublicKey {
-        self.owner_keys[self.sc.account_of(dev)].public_key()
     }
 
     fn log_err(&mut self, what: &str, err: &dyn std::fmt::Display) {
@@ -200,6 +194,10 @@ impl NdrSim {
                     id
                 }
             };
+            let serialized_bytes = event.as_json().len();
+            if let Some(trace) = &mut self.audit {
+                trace.record(self.now, publish, &self.device_keys, class, serialized_bytes);
+            }
             self.wire_state.insert(id, (PubState::Pending, effect.clone()));
             if self.diag && event.kind.as_u16() as u32 == MESSAGE_EVENT_KIND {
                 let inner = publish.inner_event_id.clone().unwrap_or_default();
@@ -227,7 +225,7 @@ impl NdrSim {
             out.publishes.push(Wire {
                 id,
                 class,
-                bytes: event.as_json().len(),
+                bytes: serialized_bytes,
                 keys,
                 payload: event,
             });
@@ -685,6 +683,11 @@ impl NdrSim {
 
 impl Protocol for NdrSim {
     type P = Event;
+    fn begin_workload(&mut self) {
+        if let Some(trace) = &mut self.audit {
+            trace.workload = true;
+        }
+    }
 
     fn interest(&mut self, dev: Dev) -> Vec<String> {
         let authors = self.engines[dev].known_message_author_pubkeys();
@@ -717,7 +720,7 @@ impl Protocol for NdrSim {
     }
 
     fn act(&mut self, now: Ms, action: &Action, out: &mut Out<Event>) {
-        self.set_time(now);
+        self.enter_callback(action.dev(), now);
         match action {
             Action::Create { creator, accounts } => {
                 if let Err(error) = self.bootstrap(out) {
@@ -838,7 +841,7 @@ impl Protocol for NdrSim {
     }
 
     fn deliver(&mut self, dev: Dev, now: Ms, wires: &[Rc<Wire<Event>>], out: &mut Out<Event>) {
-        self.set_time(now);
+        self.enter_callback(dev, now);
         for wire in wires {
             let event = &wire.payload;
             let kind = event.kind.as_u16() as u32;
@@ -893,7 +896,7 @@ impl Protocol for NdrSim {
     }
 
     fn tick(&mut self, dev: Dev, now: Ms, out: &mut Out<Event>) {
-        self.set_time(now);
+        self.enter_callback(dev, now);
         self.retry(dev, out);
         #[cfg(feature = "context-recovery")]
         if self.engines[dev].has_pending_group_pairwise_payloads() && self.reserve(dev, "scan".into()) {
@@ -904,7 +907,7 @@ impl Protocol for NdrSim {
     }
 
     fn publish_outcome(&mut self, dev: Dev, now: Ms, wire: u64, accepted: bool, out: &mut Out<Event>) {
-        self.set_time(now);
+        self.enter_callback(dev, now);
         let Some((state, effect)) = self.wire_state.get_mut(&wire) else {
             return;
         };
@@ -991,3 +994,5 @@ fn main() {
 }
 
 mod discovery;
+
+mod retry_trace;
