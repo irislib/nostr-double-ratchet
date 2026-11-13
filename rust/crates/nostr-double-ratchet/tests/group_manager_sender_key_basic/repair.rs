@@ -469,5 +469,24 @@ fn known_key_repair_targets_its_writer_and_revision_repair_can_reach_others() ->
         .deliveries
         .iter()
         .any(|d| d.owner_pubkey != f.bob.owner_pubkey));
+    // The stored author binding survives revocation, but can no longer address
+    // the removed device, even when its old session still has sendable keys.
+    observe_signed_peer_app_keys(&mut f.carol_manager, &f.bob, &[&sibling], 1_900_100_135)?;
+    request.sender_event_pubkey = f.post_join_outer.sender_event_pubkey;
+    let revoked = receiver.request_sender_key_repair(
+        &mut f.carol_manager,
+        &mut context(136, 1_900_100_136),
+        &request,
+    )?;
+    assert!(revoked
+        .remote
+        .deliveries
+        .iter()
+        .all(|d| d.device_pubkey != f.bob.device_pubkey));
+    assert!(revoked
+        .remote
+        .deliveries
+        .iter()
+        .any(|d| d.owner_pubkey != f.bob.owner_pubkey));
     Ok(())
 }
