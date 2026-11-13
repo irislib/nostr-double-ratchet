@@ -247,7 +247,7 @@ Both ends must update to receive the new group traffic. Older clients only liste
 
 ## Scalability And Tradeoffs
 
-An established sender publishes one payload per message. Key distribution, roster changes, and repair can add per-device traffic. Relay upload scales with the number of relays used. Delivery also depends on the relay retaining both the message and the controls needed to decrypt it.
+An established sender publishes one payload per message. A device missing a chain requests it privately from the known, authorized writing device. It queries the group when the writer is unknown or it needs a membership revision. Key distribution, roster changes, and repair can add per-device traffic. Relay upload scales with the number of relays used. Delivery also depends on the relay retaining both the message and the controls needed to decrypt it.
 
 ## Implementations
 

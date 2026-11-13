@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## Rust 0.0.180 / TypeScript 0.0.187 - 2026-11-13
+
+- Direct a missing group sender-key request to its authenticated writing device when that device is still authorized by its owner's current roster. Unknown senders and requests for a missing group revision retain their existing recovery paths.
+
 ## Rust 0.0.179 / TypeScript 0.0.186 - 2026-11-13
 
 - Publish one anonymous sender-key event per ordinary group message and receive it by the authenticated sender's group author. Roster changes, key distribution, and repair remain pairwise. Group participants need updated clients.
