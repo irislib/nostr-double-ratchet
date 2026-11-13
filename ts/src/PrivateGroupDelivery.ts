@@ -1,11 +1,12 @@
 import { getEventHash, verifyEvent, type VerifiedEvent } from 'nostr-tools'
-import { Group, type GroupDecryptedEvent, type PairwiseSend } from './GroupChannel.js'
+import { Group, type GroupDecryptedEvent } from './GroupChannel.js'
 import type { GroupData } from './GroupMeta.js'
 import { InMemoryStorageAdapter, type StorageAdapter } from './StorageAdapter.js'
 import { hasMetadataPrivacyVersion } from './metadataPrivacy.js'
 import { markSharedGroupCiphertext } from './sharedGroupCiphertext.js'
 import type { Rumor } from './types.js'
 
+/** Legacy receive compatibility for recipient-wrapped group data. */
 export const PAIRWISE_GROUP_DELIVERY_VERSION = 1
 export const PRIVATE_GROUP_DELIVERY_KIND = 21113
 
@@ -59,32 +60,4 @@ export async function previewPrivateGroupDelivery(opts: PrivateGroupPreviewOptio
   const group = new Group({ data: opts.group, ourOwnerPubkey: opts.ourOwnerPubkey,
     ourDevicePubkey: opts.ourDevicePubkey, storage: copy })
   return group.handleOuterEvent(opts.event)
-}
-
-interface PendingPrivateGroupDelivery { event: VerifiedEvent; recipients: string[]; innerEventId?: string }
-/** Persist the complete fanout before handing any copy to a recipient's durable ratchet queue. */
-export class PrivateGroupDeliveryOutbox {
-  constructor(private readonly storage: StorageAdapter, private readonly prefix: string,
-    private readonly groupId: string, private readonly device: string) {}
-  async enqueue(event: VerifiedEvent, recipients: string[], innerEventId?: string): Promise<void> {
-    if (!parsePrivateGroupDelivery({kind: PRIVATE_GROUP_DELIVERY_KIND, content: JSON.stringify({v: 1, type: 'group-wake', event})}))
-      throw new Error('Invalid or oversized private group delivery');
-    await this.storage.put(`${this.prefix}/${event.id}`, { event, recipients: [...recipients], innerEventId })
-  }
-  async flush(send: PairwiseSend, members: string[]): Promise<boolean> {
-    for (const key of await this.storage.list(`${this.prefix}/`)) {
-      const stored = await this.storage.get<PendingPrivateGroupDelivery>(key)
-      if (!stored) continue
-      const job = structuredClone(stored)
-      job.recipients = job.recipients.filter(member => members.includes(member))
-      for (const recipient of [...job.recipients]) {
-        try { await send(recipient, privateGroupDeliveryRumor(job.event, this.groupId, this.device, recipient, job.innerEventId)) }
-        catch { continue }
-        job.recipients = job.recipients.filter(member => member !== recipient)
-        await this.storage.put(key, structuredClone(job))
-      }
-      if (!job.recipients.length) await this.storage.del(key)
-    }
-    return (await this.storage.list(`${this.prefix}/`)).length > 0
-  }
 }

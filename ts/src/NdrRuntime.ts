@@ -29,6 +29,8 @@ export type {
 } from "./RuntimeGroupController.js";
 
 export interface NdrRuntimeOptions extends NostrPublisherOptions {
+  nostrGroupSubscribe?: NostrSubscribe;
+  nostrGroupFetch?: NostrFetch;
   nostrSubscribe: NostrSubscribe;
   nostrPublish: NostrPublish;
   nostrFetch?: NostrFetch;

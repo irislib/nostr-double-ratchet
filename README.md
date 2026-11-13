@@ -23,7 +23,7 @@ use the `iris` CLI from the
 - 1:1 messaging via Double Ratchet over Nostr events
 - Multi-device identity model (owner key + device keys) with AppKeys
 - Invite and link flows for session bootstrapping
-- Group messaging with sender keys and one-to-many outer events
+- Group messaging with sender keys and one relay publication per ordinary message
 - High-level TypeScript `NdrRuntime`; dedicated Rust pairwise runtime and mobile UniFFI
 - Full Rust AppKeys, linked-device, and group runtime lives in `iris-chat-rs`
 - Cross-language TS/Rust interoperability tests
@@ -237,25 +237,17 @@ helpers above.
 
 ## Group Messaging Model
 
-Group delivery preserves the same private transport boundary as direct messages:
+Each sending device has a private signing key and sender-key chain for each group. It signs and publishes one kind 1060 event per ordinary message. Its only tags are the protocol version and an opaque header. Every receiving device can retrieve the same signed ciphertext by its sender-event author. A device learns that author and its chain key through an authenticated pairwise session.
 
-1. Group metadata and sender-key distributions are sent over authenticated 1:1 ratchet sessions.
-2. Each sending device has a per-group sender-event keypair and sender-key chain.
-3. The signed group ciphertext is a local intermediate payload. Each recipient receives it inside a separate authenticated double-ratchet session (kind 21113).
-4. Members authenticate the pairwise sender before decrypting the nested group payload. Delivery callbacks must persist the message before acknowledging it.
-5. Group membership, names, administrators, sender-key authors, and shared group ciphertext must never be published or subscribed to as public group channels. Missing sessions use invite handshakes and durable private retries.
+Rosters, sender-key distributions, and repairs travel privately. A sender rotates its chain when an observed membership or device removal changes who may read future messages. A removed member may still recognize a sender's signing key or retain older messages. A device that has not learned the removal can still send with its previous view.
 
-The JavaScript runtime handles this fanout and durable delivery centrally. Rust's
-`GroupManager` is a transport-independent planner: its returned group ciphertext
-must be wrapped in recipient-specific ratchet deliveries by the integration. It
-must never be published directly. Private relay publishing and public peer
-discovery must also be isolated from account-authenticated receive connections.
+Use an anonymous relay connection for group-author subscriptions and backfill. Keep these reads separate from account/device authentication, identity discovery, and publishing. The relay sees which connections request the same authors and can correlate traffic by IP and timing. Group identifiers, identities and recipient tags stay off message events and group filters. In TypeScript pass the anonymous transport as `nostrGroupSubscribe` and optional `nostrGroupFetch`. Persist incoming messages before resolving the application's group callback and use a durable local publication handoff for retries.
+
+Both ends must update to receive the new group traffic. Older clients only listen for per-recipient wrappers. Upgraded clients can still receive historical wrapped messages. Closed clients catch up from retained events when they reopen; push notification support depends on the host application.
 
 ## Scalability And Tradeoffs
 
-- Group message delivery, sender-key distribution, and metadata updates are O(number of members/devices). This avoids a public channel that identifies a group's participants through shared subscriptions.
-- Multi-device support improves usability but increases session count, subscriptions, and state management complexity.
-- Delivery is eventually consistent; implementations use persistent queues/retries but cannot force relay delivery.
+An established sender publishes one payload per message. Key distribution, roster changes, and repair can add per-device traffic. Relay upload scales with the number of relays used. Delivery also depends on the relay retaining both the message and the controls needed to decrypt it.
 
 ## Implementations
 

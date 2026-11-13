@@ -1,3 +1,4 @@
+import { buildMessageAuthorSubscriptionFilters } from "../directMessageSubscriptions.js";
 import { getEventHash, verifyEvent, type VerifiedEvent } from "nostr-tools";
 import {
   Group,
@@ -56,6 +57,8 @@ export abstract class GroupManagerOperations extends GroupManagerState {
           ourDevicePubkey: this.ourDevicePubkey,
           storage: this.storage,
           oneToMany: this.oneToMany,
+          beforeConsume: this.beforeConsume,
+          groupDevicePubkeys: this.groupDevicePubkeys,
         });
         this.groups.set(group.id, existing);
       } else {
@@ -383,7 +386,6 @@ export abstract class GroupManagerOperations extends GroupManagerState {
         return null;
       }
       if (this.hasSeenOuterEvent(outer.id)) return null;
-      this.rememberOuterEvent(outer.id);
 
       const senderEventPubkey = outer.pubkey;
       const groupId = this.senderEventToGroup.get(senderEventPubkey);
@@ -400,6 +402,7 @@ export abstract class GroupManagerOperations extends GroupManagerState {
 
       try {
         const decrypted = await group.handleOuterEvent(outer);
+        if (decrypted) this.rememberOuterEvent(outer.id);
         if (decrypted && this.shouldDropLocalEcho(decrypted)) {
           return null;
         }
@@ -420,11 +423,52 @@ export abstract class GroupManagerOperations extends GroupManagerState {
   }
 
   async syncOuterSubscription(): Promise<void> {
-    // Shared author queries correlate group membership, including on authenticated relays.
-    this.outerUnsubscribe?.();
+    if (!this.nostrSubscribe && !this.nostrFetch) return;
+
+    let authors = Array.from(this.senderEventToGroup.keys());
+    if (this.suppressLocalDeviceEcho && authors.length > 0) {
+      const localSenderEvents = await this.listLocalSenderEventPubkeys();
+      authors = authors.filter((author) => !localSenderEvents.has(author));
+    }
+    const filters = buildMessageAuthorSubscriptionFilters(authors.sort()).filters;
+    authors = filters.flatMap(filter => filter.authors ?? []);
+    const previous = new Set(this.outerAuthors);
+    const addedAuthors = authors.filter(author => !previous.has(author));
+    const authorsKey = authors.join(",");
+    if (authorsKey === this.outerAuthorsKey) return;
+
+    try {
+      this.outerUnsubscribe?.();
+    } catch {
+      // ignore teardown errors
+    }
     this.outerUnsubscribe = null;
-    this.outerAuthors = [];
-    this.outerAuthorsKey = "";
-    this.clearOuterBackfills();
+    this.outerAuthorsKey = authorsKey;
+    this.outerAuthors = authors;
+
+    if (authors.length === 0) return;
+
+    if (!this.nostrSubscribe) {
+      for (const filter of buildMessageAuthorSubscriptionFilters(addedAuthors).filters) this.startOuterBackfill(filter.authors ?? []);
+      return;
+    }
+
+    try {
+      const close: (() => void)[] = [];
+      this.outerUnsubscribe = () => close.forEach(unsubscribe => unsubscribe());
+      for (const filter of filters) {
+        close.push(this.nostrSubscribe(filter, event => {
+          void this.handleOuterEvent(event).catch(error => this.reportError(error, {
+            operation: "handleOuterEvent", senderEventPubkey: event.pubkey, eventId: event.id,
+          }));
+        }));
+      }
+      for (const filter of buildMessageAuthorSubscriptionFilters(addedAuthors).filters) this.startOuterBackfill(filter.authors ?? []);
+    } catch (error) {
+      this.outerUnsubscribe?.();
+      this.outerAuthorsKey = "";
+      this.outerAuthors = [];
+      this.reportError(error, { operation: "syncOuterSubscription" });
+    }
   }
 }

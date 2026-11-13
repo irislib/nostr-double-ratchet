@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## Rust 0.0.179 / TypeScript 0.0.186 - 2026-11-13
+
+- Publish one anonymous sender-key event per ordinary group message and receive it by the authenticated sender's group author. Roster changes, key distribution, and repair remain pairwise. Group participants need updated clients.
+- Reuse sibling key and metadata handoffs after restart. Refresh sender-key distribution for new devices and rotate on known device removal. TypeScript hosts supply an anonymous group subscribe/fetch transport and can persist the exact outgoing signed event before network delivery.
+
 ## Rust 0.0.178 / TypeScript 0.0.185 - 2026-11-11
 
 - Subscribe to message authors in chunks. Both clients sent every sender

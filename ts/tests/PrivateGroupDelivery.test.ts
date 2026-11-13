@@ -5,7 +5,7 @@ import { InMemoryStorageAdapter } from '../src/StorageAdapter.js'
 
 const key = () => getPublicKey(generateSecretKey())
 describe('private group delivery', () => {
-  it('hands every group payload to recipient ratchets without a shared relay publication or subscription', async () => {
+  it('hands off one shared payload and keeps general-purpose subscriptions free of group authors', async () => {
     const alice = key(), bob = key(), device = key()
     const data = createGroupData('private', alice, [bob])
     const storage = new InMemoryStorageAdapter()
@@ -16,10 +16,10 @@ describe('private group delivery', () => {
       publishOuter,
       sendPairwise: async (recipient, rumor) => { deliveries.push({ recipient, rumor }) },
     })
-    expect(publishOuter).not.toHaveBeenCalled()
+    expect(publishOuter).toHaveBeenCalledTimes(1)
     const wakes = deliveries.filter(item => item.rumor.kind === 21113)
-    expect(wakes.map(item => item.recipient).sort()).toEqual([alice, bob].sort())
-    expect(wakes.every(item => JSON.parse(item.rumor.content).event.id === result.outer.id)).toBe(true)
+    expect(wakes).toHaveLength(0)
+    expect(publishOuter.mock.calls[0]![0].id).toBe(result.outer.id)
     const subscribe = vi.fn(() => () => {}), fetch = vi.fn(async () => [])
     const manager = new GroupManager({ ourOwnerPubkey: alice, ourDevicePubkey: device, storage, nostrSubscribe: subscribe, nostrFetch: fetch })
     await manager.upsertGroup(data)
@@ -39,7 +39,7 @@ describe('private group delivery recovery', () => {
     try {
       await receiver.upsertGroup({ ...data, members: [bob], admins: [bob] });
       const result = await sender.sendMessage('membership-gated', {
-        publishOuter: async () => { throw new Error('Shared publication forbidden') },
+        publishOuter: async () => {},
         sendPairwise: async (recipient, rumor) => { if (recipient === bob && rumor.kind === 10446) keys.push(rumor) },
       });
       expect(keys.length).toBeGreaterThan(0);
@@ -54,32 +54,18 @@ describe('private group delivery recovery', () => {
     } finally { receiver.destroy(); }
   });
 
-  it('persists all recipients before handoff and resumes only failed recipients after restart', async () => {
-    const { PrivateGroupDeliveryOutbox } = await import('../src/PrivateGroupDelivery.js')
-    const storage = new InMemoryStorageAdapter(), alice = key(), bob = key(), carol = key(), device = key()
-    const data = createGroupData('retry', alice, [bob, carol])
-    const sender = new Group({ data, ourOwnerPubkey: alice, ourDevicePubkey: device, storage })
-    const deliveries: string[] = []
-    const result = await sender.sendMessage('durable fanout', {
-      publishOuter: async () => { throw new Error('Shared publication forbidden') },
-      sendPairwise: async (recipient, rumor) => {
-        if (rumor.kind !== 21113) return
-        const pending = await storage.list(`v1/broadcast-channel/group/${data.id}/private-deliveries/`)
-        expect(pending).toHaveLength(1)
-        if (recipient === bob) throw new Error('queue unavailable')
-        deliveries.push(recipient)
-      },
-    })
-    expect(deliveries.sort()).toEqual([alice, carol].sort())
-    const restarted = new PrivateGroupDeliveryOutbox(storage,
-      `v1/broadcast-channel/group/${data.id}/private-deliveries/${device}`, data.id, device)
-    await restarted.flush(async (recipient, rumor) => {
-      expect(JSON.parse(rumor.content).event.id).toBe(result.outer.id)
-      deliveries.push(recipient)
-    }, data.members)
-    expect(deliveries.filter(recipient => recipient === bob)).toHaveLength(1)
-    expect(deliveries).toHaveLength(3)
-    expect(await storage.list(`v1/broadcast-channel/group/${data.id}/private-deliveries/`)).toEqual([])
+  it('reads historical private messages without resending stored private fanouts', async () => {
+    const storage = new InMemoryStorageAdapter(), alice = key(), bob = key(), device = key();
+    const data = createGroupData('retry', alice, [bob]);
+    const sender = new Group({data, ourOwnerPubkey: alice, ourDevicePubkey: device, storage});
+    const result = await sender.sendMessage('existing local history', {sendPairwise: async () => {}, publishOuter: async () => {}});
+    const oldKey = `v1/broadcast-channel/group/${data.id}/private-deliveries/${device}/${result.outer.id}`;
+    await storage.put(oldKey, {event:result.outer, recipients:[bob], innerEventId:result.inner.id});
+    const manager = new GroupManager({ourOwnerPubkey:alice, ourDevicePubkey:device, storage});
+    await manager.upsertGroup(data);
+    expect(await storage.get(oldKey)).toBeDefined();
+    expect(manager.getGroup(data.id)).toBeDefined();
+    manager.destroy();
   })
 
   it('cold previews authenticate the wrapped signer without consuming live keys', async () => {
@@ -89,7 +75,7 @@ describe('private group delivery recovery', () => {
     const receiver = new Group({ data, ourOwnerPubkey: bob, ourDevicePubkey: receiverDevice, storage })
     const sender = new Group({ data, ourOwnerPubkey: alice, ourDevicePubkey: device })
     const result = await sender.sendMessage('cold private preview', {
-      publishOuter: async () => { throw new Error('Shared publication forbidden') },
+      publishOuter: async () => {},
       sendPairwise: async (recipient, rumor) => {
         if (recipient === bob && rumor.kind !== 21113) await receiver.handleIncomingSessionEvent(rumor, alice, device)
       },
@@ -115,7 +101,7 @@ describe('private group delivery recovery', () => {
     await runtime.upsertGroup(data)
     const sender = new Group({ data, ourOwnerPubkey: alice, ourDevicePubkey: device })
     const result = await sender.sendMessage('await app persistence', {
-      publishOuter: async () => { throw new Error('Shared publication forbidden') },
+      publishOuter: async () => {},
       sendPairwise: async (recipient, rumor) => {
         if (recipient === bob && rumor.kind !== 21113)
           await runtime.getGroupManager()!.handleIncomingSessionEvent(rumor, alice, device)
@@ -177,21 +163,10 @@ it('replays a real ratchet group inbox after restart when the app commit previou
 })
 
 
-it('rejects an oversized group delivery before acknowledging an undeliverable fanout', async () => {
-  const alice = key(), bob = key(), device = key(), deliveries: number[] = []
-  const sender = new Group({data: createGroupData('size', alice, [bob]), ourOwnerPubkey: alice, ourDevicePubkey: device})
-  await expect(sender.sendMessage('x'.repeat(262144), {
-    publishOuter: async () => { throw new Error('Shared publication forbidden') },
-    sendPairwise: async (_recipient, rumor) => { deliveries.push(rumor.kind) },
-  })).rejects.toThrow('oversized')
-  expect(deliveries).not.toContain(21113)
-})
-
-
 it.each(['known', 'upsert', 'sync'] as const)('automatically commits queued ratchet group deliveries after %s readiness', async bootstrap => {
   const { MockRelay } = await import('./helpers/mockRelay.js')
   const { createRuntime } = await import('./helpers/runtime.js')
-  const { PRIVATE_GROUP_DELIVERY_KIND } = await import('../src/PrivateGroupDelivery.js')
+  const { PRIVATE_GROUP_DELIVERY_KIND, privateGroupDeliveryRumor } = await import('../src/PrivateGroupDelivery.js')
   const frames: string[] = [], requests: string[] = []
   class SerializedRelay extends MockRelay {
     override storeAndDeliver(event: Parameters<MockRelay['storeAndDeliver']>[0]) {
@@ -233,9 +208,10 @@ it.each(['known', 'upsert', 'sync'] as const)('automatically commits queued ratc
     let groupAuthor = ''
     for (let index = 0; index < 4; index++) {
       const result = await group.sendMessage(`delayed ${index}`, {
-        publishOuter: async () => { throw new Error('Shared publication forbidden') },
+        publishOuter: async () => {},
         sendPairwise: async (recipient, rumor) => { if (recipient === bob) held.push(structuredClone(rumor)) },
       })
+      held.push(privateGroupDeliveryRumor(result.outer, data.id, sender.getState().currentDevicePubkey!, bob, result.inner.id))
       groupAuthor = result.outer.pubkey
       expected.push({ id: result.inner.id, content: result.inner.content })
     }
@@ -275,6 +251,6 @@ it.each(['known', 'upsert', 'sync'] as const)('automatically commits queued ratc
         expect(event.tags.filter((tag: string[]) => tag[0] === 'p')).toHaveLength(event.kind === 1059 ? 1 : 0)
       }
     }
-    for (const request of requests) expect(JSON.parse(request)[2].authors ?? []).not.toContain(groupAuthor)
+    for (const request of requests) expect(JSON.parse(request)[2].authors ?? []).not.toContain(data.id)
   } finally { releaseCommit(); sender.close(); receiver.close() }
 })

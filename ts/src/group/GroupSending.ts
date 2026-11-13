@@ -4,8 +4,8 @@ import {
   type SenderKeyRepairRequest,
 } from "../SenderKeyRepair.js";
 import type { SenderKeyDistribution } from "../SenderKey.js";
-import { CHAT_MESSAGE_KIND, MESSAGE_EVENT_KIND, type Rumor } from "../types.js";
-import { PrivateGroupDeliveryOutbox } from "../PrivateGroupDelivery.js";
+import { CHAT_MESSAGE_KIND, MESSAGE_EVENT_KIND, type NostrPublish, type Rumor } from "../types.js";
+import { createNostrPublisher } from "../publishing.js";
 import { GroupSenderKeys } from "./GroupSenderKeys.js";
 import type { PairwiseSend, PublishOuter } from "../GroupChannel.js";
 
@@ -80,8 +80,7 @@ export abstract class GroupSending extends GroupSenderKeys {
   }
 
   /**
-   * Encrypt a group event locally, then deliver it separately through every recipient's ratchet.
-   * Persist fanout intent before handoff; the shared envelope never reaches a relay.
+   * Hand off one signed ciphertext after the sender chain and key distributions are durable.
    */
   async sendEvent(
     event: { kind: number; content: string; tags?: string[][] },
@@ -91,21 +90,36 @@ export abstract class GroupSending extends GroupSenderKeys {
       nowMs?: number;
     },
   ): Promise<{ outer: VerifiedEvent; inner: Rumor }> {
+    const nowMs = opts.nowMs ?? Date.now();
     const recipients = this.senderKeyRecipientOwnerPubkeys();
     this.assertCurrentRecipients(recipients);
     await this.init();
+    // Peer discovery can complete during the first distribution. No data has
+    // been handed off yet, so recompute the chain for the new device roster.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      this.assertCurrentRecipients(recipients);
+      const result = await this.prepareAndPublish(event, opts, nowMs, recipients);
+      if (result) return result;
+    }
+    throw new Error("Group devices are still changing; retry this send");
+  }
 
-    const nowMs = opts.nowMs ?? Date.now();
+  private async prepareAndPublish(
+    event: { kind: number; content: string; tags?: string[][] },
+    opts: {sendPairwise: PairwiseSend; publishOuter: PublishOuter},
+    nowMs: number,
+    recipients: string[],
+  ): Promise<{outer: VerifiedEvent; inner: Rumor} | undefined> {
     const nowSeconds = Math.floor(nowMs / 1000);
-
     const {
       senderEventSecretKey,
       senderEventPubkey,
       changed: senderEventKeysChanged,
     } = await this.ensureOurSenderEventKeys();
+    const devices = this.groupDevicePubkeys?.(recipients);
     let { state: senderKey, created: senderKeyCreated } =
       await this.ensureOurSenderKeyState(false);
-    if (!senderKeyCreated && !await this.senderKeyMatchesRecipients(senderKey, senderEventPubkey, recipients)) {
+    if (!senderKeyCreated && !await this.senderKeyMatchesRecipients(senderKey, senderEventPubkey, recipients, devices)) {
       ({ state: senderKey, created: senderKeyCreated } = await this.ensureOurSenderKeyState(true));
     }
 
@@ -117,12 +131,13 @@ export abstract class GroupSending extends GroupSenderKeys {
         senderEventPubkey,
         senderKey,
       );
-      await this.recordSenderKeyRepairSnapshot(dist, recipients);
+      await this.recordSenderKeyRepairSnapshot(dist, recipients, devices);
     }
 
     this.assertCurrentRecipients(recipients);
     await this.flushSenderKeyDistributions(opts.sendPairwise);
     this.assertCurrentRecipients(recipients);
+    if (devices && JSON.stringify(devices) !== JSON.stringify(this.groupDevicePubkeys?.(recipients))) return;
     const inner = this.buildGroupInnerRumor(nowSeconds, nowMs, event);
     const innerJson = JSON.stringify(inner);
     const outer = this.oneToMany.encryptToOuterEvent(
@@ -134,23 +149,14 @@ export abstract class GroupSending extends GroupSenderKeys {
 
     await this.saveSenderKeyState(this.ourDevicePubkey, senderKey);
     this.assertCurrentRecipients(recipients);
-    await this.privateDeliveryOutbox().enqueue(outer, recipients, inner.id);
-    await this.flushPrivateDeliveries(opts.sendPairwise);
-
+    if (devices && JSON.stringify(devices) !== JSON.stringify(this.groupDevicePubkeys?.(recipients))) {
+      return;
+    }
+    await createNostrPublisher(opts.publishOuter as NostrPublish, this.publicationOptions)(
+      outer, inner.id, {groupId: this.groupId(), groupSenderKey: true, groupMemberPubkeys: [...recipients].sort(), ...(devices && {groupDevicePubkeys: devices})},
+    );
 
     return { outer, inner };
-  }
-
-  private privateDeliveryOutbox(): PrivateGroupDeliveryOutbox {
-    return new PrivateGroupDeliveryOutbox(this.storage,
-      `${this.versionPrefix}/group/${this.groupId()}/private-deliveries/${this.ourDevicePubkey}`,
-      this.groupId(), this.ourDevicePubkey);
-  }
-
-  async flushPrivateDeliveries(sendPairwise: PairwiseSend): Promise<boolean> {
-    const members = this.senderKeyRecipientOwnerPubkeys();
-    if (!members.includes(this.ourOwnerPubkey)) return false;
-    return this.privateDeliveryOutbox().flush(sendPairwise, members);
   }
 
   /** Send a regular group chat message (kind 14). */

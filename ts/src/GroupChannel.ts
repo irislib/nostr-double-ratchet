@@ -32,6 +32,8 @@ export type PublishOuter = (
 ) => Promise<unknown>;
 
 export interface GroupOptions extends NostrPublisherOptions {
+  groupDevicePubkeys?: (owners: readonly string[]) => string[];
+  beforeConsume?: (event: GroupDecryptedEvent) => Promise<void>;
   data: GroupData;
   /** Owner pubkey for *this* device (group membership is expressed in owner pubkeys). */
   ourOwnerPubkey: string;
@@ -141,6 +143,10 @@ export class Group extends GroupSending {
     if (!senderDevicePubkey || !isHex32(senderDevicePubkey)) return [];
     if (isHex32(event.pubkey) && event.pubkey !== senderDevicePubkey) return [];
 
+    if (dist.senderEventPubkey && (dist.senderEventPubkey === senderDevicePubkey ||
+        dist.senderEventPubkey === this.ourDevicePubkey || this.isMemberOwnerPubkey(dist.senderEventPubkey))) return [];
+    const bound = dist.senderEventPubkey && this.senderEventToDevice.get(dist.senderEventPubkey);
+    if (bound && bound !== senderDevicePubkey) return [];
     // Persist sender->owner mapping (for UI attribution).
     this.senderDeviceToOwner.set(senderDevicePubkey, fromOwnerPubkey);
     await this.storage.put(
@@ -313,10 +319,6 @@ export class Group extends GroupSending {
       return null;
     }
 
-    await this.saveSenderKeyState(senderDevicePubkey, nextState);
-    if (needsReceivedKeyHint) {
-      await this.rememberReceivedSenderKeyPreference(senderDevicePubkey, keyId);
-    }
 
     const senderOwnerPubkey =
       this.senderDeviceToOwner.get(senderDevicePubkey) ||
@@ -332,7 +334,7 @@ export class Group extends GroupSending {
       senderDevicePubkey,
     });
 
-    return {
+    const decrypted = {
       groupId: this.groupId(),
       senderEventPubkey,
       senderDevicePubkey,
@@ -346,5 +348,9 @@ export class Group extends GroupSending {
       messageNumber,
       inner,
     };
+    await this.beforeConsume?.(decrypted);
+    await this.saveSenderKeyState(senderDevicePubkey, nextState);
+    if (needsReceivedKeyHint) await this.rememberReceivedSenderKeyPreference(senderDevicePubkey, keyId);
+    return decrypted;
   }
 }

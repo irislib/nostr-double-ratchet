@@ -56,6 +56,17 @@ export interface SendMessageOptions extends ExpirationOptions {
 }
 
 export class SessionManager extends SessionManagerInvites {
+  /** Canonical local audience for binding a group send to known AppKeys device rosters. */
+  groupDevicePubkeys(owners: readonly string[]): string[] {
+    const devices = new Set<string>();
+    for (const owner of owners) {
+      for (const entry of this.userRecords.get(owner)?.appKeys?.getAllDevices() ?? []) {
+        devices.add(entry.identityPubkey);
+      }
+    }
+    return [...devices].sort();
+  }
+
   static createForRuntime(
     ourPublicKey: string,
     identityKey: IdentityKey,

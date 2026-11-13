@@ -203,6 +203,7 @@ export abstract class GroupSenderKeys extends GroupState {
   protected async recordSenderKeyRepairSnapshot(
     dist: SenderKeyDistribution,
     recipients: string[],
+    devicePubkeys = this.groupDevicePubkeys?.(recipients),
   ): Promise<void> {
     const uniqueRecipients = Array.from(new Set(recipients));
     const snapshots = await this.loadSenderKeyRepairSnapshots(
@@ -220,6 +221,7 @@ export abstract class GroupSenderKeys extends GroupState {
       keyId: dist.keyId >>> 0,
       distribution: { ...dist },
       recipients: uniqueRecipients,
+      devicePubkeys,
       pendingRecipients: uniqueRecipients,
     });
     await this.saveSenderKeyRepairSnapshots(this.ourDevicePubkey, snapshots);
@@ -329,6 +331,7 @@ export abstract class GroupSenderKeys extends GroupState {
     senderKey: SenderKeyState,
     senderEventPubkey: string,
     recipients: string[],
+    devices?: string[],
   ): Promise<boolean> {
     const snapshots = await this.loadSenderKeyRepairSnapshots(this.ourDevicePubkey);
     const distributions = snapshots.filter((snapshot) =>
@@ -344,6 +347,8 @@ export abstract class GroupSenderKeys extends GroupState {
       return snapshot.keyId === senderKey.keyId &&
         snapshot.distribution.keyId === senderKey.keyId &&
         snapshot.distribution.groupId === this.groupId() &&
+        (!devices || (snapshot.devicePubkeys !== undefined &&
+          snapshot.devicePubkeys.length === devices.length && devices.every((pk,i) => snapshot.devicePubkeys?.[i] === pk))) &&
         audience.size === recipients.length && recipients.every((recipient) => audience.has(recipient));
     });
   }

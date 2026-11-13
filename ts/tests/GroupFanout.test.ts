@@ -110,7 +110,7 @@ describe("group pairwise fanout", () => {
       const rumorIds = new Set(distributions.map(event => event.id));
       expect(rumorIds.size).toBe(1);
       const keyPublications = published.filter(event => event.id !== sent.outer.id && event.kind === 1060);
-      expect(keyPublications).toHaveLength(2 * (clients.length - 1));
+      expect(keyPublications).toHaveLength(clients.length - 1);
       expect(publishedInnerIds).toContain(sent.inner.id);
       for (const outer of keyPublications) {
         expect(outer.tags.map(tag => tag[0])).toEqual(["v", "header"]);

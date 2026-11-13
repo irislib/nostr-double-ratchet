@@ -107,6 +107,8 @@ export abstract class NdrRuntimeCore {
     this.sessionStorage = options.sessionStorage || this.storage;
     this.groupStorage = options.groupStorage || this.sessionStorage;
     this.groupController = new SessionGroupRuntime({
+      nostrGroupSubscribe: options.nostrGroupSubscribe,
+      nostrGroupFetch: options.nostrGroupFetch,
       nostrSubscribe: this.nostrSubscribe,
       nostrPublish: this.nostrPublish,
       nostrFetch: this.nostrFetch,

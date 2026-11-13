@@ -73,6 +73,9 @@ export abstract class GroupManagerState {
 
   protected outerUnsubscribe: Unsubscribe | null = null;
 
+  protected readonly groupDevicePubkeys: GroupManagerOptions["groupDevicePubkeys"];
+  protected readonly beforeConsume: GroupManagerOptions["beforeConsume"];
+  protected readonly onUnreadyDistribution: GroupManagerOptions["onUnreadyDistribution"];
   protected outerAuthorsKey = "";
 
   protected outerAuthors: string[] = [];
@@ -94,8 +97,11 @@ export abstract class GroupManagerState {
     this.ourDevicePubkey = opts.ourDevicePubkey;
     this.storage = opts.storage || new InMemoryStorageAdapter();
     this.oneToMany = opts.oneToMany || OneToManyChannel.default();
-    this.nostrSubscribe = opts.nostrSubscribe;
-    this.nostrFetch = opts.nostrFetch;
+    this.groupDevicePubkeys = opts.groupDevicePubkeys;
+    this.beforeConsume = opts.beforeConsume;
+    this.onUnreadyDistribution = opts.onUnreadyDistribution;
+    this.nostrSubscribe = opts.nostrGroupSubscribe;
+    this.nostrFetch = opts.nostrGroupFetch;
     this.onDecryptedEvent = opts.onDecryptedEvent;
     this.onError = opts.onError;
     this.suppressLocalDeviceEcho = opts.suppressLocalDeviceEcho ?? true;
@@ -128,6 +134,8 @@ export abstract class GroupManagerState {
           ourDevicePubkey: this.ourDevicePubkey,
           storage: this.storage,
           oneToMany: this.oneToMany,
+          beforeConsume: this.beforeConsume,
+          groupDevicePubkeys: this.groupDevicePubkeys,
         });
         this.groups.set(groupId, group);
       } else {

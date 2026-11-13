@@ -8,7 +8,7 @@ import {
   GROUP_SENDER_KEY_DISTRIBUTION_KIND,
   GROUP_SENDER_KEY_REPAIR_REQUEST_KIND,
 } from "./Group.js";
-import { parseSenderKeyRepairRequestRumor, senderKeyRepairDefaultNextRetryAt } from "./SenderKeyRepair.js";
+import { buildSenderKeyRepairRequestRumor, parseSenderKeyRepairRequestRumor, senderKeyRepairDefaultNextRetryAt } from "./SenderKeyRepair.js";
 import {
   classifyMessageOrigin,
   isCrossDeviceSelfOrigin,
@@ -42,6 +42,8 @@ export interface RuntimeGroupEvent {
 }
 
 interface SessionGroupRuntimeSharedOptions extends NostrPublisherOptions {
+  nostrGroupSubscribe?: NostrSubscribe;
+  nostrGroupFetch?: NostrFetch;
   nostrSubscribe: NostrSubscribe;
   nostrPublish: NostrPublish;
   nostrFetch?: NostrFetch;
@@ -66,7 +68,7 @@ export type SessionGroupRuntimeOptions =
   | SessionGroupRuntimeDeferredOptions;
 
 export class SessionGroupRuntime {
-  private readonly nostrSubscribe: NostrSubscribe;
+  private readonly nostrSubscribe?: NostrSubscribe;
   private readonly nostrPublish: NostrPublish;
   private readonly nostrFetch?: NostrFetch;
   private readonly groupStorage: StorageAdapter;
@@ -82,7 +84,6 @@ export class SessionGroupRuntime {
   private sessionManager: SessionManager | null = null;
   private sessionBridgeCleanup: Unsubscribe | null = null;
   private privateDeliveryCleanup: Unsubscribe | null = null;
-  private deliveryRetryTimer?: ReturnType<typeof setTimeout>;
   private readonly committingPrivateEvents = new Set<string>();
   private readonly keyRepairAttempts = new Map<string, { count: number; nextAt: number }>();
   private readonly groupEventCallbacks = new Set<
@@ -90,9 +91,9 @@ export class SessionGroupRuntime {
   >();
 
   constructor(options: SessionGroupRuntimeOptions) {
-    this.nostrSubscribe = options.nostrSubscribe;
+    this.nostrSubscribe = options.nostrGroupSubscribe;
     this.nostrPublish = createNostrPublisher(options.nostrPublish, options);
-    this.nostrFetch = options.nostrFetch;
+    this.nostrFetch = options.nostrGroupFetch;
     this.groupStorage = options.groupStorage || new InMemoryStorageAdapter();
     if ("sessionManager" in options) {
       this.sessionManager = options.sessionManager;
@@ -137,9 +138,25 @@ export class SessionGroupRuntime {
         ourOwnerPubkey: currentOwnerPubkey,
         ourDevicePubkey: currentDevicePubkey,
         storage: this.groupStorage,
-        nostrSubscribe: this.nostrSubscribe,
-        nostrFetch: this.nostrFetch,
+        nostrGroupSubscribe: this.nostrSubscribe,
+        nostrGroupFetch: this.nostrFetch,
+        groupDevicePubkeys: owners => sessionManager.groupDevicePubkeys?.(owners) ?? [],
+        beforeConsume: async event => {
+          if (this.committingPrivateEvents.has(event.outerEventId)) return;
+          if (!this.groupEventCallbacks.size) {
+            if (this.nostrSubscribe) throw new Error("Group delivery awaits application handler");
+            return; // An integration driving handleOuterEvent consumes the returned message.
+          }
+          await this.emitGroupEvent(event);
+        },
+        onUnreadyDistribution: async (groupId, owner, author) => {
+          if (this.groupManager !== groupManager || !this.allowKeyRepair(JSON.stringify([groupId, owner, author]))) return;
+          const request = {groupId, senderEventPubkey: author, createdAt: Math.floor(Date.now()/1000)};
+          const sessions = await this.waitForSessionManagerFn();
+          await sessions.sendEvent(owner, buildSenderKeyRepairRequestRumor(request, currentDevicePubkey), {includeLocalSiblings: false});
+        },
         onDecryptedEvent: (event) => {
+          if (event.outerEventId !== event.inner.id) return;
           if (!this.committingPrivateEvents.has(event.outerEventId)) void this.emitGroupEvent(event).catch(() => {});
         },
       });
@@ -242,7 +259,6 @@ export class SessionGroupRuntime {
     if (before !== manager.privateDeliveryReadiness(group.id) && this.groupManager === manager) {
       this.sessionManager?.notifyDurableSessionEventReadiness();
     }
-    await this.flushPrivateDeliveries();
   }
 
   async syncGroups(groups: GroupData[], ownerPubkey?: string): Promise<void> {
@@ -258,7 +274,6 @@ export class SessionGroupRuntime {
       if (!nextGroupIds.has(groupId)) manager.removeGroup(groupId);
     }
     if (readinessChanged && this.groupManager === manager) this.sessionManager?.notifyDurableSessionEventReadiness();
-    await this.flushPrivateDeliveries();
   }
 
   removeGroup(groupId: string): void {
@@ -295,7 +310,6 @@ export class SessionGroupRuntime {
       },
       publishOuter: this.nostrPublish,
     });
-    await this.flushPrivateDeliveries();
     return result;
   }
 
@@ -316,8 +330,6 @@ export class SessionGroupRuntime {
 
   close(): void {
     this.clearSessionBridge();
-    clearTimeout(this.deliveryRetryTimer);
-    this.deliveryRetryTimer = undefined;
     this.groupManager?.destroy();
     this.groupManager = null;
     this.groupManagerInitPromise = null;
@@ -382,27 +394,6 @@ export class SessionGroupRuntime {
 
   private async emitGroupEvent(event: GroupDecryptedEvent): Promise<void> {
     for (const callback of this.groupEventCallbacks) await callback(event);
-  }
-
-  private async flushPrivateDeliveries(): Promise<void> {
-    clearTimeout(this.deliveryRetryTimer);
-    this.deliveryRetryTimer = undefined;
-    const manager = this.groupManager;
-    if (!manager) return;
-    let pending = true;
-    try {
-      pending = await manager.flushPrivateDeliveries(async (recipient, rumor) => {
-        if (this.groupManager !== manager) throw new Error("Inactive group fanout");
-        const sessions = await this.waitForSessionManagerFn();
-        if (this.groupManager !== manager) throw new Error("Inactive group fanout");
-        await sessions.sendEvent(recipient, rumor, { includeLocalSiblings: false });
-      });
-    } finally {
-      if (pending && this.groupManager === manager) {
-        this.deliveryRetryTimer = setTimeout(() => { void this.flushPrivateDeliveries().catch(() => {}); }, 5000);
-        this.deliveryRetryTimer.unref?.();
-      }
-    }
   }
 
   private async processPrivateDelivery(rumor: Rumor, senderOwnerPubkey: string): Promise<void> {

@@ -6,6 +6,7 @@ export interface SenderKeyRepairSnapshot {
   recipients: string[];
   /** Recipients whose key distribution has not reached the durable pairwise queue. */
   pendingRecipients?: string[];
+  devicePubkeys?: string[];
 }
 
 export function randomU32(): number {

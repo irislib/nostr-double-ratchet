@@ -3,7 +3,6 @@ import { finalizeEvent, generateSecretKey, getPublicKey, type VerifiedEvent } fr
 import { buildGroupRosterFactEvent, createGroupData } from '../src/Group.js'
 import { MockRelay } from './helpers/mockRelay.js'
 import { createRuntime } from './helpers/runtime.js'
-import { privateGroupDeliveryRumor } from '../src/PrivateGroupDelivery.js'
 import type { Rumor } from '../src/types.js'
 
 it('automatically repairs a new member key rejected before the admin membership update arrives', async () => {
@@ -65,7 +64,7 @@ it('automatically repairs a new member key rejected before the admin membership 
     const message = await newcomer!.sendGroupMessage(updated.id, 'sent before the membership arrives')
     const inbox = () => [...receiver!.getSessionUserRecords().values()].flatMap(record => [...record.pendingDurableEvents.values()])
     await vi.waitFor(() => expect(controls).toContain(10446), { timeout: 500 })
-    await vi.waitFor(() => expect(inbox()).toHaveLength(1), { timeout: 500 })
+    expect(inbox()).toHaveLength(0)
     expect(receiver!.getGroupManager()!.groupForSenderEvent(message.outer.pubkey)).toBeUndefined()
     expect(committed.size).toBe(0)
     expect(repairs).toHaveLength(0)
@@ -77,12 +76,10 @@ it('automatically repairs a new member key rejected before the admin membership 
     expect(repairs).toHaveLength(1)
     expect(controls.filter(kind => kind === 10446)).toHaveLength(2)
     // Retries preserve canonical message identity and do not cause key-response loops.
-    await newcomer!.sendEvent(bob!, privateGroupDeliveryRumor(message.outer, updated.id,
-      newcomer!.getState().currentDevicePubkey!, bob!))
+    relay.storeAndDeliver(message.outer)
     await receiver!.sendEvent(carol!, repairs[0]!)
-    await vi.waitFor(() => expect(commits).toBe(2), { timeout: 500 })
-    await vi.waitFor(() => expect(inbox()).toHaveLength(0), { timeout: 500 })
     await new Promise(resolve => setTimeout(resolve, 100))
+    expect(commits).toBe(1)
     expect(committed.size).toBe(1)
     expect(controls.filter(kind => kind === 10446)).toHaveLength(2)
     const identities = [...secrets.map(getPublicKey), ...runtimes.map(runtime => runtime.getState().currentDevicePubkey!)]
@@ -95,6 +92,6 @@ it('automatically repairs a new member key rejected before the admin membership 
         expect(event.tags.filter((tag: string[]) => tag[0] === 'p')).toHaveLength(event.kind === 1059 ? 1 : 0)
       }
     }
-    for (const request of requests) expect(JSON.parse(request)[2].authors ?? []).not.toContain(message.outer.pubkey)
+    expect(requests.some(frame => JSON.parse(frame)[2].authors?.includes(message.outer.pubkey))).toBe(true)
   } finally { for (const runtime of runtimes) runtime.close() }
 })

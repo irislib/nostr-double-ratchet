@@ -4,8 +4,8 @@ import type { NostrPublishContext, NostrPublishError } from "./types.js";
 import { hasMetadataPrivacyVersion } from "./metadataPrivacy.js";
 import { isForbiddenGroupRelayEvent } from "./publishing.js";
 
-function requiresPrivacyUpgrade(event: VerifiedEvent): boolean {
-  return isForbiddenGroupRelayEvent(event) || ((event.kind === 1059 || event.kind === 1060) && !hasMetadataPrivacyVersion(event));
+function requiresPrivacyUpgrade(event: VerifiedEvent, context?: NostrPublishContext): boolean {
+  return isForbiddenGroupRelayEvent(event, context) || ((event.kind === 1059 || event.kind === 1060) && !hasMetadataPrivacyVersion(event));
 }
 
 export interface PersistentNostrPublication {
@@ -85,7 +85,7 @@ export function createPersistentNostrOutbox(options: PersistentNostrOutboxOption
   async function enqueue(event: VerifiedEvent, innerEventId?: string, context?: NostrPublishContext) {
     assertOpen();
     if (!event.id || !event.sig) throw new Error("Cannot queue an unsigned event");
-    if (requiresPrivacyUpgrade(event)) throw new Error("Publication requires a new private handshake");
+    if (requiresPrivacyUpgrade(event, context)) throw new Error("Publication requires a new private handshake");
     const key = prefix + event.id;
     const existing = enqueuing.get(key);
     if (existing) return existing;
@@ -126,7 +126,7 @@ export function createPersistentNostrOutbox(options: PersistentNostrOutboxOption
         row = await options.storage.get<PersistentNostrPublication>(key);
         assertOpen();
         if (!row) { keys.delete(key); throw new Error("Outbox envelope is missing"); }
-        if (requiresPrivacyUpgrade(row.event)) {
+        if (requiresPrivacyUpgrade(row.event, row.context)) {
           // Preserve the original ciphertext for the host to inspect or replace.
           // It must neither reach the relay nor spin in the automatic retry loop.
           blocked.add(key);

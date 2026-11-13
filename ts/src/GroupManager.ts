@@ -10,7 +10,6 @@ import { type SenderKeyDistribution } from "./SenderKey.js";
 import { type StorageAdapter } from "./StorageAdapter.js";
 import { type NostrFetch, type NostrSubscribe, type Rumor } from "./types.js";
 import { GroupManagerBackfill } from "./group-manager/GroupManagerBackfill.js";
-import { isHex32 } from "./group-manager/groupManagerInternals.js";
 
 export interface GroupManagerErrorContext {
   operation:
@@ -29,11 +28,16 @@ export interface GroupManagerErrorContext {
 }
 
 export interface GroupManagerOptions {
+  groupDevicePubkeys?: (owners: readonly string[]) => string[];
+  beforeConsume?: (event: GroupDecryptedEvent) => Promise<void>;
+  onUnreadyDistribution?: (groupId: string, owner: string, author: string) => Promise<void>;
   ourOwnerPubkey: string;
   ourDevicePubkey: string;
   suppressLocalDeviceEcho?: boolean;
   storage?: StorageAdapter;
   oneToMany?: OneToManyChannel;
+  nostrGroupSubscribe?: NostrSubscribe;
+  nostrGroupFetch?: NostrFetch;
   nostrSubscribe?: NostrSubscribe;
   nostrFetch?: NostrFetch;
   onDecryptedEvent?: (event: GroupDecryptedEvent) => void;
@@ -74,6 +78,8 @@ export interface CreateGroupResult {
 }
 
 export class GroupManager extends GroupManagerBackfill {
+  private readonly rejectedAuthors = new Map<string, {groupId:string; owner:string; author:string}>();
+
   /** Local receive readiness only; display metadata cannot release an inbox row. */
   privateDeliveryReadiness(groupId: string): string | undefined {
     const group = this.groups.get(groupId);
@@ -101,14 +107,6 @@ export class GroupManager extends GroupManagerBackfill {
     return id ? this.getGroup(id) : undefined;
   }
 
-  async flushPrivateDeliveries(sendPairwise: PairwiseSend): Promise<boolean> {
-    return this.enqueueOperation(async () => {
-      let pending = false;
-      for (const group of this.groups.values()) pending = await group.flushPrivateDeliveries(sendPairwise) || pending;
-      return pending;
-    });
-  }
-
   protected async handleIncomingSessionEventForKnownGroup(
     groupId: string,
     group: Group,
@@ -117,39 +115,27 @@ export class GroupManager extends GroupManagerBackfill {
     fromSenderDevicePubkey?: string,
     distribution?: SenderKeyDistribution | null,
   ): Promise<GroupDecryptedEvent[]> {
+    if (distribution?.senderEventPubkey && fromSenderDevicePubkey && event.pubkey === fromSenderDevicePubkey &&
+        !group.data.members.includes(fromOwnerPubkey)) {
+      const entry = {groupId, owner: fromOwnerPubkey, author: distribution.senderEventPubkey};
+      this.rejectedAuthors.set(JSON.stringify(entry), entry);
+      if (this.rejectedAuthors.size > 128) this.rejectedAuthors.delete(this.rejectedAuthors.keys().next().value!);
+    }
     const drainedFromGroup = await group.handleIncomingSessionEvent(
       event,
       fromOwnerPubkey,
       fromSenderDevicePubkey,
     );
 
-    const drainedFromManagerQueue: GroupDecryptedEvent[] = [];
-    if (
-      distribution?.senderEventPubkey &&
-      isHex32(distribution.senderEventPubkey)
-    ) {
-      this.bindSenderEventToGroup(groupId, distribution.senderEventPubkey);
-      const drained = await this.drainPendingOuterForSenderEvent(
-        distribution.senderEventPubkey,
-        group,
-      );
-      drainedFromManagerQueue.push(...drained);
-    }
-
     await this.refreshGroupSenderMappings(groupId);
+    const drainedFromManagerQueue = distribution?.senderEventPubkey &&
+      this.senderEventToGroup.get(distribution.senderEventPubkey) === groupId
+      ? await this.drainPendingOuterForSenderEvent(distribution.senderEventPubkey, group)
+      : [];
+
     await this.syncOuterSubscription();
 
     return [...drainedFromGroup, ...drainedFromManagerQueue];
-  }
-
-  protected bindSenderEventToGroup(
-    groupId: string,
-    senderEventPubkey: string,
-  ): void {
-    this.senderEventToGroup.set(senderEventPubkey, groupId);
-    const current = this.groupToSenderEvents.get(groupId) || new Set<string>();
-    current.add(senderEventPubkey);
-    this.groupToSenderEvents.set(groupId, current);
   }
 
   protected async refreshGroupSenderMappings(groupId: string): Promise<void> {
@@ -181,6 +167,11 @@ export class GroupManager extends GroupManagerBackfill {
     }
 
     this.groupToSenderEvents.set(groupId, next);
+    for (const [key, hint] of this.rejectedAuthors) {
+      if (hint.groupId !== groupId || !group.data.members.includes(hint.owner)) continue;
+      if (!next.has(hint.author)) await this.onUnreadyDistribution?.(groupId, hint.owner, hint.author);
+      this.rejectedAuthors.delete(key);
+    }
   }
 
   protected queuePendingOuter(

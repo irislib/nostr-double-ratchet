@@ -20,6 +20,8 @@ export abstract class GroupState {
 
   protected readonly storage: StorageAdapter;
 
+  protected readonly groupDevicePubkeys: GroupOptions["groupDevicePubkeys"];
+  protected readonly beforeConsume: GroupOptions["beforeConsume"];
   protected readonly publicationOptions: NostrPublisherOptions;
 
   protected readonly oneToMany: OneToManyChannel;
@@ -45,6 +47,8 @@ export abstract class GroupState {
     this.memberOwnerPubkeys = [...opts.data.members];
     this.storage = opts.storage || new InMemoryStorageAdapter();
     this.publicationOptions = opts;
+    this.groupDevicePubkeys = opts.groupDevicePubkeys;
+    this.beforeConsume = opts.beforeConsume;
     this.oneToMany = opts.oneToMany || OneToManyChannel.default();
     // Storage namespace shared with the earlier BroadcastChannel prototype for compatibility.
     this.versionPrefix = `v${this.storageVersion}/broadcast-channel`;
@@ -66,7 +70,9 @@ export abstract class GroupState {
   async listSenderEventPubkeys(): Promise<string[]> {
     await this.init();
     await this.purgeInactiveSenders();
-    return Array.from(new Set(this.senderDeviceToEvent.values()));
+    if (!this.isMemberOwnerPubkey(this.ourOwnerPubkey)) return [];
+    return Array.from(new Set(this.senderDeviceToEvent.values())).filter(key =>
+      !this.memberOwnerPubkeys.includes(key) && key !== this.ourDevicePubkey && !this.senderDeviceToEvent.has(key));
   }
 
   async getSenderEventPubkeyForDevice(

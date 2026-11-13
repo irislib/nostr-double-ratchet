@@ -150,6 +150,7 @@ it("initializes, registers, sends direct and group messages while every relay AC
     const contexts = new Map<string, NostrPublishContext | undefined>()
     const runtime = new NdrRuntime({
       nostrSubscribe: (filter, onEvent) => relay.subscribe(filter, onEvent).close,
+      nostrGroupSubscribe: (filter, onEvent) => relay.subscribe(filter, onEvent).close,
       nostrSign: async (event) => finalizeEvent(event, secret),
       nostrEnqueue: async (event, _innerEventId, context) => { enqueued.push(event.id); contexts.set(event.id, context) },
       nostrPublish: async (event) => {
@@ -186,7 +187,7 @@ it("initializes, registers, sends direct and group messages while every relay AC
     bob.runtime.onGroupEvent((event) => { groups.push(event.inner.content) })
     const groupMessage = await alice.runtime.sendGroupMessage(created.group.id, "group without ACK")
     expect(groupMessage.inner.content).toBe("group without ACK")
-    expect(alice.contexts.has(groupMessage.outer.id)).toBe(false)
+    expect(alice.contexts.get(groupMessage.outer.id)).toMatchObject({groupId: created.group.id, groupSenderKey: true})
     expect([...alice.contexts.values()].filter(context => context?.groupId === created.group.id).length).toBeGreaterThanOrEqual(2)
     await vi.waitFor(() => expect(groups).toContain("group without ACK"))
     await alice.runtime.rotateInvite()

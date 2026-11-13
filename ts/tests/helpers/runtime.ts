@@ -62,6 +62,7 @@ export const createRuntime = (options: {
 
   return new NdrRuntime({
     nostrSubscribe: createSubscribe(relay),
+    nostrGroupSubscribe: createSubscribe(relay),
     nostrPublish: publish,
     storage,
     appKeysFastTimeoutMs: 25,

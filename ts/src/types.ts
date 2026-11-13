@@ -80,7 +80,7 @@ export type IdentityKey = Uint8Array | { encrypt: EncryptFunction; decrypt: Decr
 
 /** Local publication policy metadata; never added to the signed wire event. */
 export type NostrPublishContext =
-  | { groupId: string; recipientOwnerPubkey?: never; createdAt?: never }
+  | { groupId: string; groupSenderKey?: true; groupMemberPubkeys?: string[]; groupDevicePubkeys?: string[]; recipientOwnerPubkey?: never; createdAt?: never }
   | { groupId?: string; recipientOwnerPubkey: string; createdAt: number };
 
 export type NostrPublish = (
