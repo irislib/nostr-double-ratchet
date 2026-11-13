@@ -1,5 +1,20 @@
 # MDK and NDR under relay failures
 
+## Follow-up on linked-device control traffic
+
+A sender-key distribution used to trigger two independent pairwise deliveries to a linked device. The device needed the newly learned sender key, while the accompanying roster was unchanged. Iris Chat Protocol 0.3.19 forwards only the key in that case. A real roster edit still forwards the updated roster, and duplicate key input produces no new forward. This change requires no new on-wire fields, group version, or device advertisement.
+
+| Five accounts, two devices each | Previous KiB/send | New KiB/send | MDK KiB/send | Previous retained | New retained |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Fixed membership | 5.06 | 3.74 | 1.15 | 9,000/9,000 | 9,000/9,000 |
+| Two sequential membership edits | 39.95 | 32.43 | 1.30 | 8,254/8,570 | 8,256/8,570 |
+
+Five seeds were repeated in each row with the same scorer and attribution. The fixed group submitted one 1.20 KiB signed data event per send across all runs. The rest of its new 3.74 KiB average consisted of 1.12 KiB triggered by receipt of remote sender keys, 0.90 KiB of other pairwise send-path traffic and 0.51 KiB of invite responses (rounded). Receive-triggered control publications fell from 1,106 to 552 across the 1,000 scheduled sends. With membership edits, the remote-key receive cost fell from 13.23 to 6.05 KiB/send. Retries still contributed 16.03 KiB/send; the initial edit itself is only part of the delivery cost. Both edit runs observed 13 reads after a scheduled removal while the sender still included that account, and zero while the sender excluded it. [Before](results/2026-11-13-linked-device-before.jsonl), [after](results/2026-11-13-linked-device-after.jsonl) and [matching MDK evidence](results/2026-11-13-mdk.jsonl).
+
+Three additional seeds tested ten accounts with two devices each. With fixed membership, both versions delivered 11,400/11,400 copies and traffic fell from 19.80 to 12.67 KiB/send. With competing admin edits, mean traffic fell from 405.98 to 349.84 KiB/send, while retained delivery fell from 8,330 to 8,141 of 9,976. Reads outside the requested roster while the sender still listed the account rose from 283 to 745, concentrated in two seeds. Neither recorded a read with that account excluded by the sender. The three-seed stress result is a reason to investigate convergence before deploying to groups where competing admin edits are frequent. No benchmark demonstrates a general reliability win.
+
+A single authenticated sender-key message could communicate an edit to devices that already have the key. Newly admitted devices still need authenticated bootstrap material. After removal, anyone holding the old chain can decrypt updates distributed under that chain, so fresh chain secrets must reach the remaining authorized devices through a channel the removed device cannot read. This benchmark retains the existing pairwise membership and key protocol. It measures the removal of a redundant forward.
+
 ## November 13 single-publication group upgrade
 
 Each accepted group send produced exactly one signed shared data event in the upgraded Iris protocol engine. The simulator checks this at the send boundary and counts both the data and the private control traffic submitted to relays. All groups use the same path. Contacts, membership updates and sender-key distribution continue over private sessions. Older clients need an update to read newly published group messages. A closed browser can catch up on reopen; these messages do not wake it through the old per-device push path.

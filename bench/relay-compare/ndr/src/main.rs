@@ -480,7 +480,16 @@ impl NdrSim {
                 Ok(outcome) => {
                     if outcome.consumed || !outcome.events.is_empty() || !outcome.effects.is_empty() {
                         self.handle_group_events(dev, outcome.events, out);
-                        self.publish(outcome.effects, "ndr_group_control_1060", out);
+                        let cause = match (&command, from_sibling) {
+                            (Some(GroupPairwiseCommand::SenderKeyDistribution { .. }), false) => "on_remote_distribution",
+                            (Some(GroupPairwiseCommand::SenderKeyDistribution { .. }), true) => "on_sibling_distribution",
+                            (Some(GroupPairwiseCommand::MetadataSnapshot { .. }), false) => "on_remote_metadata",
+                            (Some(GroupPairwiseCommand::MetadataSnapshot { .. }), true) => "on_sibling_metadata",
+                            (Some(GroupPairwiseCommand::SenderKeyRepairRequest { .. }), _) => "on_repair_request",
+                            _ => "on_other_control",
+                        };
+                        out.count(cause, 1);
+                        self.publish(outcome.effects, cause, out);
                         if !from_sibling {
                             if let Some(GroupPairwiseCommand::SenderKeyDistribution { distribution }) = command
                             {

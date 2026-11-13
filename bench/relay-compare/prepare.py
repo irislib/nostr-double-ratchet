@@ -14,6 +14,7 @@ NDR = "b062debb55502033fc59804dcc94025f49f82547"
 IRIS = "a721434ba675ba0c1e3300afa0e75677c7167446"
 RELEASE_NDR = "ecc81c4e1fe73fb84c520fbc1b7d31fd9fc90185"
 RELEASE_IRIS = "6a989bb8010013ae85330a1f22f99698c44c196f"
+CONTROL_IRIS = "8265422e6353d6308c9740c7e7323d52314656e6"
 MDK = "6f6d2017de1f2cc595cc10da9d575f3aa16cb21e"
 
 
@@ -39,8 +40,9 @@ def main():
     version = parser.add_mutually_exclusive_group()
     version.add_argument("--baseline", action="store_true", help="prepare the per-device NDR comparison build")
     version.add_argument("--release", action="store_true", help="use the pinned 0.0.179 / 0.3.18 sources")
+    version.add_argument("--control-fix", action="store_true", help="prepare the linked-device forwarding fix")
     args = parser.parse_args()
-    if (args.baseline or args.release) and args.engine != "ndr":
+    if (args.baseline or args.release or args.control_fix) and args.engine != "ndr":
         parser.error("version selection applies only to NDR")
     dest = args.output.resolve()
     dest.mkdir(parents=True, exist_ok=True)
@@ -60,12 +62,12 @@ def main():
                        cwd=dest / "mdk", check=True)
         return
     ndr, iris = (BASELINE_NDR, BASELINE_IRIS) if args.baseline else (NDR, IRIS)
-    if args.release:
-        ndr, iris = RELEASE_NDR, RELEASE_IRIS
+    if args.release or args.control_fix:
+        ndr, iris = RELEASE_NDR, CONTROL_IRIS if args.control_fix else RELEASE_IRIS
     archive(HERE.parents[1], ndr, dest / "ndr", "rust")
     archive(os.getenv("IRIS_REPO", HERE.parents[2] / "iris-chat-rs"), iris, dest / "iris", "chat-protocol")
     shutil.copytree(HERE / "ndr", dest / "sim-ndr")
-    if args.release:
+    if args.release or args.control_fix:
         # Both are local path dependencies. All registry and Git packages retain their pins.
         lock = dest / "sim-ndr/Cargo.lock"
         replace(lock, 'name = "iris-chat-protocol"\nversion = "0.3.17"',

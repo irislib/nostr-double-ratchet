@@ -20,6 +20,8 @@ python3 compare.py /tmp/ndr-results /tmp/compare-mdk/results all
 cargo +1.99.0 test --locked --manifest-path simnet/Cargo.toml
 ```
 
+To repeat the linked-device control comparison, use `prepare.py ndr BEFORE --release` and `prepare.py ndr AFTER --control-fix`. Build each with `--features group-broadcast`, run `small small-edits --seeds 1 2 3 4 5` and `race static2 --seeds 1 2 3` on each binary, and compare with `compare.py AFTER_RESULTS BEFORE_RESULTS small-edits --previous-ndr`. The control-fix pin contains the implementation tested for Iris Chat Protocol 0.3.19. Both adapters label new publications by the input callback that emitted them, including a remote key distribution, real roster update, or repair request. The labels are simulator accounting only.
+
 To reproduce the additional app-release check, run `prepare.py ndr OUTPUT --release`, use the same `--features group-broadcast` build command and run the `direct2 small small-edits busy` cases on seeds 1–5. This pairs NDR 0.0.179 with Iris Chat Protocol 0.3.18. The wider post-change matrix pins the two feature commits immediately before release preparation.
 
 For the November 13 per-device baseline, prepare a separate directory with `prepare.py ndr OUTPUT --baseline` and omit the `--features group-broadcast` build option. Compare the upgraded NDR and baseline with `compare.py NEW_NDR OLD_NDR all --previous-ndr`. That command also shows unique shared data publications submitted per scheduled send. The baseline still creates one inner ciphertext per message, then sends it only inside pairwise envelopes.
