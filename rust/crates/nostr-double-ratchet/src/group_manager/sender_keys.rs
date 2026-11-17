@@ -466,7 +466,12 @@ where
         }
         self.sender_event_index
             .insert(distribution.sender_event_pubkey, id);
-        record.latest_key_id = Some(distribution.key_id);
+        // A repair can replay several historical keys. Learning a new chain
+        // selects it for the next frontier probe. Replaying a known chain must
+        // not change that preference or trigger another linked-device forward.
+        if record.latest_key_id.is_none() || !record.states.contains_key(&distribution.key_id) {
+            record.latest_key_id = Some(distribution.key_id);
+        }
         let known = record.distribution_history.get(&distribution.key_id);
         match (known, record.states.get_mut(&distribution.key_id)) {
             (Some(known), Some(state)) => {

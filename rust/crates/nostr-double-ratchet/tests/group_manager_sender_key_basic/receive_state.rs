@@ -1,6 +1,51 @@
 use super::*;
 
 #[test]
+fn replay_of_known_sender_key_after_rotation_preserves_receiver_state() -> Result<()> {
+    let mut fixture = established_sender_key_fixture(53, 1_900_038_000)?;
+    let old = latest_sender_key_distribution(
+        &fixture.bob_groups,
+        &fixture.group_id,
+        fixture.alice.owner_pubkey,
+    );
+    let delayed = fixture.alice_groups.send_message(
+        &mut fixture.alice_manager,
+        &mut context(1_900_038_010, 1_900_038_010),
+        &fixture.group_id,
+        b"delayed before rotation".to_vec(),
+    )?;
+    let rotated_id = old.key_id.wrapping_add(1);
+    let rotated = SenderKeyDistribution {
+        key_id: rotated_id,
+        chain_key: [17; 32],
+        created_at: UnixSeconds(1_900_038_011),
+        ..old.clone()
+    };
+    install_sender_key_distribution(
+        &mut fixture.bob_groups,
+        &fixture.alice,
+        rotated,
+        1_900_038_011,
+    )?;
+    let before_replay = fixture.bob_groups.snapshot();
+    assert_eq!(before_replay.sender_keys[0].latest_key_id, Some(rotated_id));
+    let mut restored = GroupManager::from_snapshot(before_replay.clone())?;
+    install_sender_key_distribution(&mut restored, &fixture.alice, old, 1_900_038_012)?;
+    assert!(
+        restored.snapshot() == before_replay,
+        "a known historical key must not trigger a new linked-device forward"
+    );
+    let mut message = sender_key_message_from_envelope(&delayed.remote.sender_key_messages[0]);
+    message.encrypted_header = Some(String::new());
+    assert!(matches!(
+        restored.handle_sender_key_message(message)?,
+        GroupSenderKeyHandleResult::Event(GroupIncomingEvent::Message(received))
+            if received.body == b"delayed before rotation"
+    ));
+    Ok(())
+}
+
+#[test]
 fn sender_key_ignores_own_relay_echo_before_blind_decryption() -> Result<()> {
     for hidden_counter in [true, false] {
         let mut fixture = established_sender_key_fixture(54, 1_900_039_000)?;
