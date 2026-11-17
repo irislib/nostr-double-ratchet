@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## Rust 0.0.181 - 2026-11-18
+
+- Replaying a known group sender key after rotation keeps the receiver's preferred key. Linked devices avoid redundant key forwards and still receive earlier chain positions that unlock missed messages. This update uses the existing wire and storage formats.
+
 ## Rust 0.0.180 / TypeScript 0.0.187 - 2026-11-13
 
 - Direct a missing group sender-key request to its authenticated writing device when that device is still authorized by its owner's current roster. Unknown senders and requests for a missing group revision retain their existing recovery paths.
