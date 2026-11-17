@@ -1,5 +1,28 @@
 # MDK and NDR under relay failures
 
+## Replayed sender keys on linked Iris devices, November 18
+
+Iris Chat Protocol 0.3.21 forwards a newly learned group sender key to the receiver's linked devices. After a rotation, replaying an already-known key used to change which chain the Rust receiver tried first. Iris interpreted that state change as a reason to forward the key again. NDR now keeps its preferred chain on replay. An older distribution that unlocks previously unreadable history can still extend the chain and trigger a forward. The change uses the existing wire format, membership checks, storage format and private sessions.
+
+In a controlled Iris engine run, the receiver learned two successive keys and forwarded each once to its linked device. Receiving the same two keys again produced **two more signed envelopes (4,168 bytes) before the change and zero afterward**. The test enters at authenticated pairwise dispatch and checks the outgoing signatures and private device routing.
+
+| Five accounts, two devices each | Iris before | Iris after | MDK |
+| --- | ---: | ---: | ---: |
+| Fixed membership, published KiB/send | 3.74 | 3.74 | 1.15 |
+| Fixed membership, retained recipient copies | 9,000/9,000 | 9,000/9,000 | 9,000/9,000 |
+| Two sequential edits, published KiB/send | 17.85 | 14.24 | 1.30 |
+| Two sequential edits, relay upload KiB/send | 51.10 | 40.77 | 3.68 |
+| Two sequential edits, retained recipient copies | 96.23% | 96.44% | 97.76% |
+| Two sequential edits, online copies delivered within 60 seconds | 82.47% | 82.44% | 82.43% |
+
+The Iris runs used seeds 1–5, twice for the membership edits and once for fixed membership. In the edit workload, published bytes fell **20.2%** across 2,000 scheduled sends. The two repetitions measured 17.91 → 14.47 and 17.79 → 14.01 KiB/send. Publications triggered by remote key distributions fell from 5,932 to 2,508. Intended recipients retained 16,494/17,140 copies before and 16,530/17,140 after. MDK's archived five-seed run delivered 8,378/8,570 on those same schedules. These measurements cover the engines and simulated relays. [Matching MDK reports](results/2026-11-13-mdk.jsonl)
+
+**Removal timing matters.** Across the two Iris repetitions, reads by a removed account while the sender still listed it rose from 14 to 31. The entire difference occurred on seed 3. Neither build recorded a read by the removed account after the sender excluded it. The fewer publications also change which per-publication network draws each engine experiences. The benchmark cannot isolate the cause of the stale-roster difference.
+
+Five additional schedules (seeds 6–10) checked that observation. Both versions recorded zero post-removal reads. Traffic fell **13.4%**, from 12.16 to 10.53 KiB/send, and retained delivery fell from 8,807 to 8,797 of 8,946 owed copies. Bandwidth savings repeated on these schedules. The delivery differences across the two sets of seeds point in opposite directions.
+
+Iris Chat Protocol was pinned at `fa7ba3c6` for both builds. NDR changed from `1f2e2c01` to `54ba387a`. The scorer matched workload fingerprints and recipient obligations before comparing each pair. [Before](results/2026-11-18-key-replay-before.jsonl) · [After](results/2026-11-18-key-replay-after.jsonl) · [Before, repetition](results/2026-11-18-key-replay-before-repeat.jsonl) · [After, repetition](results/2026-11-18-key-replay-after-repeat.jsonl) · [Reproduction instructions](README.md#tracing-sender-key-repair)
+
 ## What was retried, and who received it?
 
 The November 13 five-account/two-device benchmark attributed 16.03 KiB per scheduled send to the protocol retry callback after two membership edits. To identify its contents, the simulator joined each submitted pairwise event to the synthetic plaintext passed to the real sender before encryption, the local destination device, and the retry stage. It reconciles the traced event count and byte total with the existing workload score for every seed. The extra uploads caused by the transport retrying a given signed event are counted separately in relay-upload bytes.

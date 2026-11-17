@@ -15,7 +15,7 @@ Marmot's additional rules should be distinguished from the underlying MLS standa
 See [NDR's group model](./README.md#group-messaging-model) and
 [Marmot's MLS profile][marmot-mls].
 
-The [November relay benchmark](bench/relay-compare/RESULTS.md) compares the implementations under the same requested membership and device outages. Its measurements use the revisions listed in the report.
+The relay benchmark compares the multi-device Iris Chat Protocol engine running NDR with MDK's Marmot conformance client. Both process the same scheduled sends, membership changes and outages. The report gives the tested revisions, delivery rates and bandwidth. [November relay benchmark](bench/relay-compare/RESULTS.md)
 
 ## Architecture
 

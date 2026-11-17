@@ -30,6 +30,19 @@ For the November 13 per-device baseline, prepare a separate directory with `prep
 
 ## Tracing sender-key repair
 
+To reproduce the historical-key replay comparison, pin Iris Chat Protocol 0.3.21 for both NDR revisions.
+
+```sh
+python3 prepare.py ndr /tmp/replay-before --ndr-rev 1f2e2c01d2bdf149a43e1c98e46ecc380d64daeb
+python3 prepare.py ndr /tmp/replay-after --ndr-rev 54ba387acfc5e216345465811dfba90c36c3c2b2
+```
+
+Build each as above. Run `small small-edits --seeds 1 2 3 4 5` and repeat `small-edits` in fresh result directories. For the additional outage schedules, run `small-edits --seeds 6 7 8 9 10`. Compare each pair with `compare.py` and `--previous-ndr`. The following command, run in each prepared directory, counts the signed publications that Iris produces when a linked device receives the same two authenticated key distributions again.
+
+```sh
+cargo +1.99.0 test --locked --release --features group-broadcast --manifest-path sim-ndr/Cargo.toml historical_key_replay_traffic -- --nocapture
+```
+
 Use `prepare.py ndr BEFORE --control-fix` and `prepare.py ndr AFTER --target-repairs`. Build both with the locked release command and `--features group-broadcast`. For each binary, create an empty trace directory, set `NDR_RETRY_AUDIT` to that directory, and run `run.py BINARY REPORTS small-edits --seeds 1 2 3 4 5`. Use independent trace and report directories for a second repetition. Run `retry_summary.py TRACES REPORTS small-edits` to reproduce the stage, payload and destination matrix. `compare.py AFTER_REPORTS BEFORE_REPORTS small-edits --previous-ndr` verifies matched schedules and recipient obligations.
 
 The hooks are installed only in the simulator’s source archive. In-memory joins identify the signed event’s original payload; no group keys, plaintext or device identities appear in the output. Synthetic device numbers identify senders/recipients; device 2n and 2n+1 belong to account n in this workload. Stream and digest numbers are run-local labels, assigned on first observation. A repeated logical request matches the requesting device, destination device, group-stream selector and optional key, position and revision, ignoring the timestamp and new outer encryption. The summary derives the writer from its observed signed data, reports unknown writers separately, and rejects any trace that does not reconcile with the existing retry-byte and event counters.

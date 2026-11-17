@@ -994,5 +994,6 @@ fn main() {
 }
 
 mod discovery;
-
+#[cfg(all(test, feature = "group-broadcast"))]
+mod replay_cost;
 mod retry_trace;

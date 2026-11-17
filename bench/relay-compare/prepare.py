@@ -19,6 +19,7 @@ RELEASE_IRIS = "6a989bb8010013ae85330a1f22f99698c44c196f"
 CONTROL_IRIS = "8265422e6353d6308c9740c7e7323d52314656e6"
 REPAIR_NDR = "d19a25fbeb55ca5c1808588ace21dbb40f098476"
 REPAIR_IRIS = "659cf1ad5bd3f1e561c919343c6967e492852245"
+IRIS_0_3_21 = "fa7ba3c68c4a6f108bcd9c8b450a4240bdcb2650"
 MDK = "6f6d2017de1f2cc595cc10da9d575f3aa16cb21e"
 
 
@@ -46,9 +47,12 @@ def main():
     version.add_argument("--release", action="store_true", help="use the pinned 0.0.179 / 0.3.18 sources")
     version.add_argument("--control-fix", action="store_true", help="prepare the linked-device forwarding fix")
     version.add_argument("--target-repairs", action="store_true", help="use device-directed sender-key repair")
+    version.add_argument("--ndr-rev", metavar="COMMIT", help="pair an exact NDR commit with Iris Chat Protocol 0.3.21")
     args = parser.parse_args()
-    if (args.baseline or args.release or args.control_fix or args.target_repairs) and args.engine != "ndr":
+    if (args.baseline or args.release or args.control_fix or args.target_repairs or args.ndr_rev) and args.engine != "ndr":
         parser.error("version selection applies only to NDR")
+    if args.ndr_rev is not None and not re.fullmatch(r"[0-9a-f]{40}", args.ndr_rev):
+        parser.error("--ndr-rev requires a full lowercase Git commit hash")
     dest = args.output.resolve()
     dest.mkdir(parents=True, exist_ok=True)
     if any(dest.iterdir()):
@@ -71,17 +75,21 @@ def main():
         ndr, iris = RELEASE_NDR, CONTROL_IRIS if args.control_fix else RELEASE_IRIS
     if args.target_repairs:
         ndr, iris = REPAIR_NDR, REPAIR_IRIS
+    if args.ndr_rev:
+        ndr, iris = args.ndr_rev, IRIS_0_3_21
     archive(HERE.parents[1], ndr, dest / "ndr", "rust")
     archive(os.getenv("IRIS_REPO", HERE.parents[2] / "iris-chat-rs"), iris, dest / "iris", "chat-protocol")
     shutil.copytree(HERE / "ndr", dest / "sim-ndr")
-    if args.release or args.control_fix or args.target_repairs:
+    if args.release or args.control_fix or args.target_repairs or args.ndr_rev:
         # Both are local path dependencies. All registry and Git packages retain their pins.
         lock = dest / "sim-ndr/Cargo.lock"
-        protocol_version = "0.3.19" if args.target_repairs else "0.3.18"
-        replace(lock, 'name = "iris-chat-protocol"\nversion = "0.3.17"',
-                      f'name = "iris-chat-protocol"\nversion = "{protocol_version}"')
-        replace(lock, 'name = "nostr-double-ratchet"\nversion = "0.0.178"',
-                      'name = "nostr-double-ratchet"\nversion = "0.0.179"')
+        for package, old_version, manifest in [
+            ("iris-chat-protocol", "0.3.17", dest / "iris/chat-protocol/Cargo.toml"),
+            ("nostr-double-ratchet", "0.0.178", dest / "ndr/rust/crates/nostr-double-ratchet/Cargo.toml"),
+        ]:
+            package_version, = re.findall(r'^version = "([^"]+)"$', manifest.read_text(), re.M)
+            replace(lock, f'name = "{package}"\nversion = "{old_version}"',
+                          f'name = "{package}"\nversion = "{package_version}"')
     protocol = dest / "iris/chat-protocol"
     library = dest / "ndr/rust/crates/nostr-double-ratchet"
     for name in ["nostr-double-ratchet", "nostr-double-ratchet-pairwise-codec"]:
