@@ -43,11 +43,11 @@
     ]
   },
   "node": {
-    "version": "24.22.1",
-    "url": "https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-x64.tar.xz",
-    "sha256": "6c172a9ab6718f7b801fb5a7bd486af2ee5e32758086a04b84fcce2aa77095e6",
-    "root": "node-v24.22.1-linux-x64",
-    "checksumSource": "https://nodejs.org/dist/v24.22.1/SHASUMS256.txt"
+    "version": "24.22.3",
+    "url": "https://nodejs.org/dist/v24.22.3/node-v24.22.3-linux-x64.tar.xz",
+    "sha256": "4f2b175a6d53a5c617a80dba2676238a0688cef28c6da4eba35c7d844e66fcfb",
+    "root": "node-v24.22.3-linux-x64",
+    "checksumSource": "https://nodejs.org/dist/v24.22.3/SHASUMS256.txt"
   },
   "pnpm": {
     "version": "9.15.0",

@@ -105,7 +105,7 @@ REGENERATE_VECTORS=true cargo test --workspace --manifest-path rust/Cargo.toml g
 
 The `test-rust` package job and `interop` job in `.github/workflows/ci.yml`
 use the reviewed inputs in `rust/ci/build-inputs.json`: Rust 1.99.0 for
-`x86_64-unknown-linux-gnu`, Node 24.22.1, pnpm 9.15.0, and a full-commit
+`x86_64-unknown-linux-gnu`, Node 24.22.3, pnpm 9.15.0, and a full-commit
 Rust-cache action. `rust/scripts/ci-build-inputs.py` verifies each downloaded
 archive against its digest in source before extracting or executing it. It does
 not trust a checksum downloaded alongside the archive at build time. Rust
