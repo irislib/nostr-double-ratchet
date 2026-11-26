@@ -445,7 +445,9 @@ export class SessionGroupRuntime {
       if (!rotated && previous && now < previous.nextAt) return;
       const prior = rotated ? 0 : (previous?.count || 0);
       const sent = await groups.respondToSenderKeyRepairRequest(group.id, owner, request, {
-        latestOnly: request.keyId === undefined && prior === 0,
+        // Volatile retry counters cannot establish which epochs a requester
+        // received. Always replay eligible history, including after restart.
+        latestOnly: false,
         sendPairwise: async (recipient, rumor) => {
           if (this.groupManager !== groups || this.sessionManager !== sessions) throw new Error("Inactive group key repair");
           if (!await sessions.sendGroupDistributionToDevice?.(recipient, device, rumor)) {

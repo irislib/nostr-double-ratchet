@@ -8,6 +8,7 @@ import {
 import type { GroupOptions, GroupDecryptedEvent } from "../GroupChannel.js";
 import { isHex32 } from "./groupInternals.js";
 import type { NostrPublisherOptions } from "../types.js";
+import { PendingGroupEvents } from "./PendingGroupEvents.js";
 
 export abstract class GroupState {
   public data: GroupData;
@@ -38,7 +39,7 @@ export abstract class GroupState {
 
   protected senderDeviceToOwner: Map<string, string> = new Map();
 
-  protected pendingOuter: Map<string, VerifiedEvent[]> = new Map();
+  protected readonly pendingOuter: PendingGroupEvents;
 
   constructor(opts: GroupOptions) {
     this.data = opts.data;
@@ -52,6 +53,7 @@ export abstract class GroupState {
     this.oneToMany = opts.oneToMany || OneToManyChannel.default();
     // Storage namespace shared with the earlier BroadcastChannel prototype for compatibility.
     this.versionPrefix = `v${this.storageVersion}/broadcast-channel`;
+    this.pendingOuter = new PendingGroupEvents(this.storage, `${this.versionPrefix}/group/${this.groupId()}/pending-outer/`);
   }
 
   groupId(): string {
@@ -183,13 +185,9 @@ export abstract class GroupState {
   ): Promise<void> {
     const senderEventPubkey = this.senderDeviceToEvent.get(senderDevicePubkey);
     if (senderEventPubkey) {
+      await this.pendingOuter.removeSender(senderEventPubkey);
       this.senderDeviceToEvent.delete(senderDevicePubkey);
       this.senderEventToDevice.delete(senderEventPubkey);
-      for (const pendingKey of Array.from(this.pendingOuter.keys())) {
-        if (pendingKey.startsWith(`${senderEventPubkey}:`)) {
-          this.pendingOuter.delete(pendingKey);
-        }
-      }
     } else {
       this.senderDeviceToEvent.delete(senderDevicePubkey);
     }
@@ -202,12 +200,8 @@ export abstract class GroupState {
         continue;
       }
 
+      await this.pendingOuter.removeSender(mappedSenderEventPubkey);
       this.senderEventToDevice.delete(mappedSenderEventPubkey);
-      for (const pendingKey of Array.from(this.pendingOuter.keys())) {
-        if (pendingKey.startsWith(`${mappedSenderEventPubkey}:`)) {
-          this.pendingOuter.delete(pendingKey);
-        }
-      }
     }
 
     this.senderDeviceToOwner.delete(senderDevicePubkey);
@@ -231,56 +225,29 @@ export abstract class GroupState {
     }
   }
 
-  protected pendingKey(
-    senderEventPubkey: string,
-    keyId?: number | null,
-  ): string {
-    return `${senderEventPubkey}:${keyId === undefined || keyId === null ? "*" : keyId >>> 0}`;
-  }
-
-  protected queuePending(
+  protected async queuePending(
     senderEventPubkey: string,
     keyId: number | undefined,
     outer: VerifiedEvent,
-  ): void {
-    const k = this.pendingKey(senderEventPubkey, keyId);
-    const existing = this.pendingOuter.get(k) || [];
-    if (existing.some((event) => event.id === outer.id)) return;
-    if (existing.length >= 128) existing.shift();
-    existing.push(outer);
-    this.pendingOuter.set(k, existing);
+  ): Promise<void> {
+    const parsed = this.oneToMany.parseOuterEvent(outer);
+    await this.pendingOuter.enqueue(senderEventPubkey, keyId, outer, parsed.messageNumber);
   }
 
   protected async drainPending(
     senderEventPubkey: string,
     keyId: number,
   ): Promise<GroupDecryptedEvent[]> {
-    const keys = [
-      this.pendingKey(senderEventPubkey, keyId),
-      this.pendingKey(senderEventPubkey),
-    ];
-    const pending = keys.flatMap((key) => this.pendingOuter.get(key) || []);
-    if (!pending || pending.length === 0) return [];
-    for (const key of keys) {
-      this.pendingOuter.delete(key);
-    }
-
-    // Best-effort: decrypt in message-number order to reduce skipped-key cache pressure.
-    const withN = pending
-      .map((outer) => {
-        try {
-          const parsed = this.oneToMany.parseOuterEvent(outer);
-          return { outer, n: parsed.messageNumber };
-        } catch {
-          return { outer, n: 0 };
-        }
-      })
-      .sort((a, b) => a.n - b.n);
-
     const results: GroupDecryptedEvent[] = [];
-    for (const { outer } of withN) {
+    for (const key of await this.pendingOuter.entries(senderEventPubkey, keyId)) {
+      const outer = await this.pendingOuter.get(key);
+      if (!outer) continue;
       const dec = await this.handleOuterEvent(outer);
-      if (dec) results.push(dec);
+      // Retain unresolved ciphertext and interrupted work for a later key/retry.
+      if (dec) {
+        await this.pendingOuter.remove(key);
+        results.push(dec);
+      }
     }
     return results;
   }

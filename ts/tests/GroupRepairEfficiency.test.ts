@@ -195,7 +195,7 @@ describe("group sender-key repair and decrypt efficiency", () => {
     ]);
   });
 
-  it("targets repair replies to the requesting device only, replays progressively, resets on rotation, and preserves wire privacy", async () => {
+  it("targets complete repair history to the requesting device, resets on rotation, and preserves wire privacy", async () => {
     const frames: string[] = [];
     class RecordingRelay extends MockRelay {
       override storeAndDeliver(event: VerifiedEvent) {
@@ -277,7 +277,7 @@ describe("group sender-key repair and decrypt efficiency", () => {
         "sendGroupDistributionToDevice",
       );
 
-      // Round 0: bobPhone requests a blind repair -> Alice sends ONLY latest epoch to bobPhone only.
+      // Round 0: bobPhone requests blind repair; all eligible epochs go to that device.
       const phoneDevice = bobPhone.getState().currentDevicePubkey!;
       const repairRumor = buildSenderKeyRepairRequestRumor(
         {
@@ -291,13 +291,13 @@ describe("group sender-key repair and decrypt efficiency", () => {
         includeLocalSiblings: false,
       });
 
-      await vi.waitFor(() => expect(phoneDists).toHaveLength(1), {
+      await vi.waitFor(() => expect(phoneDists).toHaveLength(2), {
         timeout: 2_000,
       });
       await new Promise((resolve) => setTimeout(resolve, 100));
-      expect(phoneDists.map((d) => d.keyId)).toEqual([secondKeyId]);
+      expect(new Set(phoneDists.map((d) => d.keyId))).toEqual(new Set([firstKeyId, secondKeyId]));
       expect(laptopDists).toEqual([]);
-      expect(sendToDeviceSpy).toHaveBeenCalledTimes(1);
+      expect(sendToDeviceSpy).toHaveBeenCalledTimes(2);
       expect(sendToDeviceSpy).toHaveBeenCalledWith(
         bobOwner,
         phoneDevice,
@@ -309,10 +309,10 @@ describe("group sender-key repair and decrypt efficiency", () => {
         includeLocalSiblings: false,
       });
       await new Promise((resolve) => setTimeout(resolve, 100));
-      expect(phoneDists).toHaveLength(1);
+      expect(phoneDists).toHaveLength(2);
       expect(laptopDists).toEqual([]);
 
-      // Rotate to epoch 3: responder immediately resets throttle and replies with epoch 3.
+      // Rotation resets the throttle, retaining complete eligible history.
       await alice.getGroupManager()!.rotateSenderKey(created.group.id, {
         sendPairwise: async (recipient, rumor) => {
           await alice.sendEvent(recipient, rumor, undefined, {
@@ -320,10 +320,10 @@ describe("group sender-key repair and decrypt efficiency", () => {
           });
         },
       });
-      await vi.waitFor(() => expect(phoneDists).toHaveLength(2), {
+      await vi.waitFor(() => expect(phoneDists).toHaveLength(3), {
         timeout: 2_000,
       });
-      const thirdKeyId = phoneDists[1]!.keyId;
+      const thirdKeyId = phoneDists[2]!.keyId;
       phoneDists.length = 0;
       laptopDists.length = 0;
 
@@ -338,10 +338,10 @@ describe("group sender-key repair and decrypt efficiency", () => {
       await bobPhone.sendEvent(aliceOwner, retryAfterRotate, undefined, {
         includeLocalSiblings: false,
       });
-      await vi.waitFor(() => expect(phoneDists).toHaveLength(1), {
+      await vi.waitFor(() => expect(phoneDists).toHaveLength(3), {
         timeout: 2_000,
       });
-      expect(phoneDists.map((d) => d.keyId)).toEqual([thirdKeyId]);
+      expect(new Set(phoneDists.map((d) => d.keyId))).toEqual(new Set([firstKeyId, secondKeyId, thirdKeyId]));
       expect(laptopDists).toEqual([]);
 
       // Wire-level metadata privacy check across every recorded relay frame.

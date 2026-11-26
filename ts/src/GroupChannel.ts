@@ -147,6 +147,8 @@ export class Group extends GroupSending {
         dist.senderEventPubkey === this.ourDevicePubkey || this.isMemberOwnerPubkey(dist.senderEventPubkey))) return [];
     const bound = dist.senderEventPubkey && this.senderEventToDevice.get(dist.senderEventPubkey);
     if (bound && bound !== senderDevicePubkey) return [];
+    const drainKey = `${this.groupSenderPrefix(senderDevicePubkey)}/pending-key-drain/${dist.keyId >>> 0}`;
+    const markDrain = () => this.storage.put(drainKey, true);
     // Persist sender->owner mapping (for UI attribution).
     this.senderDeviceToOwner.set(senderDevicePubkey, fromOwnerPubkey);
     await this.storage.put(
@@ -160,11 +162,12 @@ export class Group extends GroupSending {
       mappingChanged =
         this.senderDeviceToEvent.get(senderDevicePubkey) !== dist.senderEventPubkey ||
         this.senderEventToDevice.get(dist.senderEventPubkey) !== senderDevicePubkey;
-      this.setSenderEventMapping(senderDevicePubkey, dist.senderEventPubkey);
+      if (mappingChanged) await markDrain();
       await this.storage.put(
         this.senderEventPubkeyKey(senderDevicePubkey),
         dist.senderEventPubkey,
       );
+      this.setSenderEventMapping(senderDevicePubkey, dist.senderEventPubkey);
     }
 
     // Store sender key state for this key id if we don't already have one.
@@ -175,6 +178,7 @@ export class Group extends GroupSending {
     let keyStateChanged = false;
     if (!existing) {
       const st = SenderKeyState.fromDistribution(dist);
+      await markDrain();
       await this.saveSenderKeyState(senderDevicePubkey, st);
       await this.storage.put(originKey, { iteration: dist.iteration, chainKey: dist.chainKey });
       keyStateChanged = true;
@@ -183,16 +187,26 @@ export class Group extends GroupSending {
       // arrive in any order. An earlier copy opens the messages before the
       // first position this device learned.
       const origin = await this.storage.get<{ iteration: number; chainKey: string }>(originKey);
+      // Complete an interrupted initial state/origin write without rewinding
+      // a chain that has already consumed messages.
+      if (!origin && existing.iteration === dist.iteration && existing.chainKey === dist.chainKey) {
+        await markDrain();
+        await this.storage.put(originKey, { iteration: dist.iteration, chainKey: dist.chainKey });
+        keyStateChanged = true;
+      }
       if (origin && typeof origin.chainKey === "string" && dist.iteration < origin.iteration) {
+        let extended: SenderKeyState | undefined;
         try {
           const st = SenderKeyState.fromJSON(existing);
-          if (st.extendBackwards(origin.iteration, hexToBytes(origin.chainKey), dist.iteration, hexToBytes(dist.chainKey))) {
-            await this.saveSenderKeyState(senderDevicePubkey, st);
-            await this.storage.put(originKey, { iteration: dist.iteration, chainKey: dist.chainKey });
-            keyStateChanged = true;
-          }
+          if (st.extendBackwards(origin.iteration, hexToBytes(origin.chainKey), dist.iteration, hexToBytes(dist.chainKey))) extended = st;
         } catch {
           // A corrupt saved state or origin leaves the existing key as it is.
+        }
+        if (extended) {
+          await markDrain();
+          await this.saveSenderKeyState(senderDevicePubkey, extended);
+          await this.storage.put(originKey, { iteration: dist.iteration, chainKey: dist.chainKey });
+          keyStateChanged = true;
         }
       }
     }
@@ -200,9 +214,13 @@ export class Group extends GroupSending {
       senderDevicePubkey, dist.keyId, dist.createdAt,
     );
 
-    // Retry pending outer events only when a new mapping or key material arrived.
-    if (dist.senderEventPubkey && isHex32(dist.senderEventPubkey) && (mappingChanged || keyStateChanged)) {
-      return await this.drainPending(dist.senderEventPubkey, dist.keyId);
+    // Clean duplicates still skip scanning. A persisted unfinished drain survives
+    // partial storage writes, failed application callbacks and process restart.
+    if (dist.senderEventPubkey && isHex32(dist.senderEventPubkey) &&
+        (mappingChanged || keyStateChanged || await this.storage.get(drainKey))) {
+      const recovered = await this.drainPending(dist.senderEventPubkey, dist.keyId);
+      await this.storage.del(drainKey);
+      return recovered;
     }
 
     return [];
@@ -231,7 +249,7 @@ export class Group extends GroupSending {
     const senderEventPubkey = outer.pubkey;
     const senderDevicePubkey = this.senderEventToDevice.get(senderEventPubkey);
     if (!senderDevicePubkey) {
-      this.queuePending(
+      await this.queuePending(
         senderEventPubkey,
         parsed.isHiddenCounterMessage() ? undefined : parsed.keyId,
         outer,
@@ -282,7 +300,7 @@ export class Group extends GroupSending {
         }
       }
       if (!plan) {
-        this.queuePending(senderEventPubkey, undefined, outer);
+        await this.queuePending(senderEventPubkey, undefined, outer);
         return null;
       }
       plaintext = plan.plaintext;
@@ -295,7 +313,7 @@ export class Group extends GroupSending {
         parsed.keyId,
       );
       if (!st) {
-        this.queuePending(senderEventPubkey, parsed.keyId, outer);
+        await this.queuePending(senderEventPubkey, parsed.keyId, outer);
         return null;
       }
 
