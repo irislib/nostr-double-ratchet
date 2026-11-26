@@ -49,21 +49,43 @@ def check_pins(pins):
     assert (ROOT / "ts/pnpm-lock.yaml").is_file() and (ROOT / "rust/Cargo.lock").is_file()
 
 
-def check_workflow(pins):
-    text = (ROOT / ".github/workflows/ci.yml").read_text()
-    for name in ("test-rust", "interop"):
-        job = text.split("\n  " + name + ":\n", 1)[1]
-        job = re.split(r"\n  [a-z][a-z0-9-]*:\n", job, maxsplit=1)[0]
+def workflow_job(text, name):
+    job = text.split("\n  " + name + ":\n", 1)[1]
+    return re.split(r"\n  [a-z][a-z0-9-]*:\n", job, maxsplit=1)[0]
+
+
+def check_workflow(pins, workflows=None):
+    if workflows is None:
+        workflows = {name: (ROOT / ".github/workflows" / name).read_text()
+                     for name in ("ci.yml", "publish-npm.yml")}
+    for workflow, name, node_only in (("ci.yml", "test-ts", True), ("ci.yml", "test-rust", False),
+                                       ("ci.yml", "interop", False), ("publish-npm.yml", "publish", True)):
+        job = workflow_job(workflows[workflow], name)
         assert "runs-on: " + pins["runner"] in job
-        assert "python3 rust/scripts/ci-build-inputs.py --install" in job
-        assert "uses: " + pins["rustCacheAction"] in job
-        assert "hashFiles('rust/ci/build-inputs.json')" in job
-        assert "pnpm install --frozen-lockfile" in job
-        assert "cargo test --locked" in job
+        mode = "--install-node" if node_only else "--install"
+        assert re.search(r"run: python3 rust/scripts/ci-build-inputs\.py " + mode + r"$", job, re.MULTILINE)
         assert "dtolnay/rust-toolchain" not in job and "actions/setup-node" not in job
         assert "pnpm/action-setup" not in job
+        if name != "publish":
+            assert "pnpm install --frozen-lockfile" in job
+        if not node_only:
+            assert "uses: " + pins["rustCacheAction"] in job
+            assert "hashFiles('rust/ci/build-inputs.json')" in job
+            assert "cargo test --locked" in job
         for action in re.findall(r"uses:\s+([^\s#]+)", job):
             assert re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}", action), action
+    publisher = workflow_job(workflows["publish-npm.yml"], "publish")
+    # Keep the established OIDC-only target and exact tested-artifact flow.
+    assert "github.repository == 'irislib/nostr-double-ratchet' && github.ref == 'refs/heads/master'" in publisher
+    assert "environment: npm" in publisher and "id-token: write" in publisher
+    assert "NPM_CONFIG_REGISTRY: https://registry.npmjs.org" in publisher
+    assert "NODE_AUTH_TOKEN" not in publisher and "NPM_TOKEN" not in publisher
+    assert "event=push&head_sha=$GITHUB_SHA&status=success" in publisher
+    assert 'npm publish "$NPM_TARBALL" --ignore-scripts --provenance --access public --tag latest' in publisher
+    assert "npm pack" not in publisher and "pnpm build" not in publisher
+    assert publisher.index("uses: actions/checkout@") < publisher.index("uses: actions/download-artifact@")
+    assert "name: npm-package-${{ github.sha }}" in publisher
+    assert "run-id: ${{ steps.ci.outputs.run_id }}" in publisher
 
 
 def verify_archive(path, pin):
@@ -91,7 +113,7 @@ def fetch(pin, work):
     return unpack_verified(archive, pin, work)
 
 
-def install(pins):
+def install(pins, node_only=False):
     assert os.environ.get("GITHUB_ACTIONS") == "true", "Installation is restricted to hosted CI"
     assert platform.system() == "Linux" and platform.machine() == pins["architecture"]
     assert sys.version_info >= (3, 12), "Ubuntu 24.04 Python 3.12 or newer is required"
@@ -102,37 +124,47 @@ def install(pins):
     work = destination / "archives"
     work.mkdir()
     rust = destination / "rust"
-    for pin in pins["rust"]["components"]:
-        extracted = fetch(pin, work)
-        subprocess.run([str(extracted / "install.sh"), "--prefix=" + str(rust), "--disable-ldconfig"], check=True)
+    if not node_only:
+        for pin in pins["rust"]["components"]:
+            extracted = fetch(pin, work)
+            subprocess.run([str(extracted / "install.sh"), "--prefix=" + str(rust), "--disable-ldconfig"], check=True)
     node = fetch(pins["node"], work)
     pnpm = fetch(pins["pnpm"], work)
     shim = destination / "bin"
     shim.mkdir()
     (shim / "pnpm").write_text('#!/bin/sh\nexec "' + str(node / "bin/node") + '" "' + str(pnpm / "bin/pnpm.cjs") + '" "$@"\n')
     (shim / "pnpm").chmod(0o755)
-    paths = [str(rust / "bin"), str(node / "bin"), str(shim)]
-    env = dict(os.environ, PATH=":".join(paths) + ":" + os.environ["PATH"],
-               RUSTC=str(rust / "bin/rustc"), RUSTDOC=str(rust / "bin/rustdoc"))
-    commands = {"rustc": [str(rust / "bin/rustc"), "-Vv"], "cargo": [str(rust / "bin/cargo"), "-V"],
-                "rustfmt": [str(rust / "bin/rustfmt"), "--version"],
-                "clippy": [str(rust / "bin/cargo-clippy"), "--version"],
-                "node": [str(node / "bin/node"), "--version"], "pnpm": [str(shim / "pnpm"), "--version"],
-                "cc": ["cc", "--version"], "ld": ["ld", "--version"], "libc": ["ldd", "--version"]}
+    paths = [str(node / "bin"), str(shim)]
+    overrides = {}
+    commands = {"node": [str(node / "bin/node"), "--version"],
+                "pnpm": [str(shim / "pnpm"), "--version"],
+                "npm": [str(node / "bin/node"), str(node / "lib/node_modules/npm/bin/npm-cli.js"), "--version"]}
+    if not node_only:
+        paths.insert(0, str(rust / "bin"))
+        overrides = {"RUSTC": str(rust / "bin/rustc"), "RUSTDOC": str(rust / "bin/rustdoc")}
+        commands.update({"rustc": [str(rust / "bin/rustc"), "-Vv"], "cargo": [str(rust / "bin/cargo"), "-V"],
+                         "rustfmt": [str(rust / "bin/rustfmt"), "--version"],
+                         "clippy": [str(rust / "bin/cargo-clippy"), "--version"],
+                         "cc": ["cc", "--version"], "ld": ["ld", "--version"], "libc": ["ldd", "--version"]})
+    env = dict(os.environ, PATH=":".join(paths) + ":" + os.environ["PATH"], **overrides)
     versions = {name: subprocess.check_output(command, env=env, text=True).strip() for name, command in commands.items()}
-    assert re.search(r"^release: " + re.escape(pins["rust"]["version"]) + r"$", versions["rustc"], re.MULTILINE)
-    assert re.search(r"^host: " + re.escape(pins["target"]) + r"$", versions["rustc"], re.MULTILINE)
+    if not node_only:
+        assert re.search(r"^release: " + re.escape(pins["rust"]["version"]) + r"$", versions["rustc"], re.MULTILINE)
+        assert re.search(r"^host: " + re.escape(pins["target"]) + r"$", versions["rustc"], re.MULTILINE)
     assert versions["node"] == "v" + pins["node"]["version"]
     assert versions["pnpm"] == pins["pnpm"]["version"]
     receipt = {"pinsSHA256": digest(PINS), "sourceCommit": os.environ["GITHUB_SHA"],
+               "toolset": "node" if node_only else "rust-node",
                "runnerImage": {key: os.environ.get(key) for key in ("ImageOS", "ImageVersion")},
                "osRelease": release, "python": sys.version, "versions": versions,
                "lockfiles": {name: digest(ROOT / name) for name in ("rust/Cargo.lock", "ts/pnpm-lock.yaml")}}
     (destination / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     with open(os.environ["GITHUB_PATH"], "a") as stream:
         stream.write("\n".join(paths) + "\n")
-    with open(os.environ["GITHUB_ENV"], "a") as stream:
-        stream.write("RUSTC=" + env["RUSTC"] + "\nRUSTDOC=" + env["RUSTDOC"] + "\n")
+    if overrides:
+        with open(os.environ["GITHUB_ENV"], "a") as stream:
+            for name, value in overrides.items():
+                stream.write(name + "=" + value + "\n")
     print("Installed only digest-verified reviewed build inputs; hosted OS tools remain external inputs.")
 
 
@@ -143,14 +175,15 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true")
     mode.add_argument("--install", action="store_true")
+    mode.add_argument("--install-node", action="store_true", help="Install only verified Node.js (including npm) and pnpm")
     args = parser.parse_args()
     pins = json.loads(PINS.read_text())
     check_pins(pins)
     check_workflow(pins)
-    if args.install:
-        install(pins)
+    if args.install or args.install_node:
+        install(pins, node_only=args.install_node)
     else:
-        print("Reviewed Rust package/interop input pins and workflow bindings are consistent.")
+        print("Reviewed Rust/TS package, interop and npm publisher input bindings are consistent.")
 
 
 if __name__ == "__main__":

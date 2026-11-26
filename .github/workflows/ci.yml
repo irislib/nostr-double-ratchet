@@ -20,12 +20,12 @@ jobs:
     - name: Enforce source file limits
       run: ./scripts/check-source-size.sh
 
-    - name: Check reviewed Rust CI input bindings
+    - name: Check reviewed CI and publisher input bindings
       run: python3 rust/scripts/test-ci-build-inputs.py
 
   test-ts:
     name: TypeScript
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: ts
@@ -33,17 +33,9 @@ jobs:
     steps:
     - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-    - name: Install pnpm
-      uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      with:
-        package_json_file: ts/package.json
-
-    - name: Use Node.js 24.x
-      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-      with:
-        node-version: 24.x
-        cache: 'pnpm'
-        cache-dependency-path: ts/pnpm-lock.yaml
+    - name: Install verified Node.js and pnpm
+      working-directory: .
+      run: python3 rust/scripts/ci-build-inputs.py --install-node
 
     - name: Install dependencies
       run: pnpm install --frozen-lockfile
@@ -64,13 +56,16 @@ jobs:
         npm install --prefix "$RUNNER_TEMP/npm-smoke" --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP/npm-package/"*.tgz
         cp tests/package-smoke.mjs "$RUNNER_TEMP/npm-smoke/check.mjs"
         timeout 30s node "$RUNNER_TEMP/npm-smoke/check.mjs"
+        cp "$RUNNER_TEMP/ndr-ci-tools/receipt.json" "$RUNNER_TEMP/npm-package/build-inputs.receipt.json"
+        cp ../rust/ci/build-inputs.json "$RUNNER_TEMP/npm-package/build-inputs.json"
+        (cd "$RUNNER_TEMP/npm-package" && sha256sum ./*.tgz > package.sha256)
 
     - name: Save the tested npm artifact
-      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+      if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: npm-package-${{ github.sha }}
-        path: ${{ runner.temp }}/npm-package/*.tgz
+        path: ${{ runner.temp }}/npm-package/*
         if-no-files-found: error
         retention-days: 30
 
@@ -134,7 +129,7 @@ jobs:
         PY
 
     - name: Save the verified Rust library package
-      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+      if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: rust-library-package-${{ github.sha }}

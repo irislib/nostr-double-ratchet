@@ -131,8 +131,15 @@ lockfile and pin-file hashes. The Rust package artifact includes that receipt,
 the reviewed pins and the `.crate` checksum. Cache contents and hosted-system
 updates can still affect builds; this is input verification, not proof of
 bit-for-bit binary reproducibility or a comprehensive dependency/Haps audit.
-The separate `test-ts`, formal/source-size jobs and npm publication workflow are
-outside this pinning scope. Their existing checks remain required where used.
+The `test-ts` artifact job and npm publisher use the same reviewed Node archive
+(including npm) and pnpm archive through `--install-node`, without downloading
+or executing Rust tools. They also run on `ubuntu-24.04`. The npm artifact includes
+its input receipt, reviewed pins and tarball checksum. Both package artifacts are
+retained for pull-request qualification as well as master CI. Publication still
+requires successful master CI at the exact revision and promotes its tested
+tarball unchanged, using the established npm environment and OIDC identity.
+Formal/source-size jobs remain outside this toolchain pinning scope; their
+existing checks remain required.
 
 The source checks below run offline without installing tools or compiling:
 
@@ -142,7 +149,7 @@ python3 rust/scripts/test-ci-build-inputs.py
 ./scripts/check-source-size.sh
 ```
 
-Only the hosted jobs invoke `--install`. Package publication still requires a
+Only the hosted jobs invoke `--install` or `--install-node`. Package publication still requires a
 successful package verification at the exact source revision; a publish-script
 dry run that uses `--no-verify` is not that verification.
 
