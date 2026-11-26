@@ -245,6 +245,8 @@ export abstract class GroupState {
   ): void {
     const k = this.pendingKey(senderEventPubkey, keyId);
     const existing = this.pendingOuter.get(k) || [];
+    if (existing.some((event) => event.id === outer.id)) return;
+    if (existing.length >= 128) existing.shift();
     existing.push(outer);
     this.pendingOuter.set(k, existing);
   }

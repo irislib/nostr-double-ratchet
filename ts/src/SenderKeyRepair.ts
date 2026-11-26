@@ -7,6 +7,10 @@ export const SENDER_KEY_REPAIR_DEFAULT_RETRY_DELAYS_SECS = [
   30, 120, 600, 3_600, 21_600,
 ] as const;
 
+export const SENDER_KEY_REPAIR_RESPONSE_RETRY_DELAYS_SECS = [
+  10, 30, 60, 120, 300,
+] as const;
+
 export interface SenderKeyRepairRequest {
   groupId: string;
   senderEventPubkey: string;
@@ -83,6 +87,46 @@ export function senderKeyRepairDefaultNextRetryAt(
   const delay = senderKeyRepairDefaultRetryDelaySeconds(sentRequestCount);
   const next = now + delay;
   return Number.isSafeInteger(next) ? next : Number.MAX_SAFE_INTEGER;
+}
+
+export function senderKeyRepairResponseRetryDelaySeconds(
+  responseCount: number,
+): number {
+  const count = Math.max(0, Math.floor(responseCount));
+  if (count <= 1) return SENDER_KEY_REPAIR_RESPONSE_RETRY_DELAYS_SECS[0];
+  const index = Math.min(
+    count - 1,
+    SENDER_KEY_REPAIR_RESPONSE_RETRY_DELAYS_SECS.length - 1,
+  );
+  return SENDER_KEY_REPAIR_RESPONSE_RETRY_DELAYS_SECS[index];
+}
+
+export function senderKeyRepairResponseNextRetryAt(
+  nowSeconds: number,
+  responseCount: number,
+): number {
+  const now = Math.max(0, Math.floor(nowSeconds));
+  const delay = senderKeyRepairResponseRetryDelaySeconds(responseCount);
+  const next = now + delay;
+  return Number.isSafeInteger(next) ? next : Number.MAX_SAFE_INTEGER;
+}
+
+export function senderKeyRepairResponseThrottleKey(
+  groupId: string,
+  requesterOwnerPubkey: string,
+  requesterDevicePubkey: string,
+  request: SenderKeyRepairRequest,
+): string {
+  return JSON.stringify([
+    "reply",
+    groupId,
+    requesterOwnerPubkey,
+    requesterDevicePubkey,
+    request.senderEventPubkey,
+    request.keyId ?? null,
+    request.messageNumber ?? null,
+    request.requiredRevision ?? null,
+  ]);
 }
 
 export function senderKeyRepairRequestFromPendingSenderKeyMessage(

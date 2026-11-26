@@ -244,13 +244,14 @@ export abstract class GroupSending extends GroupSenderKeys {
   async respondToSenderKeyRepairRequest(
     requesterOwnerPubkey: string,
     request: SenderKeyRepairRequest,
-    opts: { sendPairwise: PairwiseSend; nowMs?: number },
+    opts: { sendPairwise: PairwiseSend; nowMs?: number; latestOnly?: boolean },
   ): Promise<SenderKeyDistribution | null> {
     await this.init();
 
     const distributions = await this.repairDistributionsFor(
       requesterOwnerPubkey,
       request,
+      { latestOnly: opts.latestOnly },
     );
     if (distributions.length === 0) return null;
 
@@ -260,6 +261,6 @@ export abstract class GroupSending extends GroupSenderKeys {
       const rumor = this.buildDistributionRumor(nowSeconds, nowMs, dist);
       await opts.sendPairwise(requesterOwnerPubkey, rumor);
     }
-    return distributions[0]!;
+    return distributions[distributions.length - 1]!;
   }
 }

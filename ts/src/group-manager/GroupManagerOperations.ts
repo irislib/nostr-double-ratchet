@@ -239,11 +239,15 @@ export abstract class GroupManagerOperations extends GroupManagerState {
     });
   }
 
+  async getLatestSenderKeyId(groupId: string): Promise<number | undefined> {
+    return this.groups.get(groupId)?.getLatestSenderKeyId();
+  }
+
   async respondToSenderKeyRepairRequest(
     groupId: string,
     requesterOwnerPubkey: string,
     request: SenderKeyRepairRequest,
-    opts: { sendPairwise: PairwiseSend; nowMs?: number },
+    opts: { sendPairwise: PairwiseSend; nowMs?: number; latestOnly?: boolean },
   ): Promise<SenderKeyDistribution | null> {
     return this.enqueueOperation(async () => {
       const group = this.groups.get(groupId);

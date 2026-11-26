@@ -1,3 +1,5 @@
+import { GROUP_SENDER_KEY_DISTRIBUTION_KIND } from "./GroupMeta.js";
+import { parseSenderKeyDistribution } from "./SenderKey.js";
 import { parseSenderKeyRepairRequestRumor } from "./SenderKeyRepair.js";
 import { groupPublicationContext, groupPublicationInnerEventId } from "./publishing.js";
 import {
@@ -68,10 +70,11 @@ export class SessionManager extends SessionManagerInvites {
     return [...devices].sort();
   }
 
-  /** Queue a chain-only repair on its writer's existing private device route. */
-  async sendGroupRepairToDevice(owner: string, device: string, rumor: Rumor): Promise<boolean> {
-    const request = parseSenderKeyRepairRequestRumor(rumor);
-    if (!request || request.requiredRevision !== undefined || rumor.pubkey !== this.deviceId) return false;
+  private async sendGroupControlToDevice(
+    owner: string,
+    device: string,
+    rumor: Rumor,
+  ): Promise<boolean> {
     await this.init();
     const record = this.userRecords.get(owner);
     if (!record?.ownerProofForDevice(device) || this.resolveToOwner(device) !== owner) return false;
@@ -81,9 +84,31 @@ export class SessionManager extends SessionManagerInvites {
       await this.messageQueue.removeByTargetAndEventId(device, rumor.id);
       return false;
     }
-    // An offline writer keeps the intent until its device invite/session is ready.
+    // An offline device keeps the intent until its invite/session is ready.
     await record.ensureDevice(device).ensureSetup();
+    if (record.devices.get(device)?.state === "session-ready") {
+      await this.flushMessageQueue(device);
+    }
     return true;
+  }
+
+  /** Queue a chain-only repair on its writer's existing private device route. */
+  async sendGroupRepairToDevice(owner: string, device: string, rumor: Rumor): Promise<boolean> {
+    const request = parseSenderKeyRepairRequestRumor(rumor);
+    if (!request || request.requiredRevision !== undefined || rumor.pubkey !== this.deviceId) return false;
+    return this.sendGroupControlToDevice(owner, device, rumor);
+  }
+
+  /** Queue a sender-key distribution on a specific requesting device's private route. */
+  async sendGroupDistributionToDevice(owner: string, device: string, rumor: Rumor): Promise<boolean> {
+    if (
+      rumor.kind !== GROUP_SENDER_KEY_DISTRIBUTION_KIND ||
+      rumor.pubkey !== this.deviceId ||
+      !parseSenderKeyDistribution(rumor.content)
+    ) {
+      return false;
+    }
+    return this.sendGroupControlToDevice(owner, device, rumor);
   }
 
   static createForRuntime(

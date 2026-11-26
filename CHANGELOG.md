@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## TypeScript 0.0.188 - 2026-11-26
+
+- Target group sender-key repair responses to the authenticated requesting device when authorized by its owner's roster instead of broadcasting to every device of that owner.
+- Deduplicate repair snapshots per key ID (lowest iteration, oldest-first), send only the latest eligible key on the first blind repair response before falling back to full history on retries, cap responder retry backoff at 5 minutes with automatic reset on sender-key rotation, and scope request/reply throttling per device and sender stream.
+- Probe all known sender-key frontiers before blind scanning, scan the preferred/latest sender key first for out-of-order messages, skip redundant pending-event rescans on unchanged distribution replays, and preserve `bridgeSessionEvents: false` across `SessionGroupRuntime` initialization so `NdrRuntime` no longer processes incoming session events twice.
+
 ## Rust 0.0.181 - 2026-11-18
 
 - Replaying a known group sender key after rotation keeps the receiver's preferred key. Linked devices avoid redundant key forwards and still receive earlier chain positions that unlock missed messages. This update uses the existing wire and storage formats.

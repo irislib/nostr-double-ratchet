@@ -227,9 +227,22 @@ export abstract class GroupSenderKeys extends GroupState {
     await this.saveSenderKeyRepairSnapshots(this.ourDevicePubkey, snapshots);
   }
 
+  async getLatestSenderKeyId(): Promise<number | undefined> {
+    await this.init();
+    const latestKeyId = await this.storage.get<number>(
+      this.latestKeyIdKey(this.ourDevicePubkey),
+    );
+    return typeof latestKeyId === "number" &&
+      Number.isInteger(latestKeyId) &&
+      latestKeyId >= 0
+      ? latestKeyId >>> 0
+      : undefined;
+  }
+
   protected async repairDistributionsFor(
     requesterOwnerPubkey: string,
     request: SenderKeyRepairRequest,
+    opts?: { latestOnly?: boolean },
   ): Promise<SenderKeyDistribution[]> {
     if (request.groupId !== this.groupId()) return [];
     if (!this.isMemberOwnerPubkey(this.ourOwnerPubkey)) return [];
@@ -273,18 +286,28 @@ export abstract class GroupSenderKeys extends GroupState {
       return newest ? [newest.distribution] : [];
     }
 
-    const unique = new Map<string, SenderKeyDistribution>();
-    for (const snapshot of candidates.sort(
-      (a, b) =>
-        b.distribution.createdAt - a.distribution.createdAt ||
-        b.distribution.iteration - a.distribution.iteration,
-    )) {
-      const key = `${snapshot.distribution.keyId}:${snapshot.distribution.iteration}`;
-      if (!unique.has(key)) {
-        unique.set(key, snapshot.distribution);
+    // One chain key at a lower iteration derives every later position of the
+    // same keyId. Deduplicate per keyId and emit oldest epochs first.
+    const bestByKey = new Map<number, SenderKeyDistribution>();
+    for (const snapshot of candidates) {
+      const keyId = snapshot.distribution.keyId >>> 0;
+      const existing = bestByKey.get(keyId);
+      if (!existing || snapshot.distribution.iteration < existing.iteration) {
+        bestByKey.set(keyId, snapshot.distribution);
       }
     }
-    return Array.from(unique.values());
+    const distributions = Array.from(bestByKey.values()).sort(
+      (a, b) => a.createdAt - b.createdAt || a.keyId - b.keyId,
+    );
+    if (opts?.latestOnly && request.keyId === undefined && distributions.length > 1) {
+      const latestKeyId = await this.getLatestSenderKeyId();
+      const latest =
+        (latestKeyId !== undefined
+          ? distributions.find((dist) => dist.keyId === latestKeyId)
+          : undefined) || distributions[distributions.length - 1];
+      return latest ? [latest] : [];
+    }
+    return distributions;
   }
 
   protected async ensureOurSenderKeyState(

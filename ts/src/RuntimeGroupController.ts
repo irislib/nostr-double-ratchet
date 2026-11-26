@@ -1,29 +1,19 @@
 import {
-  GroupManager,
-  type CreateGroupResult,
-  type GroupData,
-  type GroupDecryptedEvent,
-  GROUP_ROSTER_FACT_KIND,
-  GROUP_INVITE_RUMOR_KIND,
-  GROUP_SENDER_KEY_DISTRIBUTION_KIND,
-  GROUP_SENDER_KEY_REPAIR_REQUEST_KIND,
+  GroupManager, type CreateGroupResult, type GroupData, type GroupDecryptedEvent,
+  GROUP_ROSTER_FACT_KIND, GROUP_INVITE_RUMOR_KIND,
+  GROUP_SENDER_KEY_DISTRIBUTION_KIND, GROUP_SENDER_KEY_REPAIR_REQUEST_KIND,
 } from "./Group.js";
-import { buildSenderKeyRepairRequestRumor, parseSenderKeyRepairRequestRumor, senderKeyRepairDefaultNextRetryAt } from "./SenderKeyRepair.js";
 import {
-  classifyMessageOrigin,
-  isCrossDeviceSelfOrigin,
-  isSelfOrigin,
-} from "./MessageOrigin.js";
+  buildSenderKeyRepairRequestRumor, parseSenderKeyRepairRequestRumor,
+  senderKeyRepairDefaultNextRetryAt, senderKeyRepairResponseNextRetryAt,
+  senderKeyRepairResponseThrottleKey,
+} from "./SenderKeyRepair.js";
+import { classifyMessageOrigin, isCrossDeviceSelfOrigin, isSelfOrigin } from "./MessageOrigin.js";
 import type { SessionManager } from "./SessionManager.js";
 import { InMemoryStorageAdapter, type StorageAdapter } from "./StorageAdapter.js";
 import {
-  CHAT_MESSAGE_KIND,
-  type NostrFetch,
-  type NostrPublish,
-  type NostrPublisherOptions,
-  type NostrSubscribe,
-  type Rumor,
-  type Unsubscribe,
+  CHAT_MESSAGE_KIND, type NostrFetch, type NostrPublish,
+  type NostrPublisherOptions, type NostrSubscribe, type Rumor, type Unsubscribe,
 } from "./types.js";
 import type { OnEventMeta } from "./session-manager/types.js";
 import type { VerifiedEvent } from "nostr-tools";
@@ -82,13 +72,13 @@ export class SessionGroupRuntime {
   private groupManager: GroupManager | null = null;
   private groupManagerInitPromise: Promise<GroupManager> | null = null;
   private sessionManager: SessionManager | null = null;
+  private bridgeSessionEvents = true;
   private sessionBridgeCleanup: Unsubscribe | null = null;
   private privateDeliveryCleanup: Unsubscribe | null = null;
   private readonly committingPrivateEvents = new Set<string>();
-  private readonly keyRepairAttempts = new Map<string, { count: number; nextAt: number }>();
-  private readonly groupEventCallbacks = new Set<
-    (event: GroupDecryptedEvent) => void | Promise<void>
-  >();
+  private readonly inFlightRepairReplies = new Set<string>();
+  private readonly keyRepairAttempts = new Map<string, { count: number; nextAt: number; lastLatestKeyId?: number }>();
+  private readonly groupEventCallbacks = new Set<(event: GroupDecryptedEvent) => void | Promise<void>>();
 
   constructor(options: SessionGroupRuntimeOptions) {
     this.nostrSubscribe = options.nostrGroupSubscribe;
@@ -166,7 +156,7 @@ export class SessionGroupRuntime {
       });
       this.groupManager = groupManager;
       this.onReadyStateChange?.(true);
-      this.setSessionManager(sessionManager);
+      this.setSessionManager(sessionManager, { bridgeSessionEvents: this.bridgeSessionEvents });
       return groupManager;
     })().finally(() => {
       this.groupManagerInitPromise = null;
@@ -191,8 +181,10 @@ export class SessionGroupRuntime {
     manager: SessionManager | null,
     options: { bridgeSessionEvents?: boolean } = {},
   ): void {
-    const bridgeSessionEvents = options.bridgeSessionEvents ?? true;
-    if (this.sessionManager === manager && this.sessionBridgeCleanup) {
+    if (options.bridgeSessionEvents !== undefined) this.bridgeSessionEvents = options.bridgeSessionEvents;
+    const bridgeSessionEvents = options.bridgeSessionEvents ?? this.bridgeSessionEvents;
+    if (this.sessionManager === manager && this.privateDeliveryCleanup &&
+        (!bridgeSessionEvents || this.sessionBridgeCleanup)) {
       return;
     }
 
@@ -238,17 +230,7 @@ export class SessionGroupRuntime {
     ).then(async () => {
       if (this.groupManager !== groups || this.sessionManager !== sessions) return;
       if (event.kind === GROUP_SENDER_KEY_REPAIR_REQUEST_KIND && event.pubkey === senderDevicePubkey) {
-        const request = parseSenderKeyRepairRequestRumor(event);
-        const group = request && groups?.getGroup(request.groupId);
-        if (request && group?.members.includes(senderOwnerPubkey) && group.members.includes(this.getOwnerPubkey() || "") &&
-            this.allowKeyRepair(JSON.stringify(["reply", group.id, senderOwnerPubkey]))) {
-          await groups!.respondToSenderKeyRepairRequest(group.id, senderOwnerPubkey, request, {
-            sendPairwise: async (recipient, rumor) => {
-              if (this.groupManager !== groups || this.sessionManager !== sessions) throw new Error("Inactive group key repair");
-              await sessions!.sendEvent(recipient, rumor, { includeLocalSiblings: false });
-            },
-          });
-        }
+        await this.replyToSenderKeyRepair(groups!, sessions!, event, senderOwnerPubkey, senderDevicePubkey);
       }
       if ([GROUP_INVITE_RUMOR_KIND, GROUP_ROSTER_FACT_KIND, GROUP_SENDER_KEY_DISTRIBUTION_KIND].includes(event.kind)) {
         sessions?.notifyDurableSessionEventReadiness();
@@ -339,6 +321,7 @@ export class SessionGroupRuntime {
     this.groupManagerInitPromise = null;
     this.sessionManager = null;
     this.keyRepairAttempts.clear();
+    this.inFlightRepairReplies.clear();
     this.onReadyStateChange?.(false);
   }
 
@@ -433,14 +416,45 @@ export class SessionGroupRuntime {
     finally { this.committingPrivateEvents.delete(outer.id); }
   }
 
+  private rememberKeyRepair(key: string, count: number, nextAt: number, lastLatestKeyId?: number): void {
+    this.keyRepairAttempts.delete(key);
+    this.keyRepairAttempts.set(key, { count, nextAt, lastLatestKeyId });
+    if (this.keyRepairAttempts.size > 512) this.keyRepairAttempts.delete(this.keyRepairAttempts.keys().next().value!);
+  }
+
   private allowKeyRepair(key: string): boolean {
     const now = Math.floor(Date.now() / 1000), previous = this.keyRepairAttempts.get(key);
     if (previous && now < previous.nextAt) return false;
     const count = (previous?.count || 0) + 1;
-    this.keyRepairAttempts.delete(key);
-    this.keyRepairAttempts.set(key, { count, nextAt: senderKeyRepairDefaultNextRetryAt(now, count) });
-    if (this.keyRepairAttempts.size > 512) this.keyRepairAttempts.delete(this.keyRepairAttempts.keys().next().value!);
+    this.rememberKeyRepair(key, count, senderKeyRepairDefaultNextRetryAt(now, count));
     return true;
+  }
+
+  private async replyToSenderKeyRepair(
+    groups: GroupManager, sessions: SessionManager, event: Rumor, owner: string, device: string,
+  ): Promise<void> {
+    const request = parseSenderKeyRepairRequestRumor(event), group = request && groups.getGroup(request.groupId);
+    if (!request || !group?.members.includes(owner) || !group.members.includes(this.getOwnerPubkey() || "")) return;
+    const key = senderKeyRepairResponseThrottleKey(group.id, owner, device, request);
+    if (this.inFlightRepairReplies.has(key)) return;
+    this.inFlightRepairReplies.add(key);
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const latestKeyId = await groups.getLatestSenderKeyId(group.id), previous = this.keyRepairAttempts.get(key);
+      const rotated = latestKeyId !== undefined && previous?.lastLatestKeyId !== undefined && latestKeyId !== previous.lastLatestKeyId;
+      if (!rotated && previous && now < previous.nextAt) return;
+      const prior = rotated ? 0 : (previous?.count || 0);
+      const sent = await groups.respondToSenderKeyRepairRequest(group.id, owner, request, {
+        latestOnly: request.keyId === undefined && prior === 0,
+        sendPairwise: async (recipient, rumor) => {
+          if (this.groupManager !== groups || this.sessionManager !== sessions) throw new Error("Inactive group key repair");
+          if (!await sessions.sendGroupDistributionToDevice?.(recipient, device, rumor)) {
+            await sessions.sendEvent(recipient, rumor, { includeLocalSiblings: false });
+          }
+        },
+      });
+      if (sent) this.rememberKeyRepair(key, prior + 1, senderKeyRepairResponseNextRetryAt(now, prior + 1), latestKeyId);
+    } finally { this.inFlightRepairReplies.delete(key); }
   }
 
   private async requestMissingGroupKey(manager: GroupManager, rumor: Rumor, outer: VerifiedEvent, sender: string): Promise<void> {
@@ -448,7 +462,7 @@ export class SessionGroupRuntime {
     const group = groupId && manager.getGroup(groupId), sessions = this.sessionManager;
     if (!group || !sessions || !group.members.includes(sender) || !group.members.includes(this.getOwnerPubkey() || "")) return;
     const request = manager.senderKeyRepairRequestForOuterEvent(group.id, outer);
-    if (!request || !this.allowKeyRepair(JSON.stringify(["request", group.id, sender]))) return;
+    if (!request || !this.allowKeyRepair(JSON.stringify(["request", group.id, sender, request.senderEventPubkey, request.keyId ?? null, request.messageNumber ?? null]))) return;
     await manager.requestSenderKeyRepair(group.id, request, {
       sendToWriter: async (owner, device, repair) => {
         if (owner !== sender) return false;

@@ -233,3 +233,102 @@ fn frontier_plan_rechecks_ratchet_revision_membership_and_author_at_apply() -> R
     }
     Ok(())
 }
+
+#[test]
+fn blind_decrypt_scans_latest_key_id_before_older_keys() -> Result<()> {
+    let mut fixture = established_sender_key_fixture(160, 1_900_092_000)?;
+    let mut snapshot = fixture.bob_groups.snapshot();
+    snapshot.sender_keys[0].states[0].key_id = 9;
+    snapshot.sender_keys[0].latest_key_id = Some(9);
+    fixture.bob_groups = GroupManager::from_snapshot(snapshot)?;
+
+    // Out-of-order message at iteration 1 on latest_key_id (9) must succeed
+    // within 2 trials instead of exhausting 10,001 trials on older key_id (1) first.
+    let message = frame(&fixture, 1)?;
+    let mut snapshot = fixture.bob_groups.snapshot();
+    snapshot.sender_keys[0]
+        .states
+        .push(SenderKeyState::new(1, [0x44; 32], 0));
+    fixture.bob_groups = GroupManager::from_snapshot(snapshot)?;
+    let mut remaining = 4;
+    let plan = fixture
+        .bob_groups
+        .plan_sender_key_message_with_budget(message, &mut None, &mut remaining)?
+        .expect("latest_key_id must be scanned before older key_id");
+    assert!(
+        remaining >= 2,
+        "unexpectedly scanned older key: remaining={remaining}"
+    );
+    assert!(matches!(
+        fixture.bob_groups.apply_sender_key_receive_plan(plan)?,
+        GroupSenderKeyHandleResult::Event(GroupIncomingEvent::Message(msg))
+            if msg.body == b"bounded recovery"
+    ));
+    Ok(())
+}
+
+#[test]
+fn repair_distributions_deduplicate_per_key_id_oldest_first() -> Result<()> {
+    let mut fixture = established_sender_key_fixture(162, 1_900_092_200)?;
+    let bob = fixture.bob_groups.snapshot().local_owner_pubkey;
+    let mut snapshot = fixture.alice_groups.snapshot();
+    let sender_event_pubkey = snapshot.sender_keys[0].sender_event_pubkey;
+    snapshot.sender_keys[0].repair_snapshots = vec![
+        nostr_double_ratchet::GroupSenderKeyRepairSnapshot {
+            key_id: 20,
+            distribution: SenderKeyDistribution {
+                group_id: fixture.group_id.clone(),
+                key_id: 20,
+                sender_event_pubkey,
+                chain_key: [0x20; 32],
+                iteration: 0,
+                created_at: UnixSeconds(200),
+            },
+            recipients: vec![fixture.alice.owner_pubkey, bob],
+        },
+        nostr_double_ratchet::GroupSenderKeyRepairSnapshot {
+            key_id: 10,
+            distribution: SenderKeyDistribution {
+                group_id: fixture.group_id.clone(),
+                key_id: 10,
+                sender_event_pubkey,
+                chain_key: [0x11; 32],
+                iteration: 5,
+                created_at: UnixSeconds(100),
+            },
+            recipients: vec![fixture.alice.owner_pubkey, bob],
+        },
+        nostr_double_ratchet::GroupSenderKeyRepairSnapshot {
+            key_id: 10,
+            distribution: SenderKeyDistribution {
+                group_id: fixture.group_id.clone(),
+                key_id: 10,
+                sender_event_pubkey,
+                chain_key: [0x10; 32],
+                iteration: 0,
+                created_at: UnixSeconds(100),
+            },
+            recipients: vec![fixture.alice.owner_pubkey, bob],
+        },
+    ];
+    fixture.alice_groups = GroupManager::from_snapshot(snapshot)?;
+
+    let request = SenderKeyRepairRequest {
+        group_id: fixture.group_id.clone(),
+        sender_event_pubkey,
+        key_id: None,
+        message_number: None,
+        required_revision: None,
+        created_at: UnixSeconds(250),
+    };
+    let mut ctx = context(163, 250);
+    let prepared = fixture.alice_groups.respond_to_sender_key_repair_request(
+        &mut fixture.alice_manager,
+        &mut ctx,
+        bob,
+        &request,
+    )?;
+    // Two unique eligible key_ids (10 at iter 0, 20 at iter 0) + 1 metadata snapshot = 3 remote deliveries.
+    assert_eq!(prepared.remote.deliveries.len(), 3);
+    Ok(())
+}

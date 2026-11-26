@@ -228,7 +228,21 @@ impl<C: GroupPayloadCodec> GroupManager<C> {
             message: message.clone(),
             identity: identity.clone(),
             // Freeze the workset: incoming rotations cannot extend this pass forever.
-            key_ids: record.states.keys().copied().collect(),
+            // Try the latest known key first so out-of-order messages on the current
+            // epoch do not scan older epochs first.
+            key_ids: record
+                .latest_key_id
+                .filter(|key| record.states.contains_key(key))
+                .into_iter()
+                .chain(
+                    record
+                        .states
+                        .keys()
+                        .rev()
+                        .copied()
+                        .filter(|key| Some(*key) != record.latest_key_id),
+                )
+                .collect(),
             key_index: 0,
             active: None,
         });

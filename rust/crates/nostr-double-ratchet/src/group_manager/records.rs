@@ -386,11 +386,23 @@ impl SenderKeyRecord {
         &self,
         requester_owner: OwnerPubkey,
     ) -> Vec<SenderKeyDistribution> {
-        self.repair_snapshots
-            .iter()
-            .filter(|snapshot| snapshot.recipients.contains(&requester_owner))
-            .map(|snapshot| snapshot.distribution.clone())
-            .collect()
+        let mut best_by_key: BTreeMap<u32, SenderKeyDistribution> = BTreeMap::new();
+        for snapshot in &self.repair_snapshots {
+            if !snapshot.recipients.contains(&requester_owner) {
+                continue;
+            }
+            best_by_key
+                .entry(snapshot.key_id)
+                .and_modify(|existing| {
+                    if snapshot.distribution.iteration < existing.iteration {
+                        *existing = snapshot.distribution.clone();
+                    }
+                })
+                .or_insert_with(|| snapshot.distribution.clone());
+        }
+        let mut distributions = best_by_key.into_values().collect::<Vec<_>>();
+        distributions.sort_by_key(|dist| (dist.created_at, dist.key_id));
+        distributions
     }
 
     pub(super) fn requester_received_initial_repair_snapshot(

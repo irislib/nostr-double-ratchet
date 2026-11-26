@@ -155,7 +155,11 @@ export class Group extends GroupSending {
     );
 
     // Learn/update sender-event pubkey mapping (used to route outer messages).
+    let mappingChanged = false;
     if (dist.senderEventPubkey && isHex32(dist.senderEventPubkey)) {
+      mappingChanged =
+        this.senderDeviceToEvent.get(senderDevicePubkey) !== dist.senderEventPubkey ||
+        this.senderEventToDevice.get(dist.senderEventPubkey) !== senderDevicePubkey;
       this.setSenderEventMapping(senderDevicePubkey, dist.senderEventPubkey);
       await this.storage.put(
         this.senderEventPubkeyKey(senderDevicePubkey),
@@ -168,10 +172,12 @@ export class Group extends GroupSending {
       this.senderKeyStateKey(senderDevicePubkey, dist.keyId),
     );
     const originKey = this.senderKeyOriginKey(senderDevicePubkey, dist.keyId);
+    let keyStateChanged = false;
     if (!existing) {
       const st = SenderKeyState.fromDistribution(dist);
       await this.saveSenderKeyState(senderDevicePubkey, st);
       await this.storage.put(originKey, { iteration: dist.iteration, chainKey: dist.chainKey });
+      keyStateChanged = true;
     } else {
       // Copies of one distribution are made at different chain positions and
       // arrive in any order. An earlier copy opens the messages before the
@@ -183,6 +189,7 @@ export class Group extends GroupSending {
           if (st.extendBackwards(origin.iteration, hexToBytes(origin.chainKey), dist.iteration, hexToBytes(dist.chainKey))) {
             await this.saveSenderKeyState(senderDevicePubkey, st);
             await this.storage.put(originKey, { iteration: dist.iteration, chainKey: dist.chainKey });
+            keyStateChanged = true;
           }
         } catch {
           // A corrupt saved state or origin leaves the existing key as it is.
@@ -193,8 +200,8 @@ export class Group extends GroupSending {
       senderDevicePubkey, dist.keyId, dist.createdAt,
     );
 
-    // If we have a sender-event pubkey, retry pending outer events for (senderEventPubkey,keyId).
-    if (dist.senderEventPubkey && isHex32(dist.senderEventPubkey)) {
+    // Retry pending outer events only when a new mapping or key material arrived.
+    if (dist.senderEventPubkey && isHex32(dist.senderEventPubkey) && (mappingChanged || keyStateChanged)) {
       return await this.drainPending(dist.senderEventPubkey, dist.keyId);
     }
 
@@ -248,34 +255,40 @@ export class Group extends GroupSending {
     if (parsed.isHiddenCounterMessage()) {
       const preferred = await this.loadPreferredReceivedSenderKeyState(senderDevicePubkey);
       needsReceivedKeyHint = !preferred;
-      const frontier = preferred?.planDecryptFrontier(parsed.ciphertext);
-      if (frontier) {
-        plaintext = frontier.plaintext;
-        keyId = frontier.keyId;
-        messageNumber = frontier.messageNumber;
-        nextState = frontier.nextState;
-      } else {
+      let plan = preferred?.planDecryptFrontier(parsed.ciphertext) ?? null;
+      if (!plan) {
         // A frontier miss is not an invalid message. Preserve skipped-key and
-        // older-epoch recovery, including stores created before local hints.
-        const states = await this.loadSenderKeyStates(senderDevicePubkey);
-        for (const state of states) {
-          const candidate = SenderKeyState.fromJSON(state.toJSON());
-          try {
-            const decrypted = candidate.decryptBlindFromBytes(parsed.ciphertext);
-            plaintext = decrypted.plaintext;
-            keyId = decrypted.keyId;
-            messageNumber = decrypted.messageNumber;
-            nextState = candidate;
-            break;
-          } catch {
-            // Try the next known sender key.
+        // older-epoch recovery, probing remaining key frontiers before scanning.
+        const loaded = await this.loadSenderKeyStates(senderDevicePubkey);
+        const ordered = preferred
+          ? [preferred, ...loaded.filter((state) => state.keyId !== preferred.keyId)]
+          : loaded;
+        if (ordered.length > 1) {
+          for (const state of ordered) {
+            if (preferred && state.keyId === preferred.keyId) continue;
+            plan = state.planDecryptFrontier(parsed.ciphertext);
+            if (plan) break;
+          }
+        }
+        if (!plan) {
+          for (const state of ordered) {
+            try {
+              plan = state.planDecryptBlind(parsed.ciphertext);
+              break;
+            } catch {
+              // Try the next known sender key.
+            }
           }
         }
       }
-      if (!nextState) {
+      if (!plan) {
         this.queuePending(senderEventPubkey, undefined, outer);
         return null;
       }
+      plaintext = plan.plaintext;
+      keyId = plan.keyId;
+      messageNumber = plan.messageNumber;
+      nextState = plan.nextState;
     } else {
       const st = await this.loadSenderKeyState(
         senderDevicePubkey,
