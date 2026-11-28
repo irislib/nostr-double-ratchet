@@ -108,8 +108,12 @@ describe("Group roster fact interop vectors", () => {
   let vectors: GroupRosterFactVector;
 
   beforeAll(() => {
-    vectors = buildVector();
     const outputPath = vectorPath("ts-group-roster-fact-vectors.json");
+    if (process.env.REGENERATE_VECTORS !== "true" && fs.existsSync(outputPath)) {
+      vectors = JSON.parse(fs.readFileSync(outputPath, "utf-8"));
+      return;
+    }
+    vectors = buildVector();
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, JSON.stringify(vectors, null, 2));
   });

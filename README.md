@@ -69,6 +69,23 @@ storage for restart. Account erasure remains the host's job: stop its writer,
 then erase its complete storage namespace, including these slots. This library
 does not erase message history, keys or account storage on group removal.
 
+The one-hour cache is for recent reconnects: a cold per-instance memory cache
+failed the unchanged 90-second, 129-message rotation/restart gate on two hosted
+CPUs, while persisted slots passed. Long-absent clients can use ordinary
+cryptographic history recovery after expiry. The expiring implementation passed
+the same replay workload twice in 54.4 and 51.9 seconds with all 129 messages.
+
+Storage cost is a tradeoff. For 128 known-key receives, the supported adapter on
+Node 24.22.3 file-backed Web Storage made 128 additional puts and wrote 21,632
+additional serialized bytes. Two runs recorded 2.03–2.11 MiB of Linux process
+block writes versus 0.51 MiB with an in-memory cache (about 1.5–1.6 MiB extra);
+receive time was 24–27 ms
+versus 20–22 ms. This measures that SQLite-backed Node environment, not browser
+disk behavior. The cache retained 95–104 slots (16–18 KB) in those runs; its
+absolute bound is 256 slots. Both public group removal and explicit group
+namespace erasure were checked against the same adapter. Hosts must verify
+their account-deletion flow erases the complete account namespace before adoption.
+
 ## Integration Modes
 
 | Mode | Use it when | What it owns |

@@ -38,6 +38,11 @@ describe("SharedChannel Interop Vector Generation", () => {
   let vectors: SharedChannelVectors;
 
   beforeAll(() => {
+    const outputPath = path.join(__dirname, "../../test-vectors/ts-shared-channel-vectors.json");
+    if (process.env.REGENERATE_VECTORS !== "true" && fs.existsSync(outputPath)) {
+      vectors = JSON.parse(fs.readFileSync(outputPath, "utf-8"));
+      return;
+    }
     const secretBytes = hexToBytes(SECRET_HEX);
     const channel = new SharedChannel(secretBytes);
 
@@ -86,10 +91,6 @@ describe("SharedChannel Interop Vector Generation", () => {
       group_tagged_event: groupTaggedEvent,
     };
 
-    const outputPath = path.join(
-      __dirname,
-      "../../test-vectors/ts-shared-channel-vectors.json"
-    );
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, JSON.stringify(vectors, null, 2));
     console.log(`Generated SharedChannel test vectors at ${outputPath}`);

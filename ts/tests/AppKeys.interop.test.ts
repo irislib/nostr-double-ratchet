@@ -52,6 +52,11 @@ describe("Legacy AppKeys Interop Vector Generation", () => {
   let vectors: AppKeysInteropVectors;
 
   beforeAll(() => {
+    const outputPath = getVectorsPath("ts-app-keys-vectors.json");
+    if (process.env.REGENERATE_VECTORS !== "true" && fs.existsSync(outputPath)) {
+      vectors = JSON.parse(fs.readFileSync(outputPath, "utf-8"));
+      return;
+    }
     const ownerSecret = hexToBytes(OWNER_SECRET_HEX);
     const ownerPubkey = getPublicKey(ownerSecret);
     const deviceOnePubkey = getPublicKey(hexToBytes(DEVICE_ONE_SECRET_HEX));
@@ -112,7 +117,6 @@ describe("Legacy AppKeys Interop Vector Generation", () => {
       },
     };
 
-    const outputPath = getVectorsPath("ts-app-keys-vectors.json");
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, JSON.stringify(vectors, null, 2));
     console.log(`Generated AppKeys vectors at ${outputPath}`);
