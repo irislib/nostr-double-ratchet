@@ -1,4 +1,4 @@
-name: Ratchet consumed cache comparison
+name: Ratchet replay lifecycle and disk cost
 on:
   push:
     branches: [codex/ratchet-recovery-profile-20261126]
@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      CANDIDATE_SHA: 62c8f019bba8bd9aefcfb0203b938d5a7834e142
+      CANDIDATE_SHA: 118b5dcc122e94a888249ddd3244af2605118e31
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - name: Install verified Node.js and pnpm
@@ -17,8 +17,8 @@ jobs:
       - name: Install frozen test dependencies
         working-directory: ts
         run: pnpm install --frozen-lockfile --ignore-scripts
-      - name: Compare persistent and cold memory caches on the same two CPUs
-        run: python3 scripts/profile-consumed-cache.py
+      - name: Measure final replay and disk writes on the same two CPUs
+        run: python3 scripts/profile-replay-lifecycle.py
       - name: Retain comparison logs and inputs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -28,6 +28,7 @@ jobs:
             ${{ runner.temp }}/recovery-profile/*.log
             ${{ runner.temp }}/recovery-profile/results.json
             ${{ runner.temp }}/ndr-ci-tools/receipt.json
-            ${{ runner.temp }}/recovery-profile/*-ConsumedGroupEvents.ts
-            scripts/profile-consumed-cache.py
+            scripts/profile-replay-lifecycle.py
+            scripts/profile-local-storage.ts
+            scripts/profile-group-recovery.ts
           if-no-files-found: error
