@@ -174,6 +174,114 @@ describe("later ratchet exact-source qualification", () => {
     expect(accepted).toEqual(outers.map(event => event.id));
   });
 
+  it.each(["delete", "after-state-save", "before-state-save"])(
+    "reclaims consumed pending bytes after %s failure and restart without duplicate delivery", async failure => {
+      class InterruptedStorage extends InMemoryStorageAdapter {
+        fail = true;
+        override async del(key: string): Promise<void> {
+          if (this.fail && failure === "delete" && key.includes("/pending-outer/")) {
+            this.fail = false;
+            throw new Error("injected post-consumption failure");
+          }
+          await super.del(key);
+        }
+        override async put<T>(key: string, value: T): Promise<void> {
+          if (this.fail && failure === "before-state-save" && key.endsWith("/key/17") &&
+              (value as { iteration: number }).iteration === 1) {
+            this.fail = false;
+            throw new Error("injected post-consumption failure");
+          }
+          await super.put(key, value);
+          if (this.fail && failure === "after-state-save" && key.endsWith("/key/17") &&
+              (value as { iteration: number }).iteration === 1) {
+            this.fail = false;
+            throw new Error("injected post-consumption failure");
+          }
+        }
+      }
+      const f = receiver(new InterruptedStorage());
+      const accepted: string[] = [];
+      const options = { data: f.data, ourOwnerPubkey: f.bob, ourDevicePubkey: getPublicKey(generateSecretKey()),
+        storage: f.storage, beforeConsume: async (event: { outerEventId: string }) => { accepted.push(event.outerEventId); } };
+      let group = new Group(options);
+      const outer = encryptGroupMessage(f.data.id, f.device, f.outerSecret, f.epoch.state, "durable delivery");
+      const prefix = `v1/broadcast-channel/group/${f.data.id}/pending-outer/`;
+      await group.handleOuterEvent(outer);
+      await expect(group.handleIncomingSessionEvent(f.epoch.rumor, f.alice, f.device))
+        .rejects.toThrow("injected post-consumption failure");
+      expect(accepted).toEqual([outer.id]);
+      expect(await f.storage.list(prefix)).toHaveLength(1);
+      group = new Group(options);
+      const forged = JSON.parse(JSON.stringify(outer));
+      forged.sig = "00".repeat(64);
+      expect(await group.handleOuterEvent(forged)).toBeNull();
+      expect(await f.storage.list(prefix)).toHaveLength(1);
+      await group.handleIncomingSessionEvent(f.epoch.rumor, f.alice, f.device);
+      expect(accepted).toEqual([outer.id]);
+      const retained = await f.storage.list(prefix);
+      const bytes = (await Promise.all(retained.map(async key => JSON.stringify(await f.storage.get(key)).length)))
+        .reduce((sum, length) => sum + length, 0);
+      expect(bytes).toBe(0);
+      expect(retained).toEqual([]);
+    });
+
+  it("retains a signed but unauthenticated ciphertext until its real key arrives", async () => {
+    const f = receiver();
+    const accepted: string[] = [];
+    const group = new Group({ data: f.data, ourOwnerPubkey: f.bob, ourDevicePubkey: getPublicKey(generateSecretKey()),
+      storage: f.storage, beforeConsume: async event => { accepted.push(event.outerEventId); } });
+    const later = makeEpoch(f.data.id, f.device, f.outerSecret, 18, 200);
+    const outer = encryptGroupMessage(f.data.id, f.device, f.outerSecret, later.state, "not authenticated by epoch 17");
+    await group.handleOuterEvent(outer);
+    expect(await group.handleIncomingSessionEvent(f.epoch.rumor, f.alice, f.device)).toEqual([]);
+    expect(accepted).toEqual([]);
+    const prefix = `v1/broadcast-channel/group/${f.data.id}/pending-outer/`;
+    expect(await f.storage.list(prefix)).toHaveLength(1);
+    await group.handleIncomingSessionEvent(later.rumor, f.alice, f.device);
+    expect(accepted).toEqual([outer.id]);
+    expect(await f.storage.list(prefix)).toEqual([]);
+  });
+
+  it("rejects already consumed relay history after restart before a blind key scan", async () => {
+    const f = receiver();
+    await f.group.handleIncomingSessionEvent(f.epoch.rumor, f.alice, f.device);
+    const outer = encryptGroupMessage(f.data.id, f.device, f.outerSecret, f.epoch.state, "consumed");
+    expect((await f.group.handleOuterEvent(outer))?.outerEventId).toBe(outer.id);
+    const group = new Group({ data: f.data, ourOwnerPubkey: f.bob,
+      ourDevicePubkey: getPublicKey(generateSecretKey()), storage: f.storage });
+    const blind = vi.spyOn(SenderKeyState.prototype, "planDecryptBlind");
+    const forged = JSON.parse(JSON.stringify(outer));
+    forged.sig = "00".repeat(64);
+    expect(await group.handleOuterEvent(forged)).toBeNull();
+    expect(await group.handleOuterEvent(outer)).toBeNull();
+    expect(blind).not.toHaveBeenCalled();
+    expect(await f.storage.list(`v1/broadcast-channel/group/${f.data.id}/pending-outer/`)).toEqual([]);
+  });
+
+  it("documents the nontransactional return-only drain boundary", async () => {
+    class InterruptedStorage extends InMemoryStorageAdapter {
+      fail = true;
+      override async del(key: string): Promise<void> {
+        if (this.fail && key.includes("/pending-outer/")) {
+          this.fail = false;
+          throw new Error("delete interrupted after consuming state");
+        }
+        await super.del(key);
+      }
+    }
+    const f = receiver(new InterruptedStorage());
+    const outer = encryptGroupMessage(f.data.id, f.device, f.outerSecret, f.epoch.state, "return-only");
+    await f.group.handleOuterEvent(outer);
+    await expect(f.group.handleIncomingSessionEvent(f.epoch.rumor, f.alice, f.device))
+      .rejects.toThrow("delete interrupted after consuming state");
+    const group = new Group({ data: f.data, ourOwnerPubkey: f.bob,
+      ourDevicePubkey: getPublicKey(generateSecretKey()), storage: f.storage });
+    // The callback-free batch cannot return earlier successes after its Promise
+    // rejects. Cleanup is recoverable; application persistence needs beforeConsume.
+    expect(await group.handleIncomingSessionEvent(f.epoch.rumor, f.alice, f.device)).toEqual([]);
+    expect(await f.storage.list(`v1/broadcast-channel/group/${f.data.id}/pending-outer/`)).toEqual([]);
+  });
+
   it("still recovers older ciphertext when an earlier distribution extends a known chain", async () => {
     const f = receiver();
     const outer = encryptGroupMessage(f.data.id, f.device, f.outerSecret, f.epoch.state, "older");

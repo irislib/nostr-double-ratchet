@@ -9,6 +9,7 @@ import type { GroupOptions, GroupDecryptedEvent } from "../GroupChannel.js";
 import { isHex32 } from "./groupInternals.js";
 import type { NostrPublisherOptions } from "../types.js";
 import { PendingGroupEvents } from "./PendingGroupEvents.js";
+import { ConsumedGroupEvents } from "./ConsumedGroupEvents.js";
 
 export abstract class GroupState {
   public data: GroupData;
@@ -40,6 +41,7 @@ export abstract class GroupState {
   protected senderDeviceToOwner: Map<string, string> = new Map();
 
   protected readonly pendingOuter: PendingGroupEvents;
+  protected readonly consumedOuter: ConsumedGroupEvents;
 
   constructor(opts: GroupOptions) {
     this.data = opts.data;
@@ -54,6 +56,7 @@ export abstract class GroupState {
     // Storage namespace shared with the earlier BroadcastChannel prototype for compatibility.
     this.versionPrefix = `v${this.storageVersion}/broadcast-channel`;
     this.pendingOuter = new PendingGroupEvents(this.storage, `${this.versionPrefix}/group/${this.groupId()}/pending-outer/`);
+    this.consumedOuter = new ConsumedGroupEvents(this.storage, `${this.versionPrefix}/group/${this.groupId()}/consumed-outer/`);
   }
 
   groupId(): string {
@@ -87,7 +90,6 @@ export abstract class GroupState {
 
   protected async init(): Promise<void> {
     if (this.initialized) return;
-    this.initialized = true;
 
     // Load (device -> owner) and (device -> senderEventPubkey) mappings.
     const groupPrefix = `${this.versionPrefix}/group/${this.groupId()}/sender/`;
@@ -112,6 +114,7 @@ export abstract class GroupState {
         }
       }
     }
+    this.initialized = true;
   }
 
   protected groupSenderPrefix(senderDevicePubkey: string): string {
@@ -244,10 +247,7 @@ export abstract class GroupState {
       if (!outer) continue;
       const dec = await this.handleOuterEvent(outer);
       // Retain unresolved ciphertext and interrupted work for a later key/retry.
-      if (dec) {
-        await this.pendingOuter.remove(key);
-        results.push(dec);
-      }
+      if (dec) results.push(dec);
     }
     return results;
   }

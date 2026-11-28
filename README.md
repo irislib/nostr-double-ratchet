@@ -29,6 +29,33 @@ use the `iris` CLI from the
 - Cross-language TS/Rust interoperability tests
 - Breaking changes are still possible while APIs settle
 
+### Group receive persistence
+
+A group/storage namespace needs one serialized writer. `GroupManager` serializes
+its operations; direct `Group` callers must serialize their calls. Sharing one
+namespace between live managers, browser tabs or processes needs an external
+writer lock. The ratchet and pending-inbox caches are not a cross-tab database.
+
+For durable delivery, use an idempotent `beforeConsume` callback that persists by
+`outerEventId`. The callback runs before receive-state persistence. Pending
+delivery acknowledgements let a restart finish interrupted state writes and
+reclaim ciphertext after a failed deletion. A crash between callback completion
+and the acknowledgement write can still repeat the callback. Storage and the
+application callback are not one transaction.
+
+The direct return-only batch API has an existing limitation: if a later callback
+or storage operation throws, earlier consumed results cannot be returned from
+the rejected Promise. The inbox cleanup fix does not make that API transactional.
+
+Storage adapters must reject operational read, write, delete and enumeration
+failures; a partial listing cannot establish inbox size. `LocalStorageAdapter`
+continues to treat corrupt JSON as absent for legacy callers, but propagates IO
+failures. The inbox rejects a listed unreadable row instead of counting it as
+free space. Its per-group 16 MiB admission budget reserves acknowledgement space;
+overflow is explicit and callers must retry after repair. The optional consumed
+ID cache has 256 fixed slots. Collisions and failed cache IO fall back to normal
+cryptographic processing; only complete authenticated IDs can match.
+
 ## Integration Modes
 
 | Mode | Use it when | What it owns |

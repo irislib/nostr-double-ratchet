@@ -1,8 +1,10 @@
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
 import * as nip44 from "nostr-tools/nip44";
 
-import { kdf } from "./utils.js";
+import { hmac } from "@noble/hashes/hmac";
+import { sha256 } from "@noble/hashes/sha256";
 import { base64Decode, base64Encode } from "./base64.js";
+import { senderKeyTrial } from "./group/SenderKeyTrial.js";
 
 /**
  * Maximum number of message keys we will derive-and-cache to support out-of-order delivery.
@@ -14,7 +16,9 @@ export const SENDER_KEY_MAX_SKIP = 10_000;
 /** Bound the amount of cached skipped message keys to limit memory/CPU DoS. */
 export const SENDER_KEY_MAX_STORED_SKIPPED_KEYS = 2_000;
 
-const SENDER_KEY_KDF_SALT = new TextEncoder().encode("ndr-sender-key-v1");
+const SENDER_KEY_EXTRACT = hmac.create(sha256, new TextEncoder().encode("ndr-sender-key-v1"));
+const NEXT_CHAIN_INFO = new Uint8Array([1, 1]);
+const MESSAGE_KEY_INFO = new Uint8Array([2, 1]);
 
 export interface SenderKeyDistribution {
   groupId: string;
@@ -84,7 +88,13 @@ interface SenderKeyBlindDecryptPlan extends SenderKeyBlindDecryptResult {
 }
 
 function deriveMessageKey(chainKey: Uint8Array): [Uint8Array, Uint8Array] {
-  const [nextChainKey, messageKey] = kdf(chainKey, SENDER_KEY_KDF_SALT, 2);
+  // Exactly kdf(chainKey, salt, 2): each output is one HKDF block,
+  // HMAC(PRK, info || 0x01). Share HMAC setup, not secret key material.
+  const prk = SENDER_KEY_EXTRACT.clone().update(chainKey).digest();
+  const expand = hmac.create(sha256, prk);
+  prk.fill(0);
+  const nextChainKey = expand.clone().update(NEXT_CHAIN_INFO).digest();
+  const messageKey = expand.update(MESSAGE_KEY_INFO).digest();
   return [nextChainKey, messageKey];
 }
 
@@ -255,15 +265,14 @@ export class SenderKeyState {
   }
 
   planDecryptBlind(ciphertextBytes: Uint8Array): SenderKeyBlindDecryptPlan {
+    const trial = senderKeyTrial(ciphertextBytes);
     for (const [
       messageNumber,
       messageKey,
     ] of this.skippedMessageKeys.entries()) {
       try {
-        const plaintext = decryptWithMessageKeyBytes(
-          messageKey,
-          ciphertextBytes,
-        );
+        const plaintext = trial(messageKey);
+        if (plaintext === null) continue;
         const nextState = SenderKeyState.fromJSON(this.toJSON());
         nextState.skippedMessageKeys.delete(messageNumber);
         return {
@@ -293,20 +302,15 @@ export class SenderKeyState {
       nextState.iteration = (nextState.iteration + 1) >>> 0;
 
       try {
-        const plaintext = decryptWithMessageKeyBytes(
-          messageKey,
-          ciphertextBytes,
-        );
-        nextState.pruneSkipped();
-        return {
-          nextState,
-          keyId: this.keyId,
-          messageNumber,
-          plaintext,
-        };
+        const plaintext = trial(messageKey);
+        if (plaintext !== null) {
+          nextState.pruneSkipped();
+          return { nextState, keyId: this.keyId, messageNumber, plaintext };
+        }
       } catch {
-        nextState.skippedMessageKeys.set(messageNumber, messageKey);
+        // A matching MAC still needs the canonical padding/version checks.
       }
+      nextState.skippedMessageKeys.set(messageNumber, messageKey);
     }
 
     throw new Error("sender-key blind decrypt failed");

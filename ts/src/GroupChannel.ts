@@ -33,6 +33,8 @@ export type PublishOuter = (
 
 export interface GroupOptions extends NostrPublisherOptions {
   groupDevicePubkeys?: (owners: readonly string[]) => string[];
+  /** Persist idempotently by outerEventId before advancing receive state. A
+   * crash after this callback but before its acknowledgement may replay it. */
   beforeConsume?: (event: GroupDecryptedEvent) => Promise<void>;
   data: GroupData;
   /** Owner pubkey for *this* device (group membership is expressed in owner pubkeys). */
@@ -264,6 +266,25 @@ export class Group extends GroupSending {
       return null;
     }
 
+    const pending = await this.pendingOuter.find(senderEventPubkey,
+      parsed.isHiddenCounterMessage() ? undefined : parsed.keyId, outer.id);
+    const delivered = pending?.event.delivered;
+    if (pending && delivered) {
+      const saved = await this.loadSenderKeyState(senderDevicePubkey, delivered.keyId);
+      if (saved && saved.iterationNumber() > delivered.messageNumber &&
+          !saved.toJSON().skippedMessageKeys?.[String(delivered.messageNumber)]) {
+        // Authentication and the application callback completed before the
+        // consuming state write. A failed deletion must not re-decrypt forever.
+        await this.pendingOuter.remove(pending.key, pending.event);
+        return null;
+      }
+    }
+
+    if (await this.consumedOuter.has(outer.id)) {
+      if (pending) await this.pendingOuter.remove(pending.key, pending.event);
+      return null;
+    }
+
     let plaintext = "";
     let keyId = parsed.keyId;
     let messageNumber = parsed.messageNumber;
@@ -379,8 +400,16 @@ export class Group extends GroupSending {
       messageNumber,
       inner,
     };
-    await this.beforeConsume?.(decrypted);
+    if (delivered && (delivered.keyId !== keyId || delivered.messageNumber !== messageNumber)) {
+      throw new Error("Pending delivery does not match authenticated ciphertext");
+    }
+    if (!delivered) {
+      await this.beforeConsume?.(decrypted);
+      if (pending) await this.pendingOuter.acknowledge(pending.key, pending.event, { keyId, messageNumber });
+    }
     await this.saveSenderKeyState(senderDevicePubkey, nextState);
+    await this.consumedOuter.remember(outer.id);
+    if (pending) await this.pendingOuter.remove(pending.key, pending.event);
     if (needsReceivedKeyHint) await this.rememberReceivedSenderKeyPreference(senderDevicePubkey, keyId);
     return decrypted;
   }
