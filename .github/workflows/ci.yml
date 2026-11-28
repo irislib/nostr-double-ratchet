@@ -199,8 +199,24 @@ jobs:
 
     - name: Verify Rust interop consumers
       working-directory: rust
-      run: cargo test --locked --workspace
+      env:
+        REQUIRE_INTEROP_VECTORS: "true"
+      run: |
+        python3 ../scripts/check-interop-vectors.py
+        cargo test --locked --workspace
 
     - name: Verify TypeScript interop consumers
       working-directory: ts
-      run: pnpm vitest run tests/interop.test.ts tests/*.interop.test.ts
+      env:
+        REQUIRE_INTEROP_VECTORS: "true"
+      run: |
+        pnpm vitest run tests/interop.test.ts tests/*.interop.test.ts
+        python3 ../scripts/check-interop-vectors.py
+
+    - name: Retain generated interoperability inputs
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: interop-vectors-${{ github.sha }}
+        path: test-vectors/*.json
+        if-no-files-found: error
+        retention-days: 30

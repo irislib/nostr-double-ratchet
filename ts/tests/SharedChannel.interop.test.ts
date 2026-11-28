@@ -135,6 +135,9 @@ describe("Rust-generated SharedChannel vectors", () => {
     );
 
     if (!fs.existsSync(vectorPath)) {
+      if (process.env.REQUIRE_INTEROP_VECTORS === "true") {
+        throw new Error("Required Rust SharedChannel vector was not generated");
+      }
       console.log(
         "Rust SharedChannel vectors not found at",
         vectorPath,
@@ -157,13 +160,12 @@ describe("Rust-generated SharedChannel vectors", () => {
     expect(channel.publicKey).toBe(vectors.channel_pubkey);
 
     // Decrypt Rust-encrypted event
-    if (vectors.encrypted_event) {
-      expect(channel.isChannelEvent(vectors.encrypted_event as any)).toBe(true);
-
-      const decrypted = channel.decryptEvent(vectors.encrypted_event as any);
-      expect(decrypted.pubkey).toBe(vectors.plaintext_rumor.pubkey);
-      expect(decrypted.kind).toBe(vectors.plaintext_rumor.kind);
-    }
+    expect(vectors.encrypted_event).not.toBeNull();
+    expect(channel.isChannelEvent(vectors.encrypted_event as any)).toBe(true);
+    const decrypted = channel.decryptEvent(vectors.encrypted_event as any);
+    expect(decrypted).toEqual(vectors.plaintext_rumor);
+    expect(() => channel.decryptEvent({ ...vectors.encrypted_event!, sig: "00".repeat(64) }))
+      .toThrow("Invalid shared channel event");
 
     // Verify group tagged event format
     const tags = vectors.group_tagged_event.tags;
