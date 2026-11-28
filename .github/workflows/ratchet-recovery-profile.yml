@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      CANDIDATE_SHA: cb75115c999e24217ff3c69f99dd25435129557c
+      CANDIDATE_SHA: 62c8f019bba8bd9aefcfb0203b938d5a7834e142
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - name: Install verified Node.js and pnpm

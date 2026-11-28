@@ -16,6 +16,7 @@ revisions = [
     ("0.0.187", "ad72a801d6279693af9d22998e54978f6fc3e6d6"),
     ("0.0.188", "503b3b4d3a4a6e13aea644a47032e9cfe09a9130"),
     ("corrected", os.environ["CANDIDATE_SHA"]),
+    ("corrected-repeat", os.environ["CANDIDATE_SHA"]),
 ]
 fixture = (root / "scripts/profile-group-recovery.ts").read_bytes()
 results = []
@@ -30,7 +31,7 @@ for label, revision in revisions:
         tar.extractall(destination, filter="data")
     ts = destination / "ts"
     manifest = json.loads((ts / "package.json").read_text())
-    if label != "corrected":
+    if label in ("0.0.187", "0.0.188"):
         assert manifest["version"] == label
     assert (ts / "pnpm-lock.yaml").read_bytes() == (root / "ts/pnpm-lock.yaml").read_bytes()
     (ts / "node_modules").symlink_to(root / "ts/node_modules", target_is_directory=True)
