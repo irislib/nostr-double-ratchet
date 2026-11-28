@@ -1,4 +1,4 @@
-name: Ratchet recovery comparison
+name: Ratchet consumed cache comparison
 on:
   push:
     branches: [codex/ratchet-recovery-profile-20261126]
@@ -17,8 +17,8 @@ jobs:
       - name: Install frozen test dependencies
         working-directory: ts
         run: pnpm install --frozen-lockfile --ignore-scripts
-      - name: Compare immutable revisions on the same two CPUs
-        run: python3 scripts/profile-group-recovery.py
+      - name: Compare persistent and cold memory caches on the same two CPUs
+        run: python3 scripts/profile-consumed-cache.py
       - name: Retain comparison logs and inputs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -28,5 +28,6 @@ jobs:
             ${{ runner.temp }}/recovery-profile/*.log
             ${{ runner.temp }}/recovery-profile/results.json
             ${{ runner.temp }}/ndr-ci-tools/receipt.json
-            scripts/profile-group-recovery.*
+            ${{ runner.temp }}/recovery-profile/*-ConsumedGroupEvents.ts
+            scripts/profile-consumed-cache.py
           if-no-files-found: error
