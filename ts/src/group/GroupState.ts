@@ -63,6 +63,9 @@ export abstract class GroupState {
     return this.data.id;
   }
 
+  /** Erase optional replay acceleration; ratchet state and history are retained. */
+  async clearReplayCache(): Promise<void> { await this.consumedOuter.clear(); }
+
   setData(data: GroupData): void {
     this.data = data;
     this.memberOwnerPubkeys = [...data.members];

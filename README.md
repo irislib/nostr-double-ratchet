@@ -53,8 +53,21 @@ continues to treat corrupt JSON as absent for legacy callers, but propagates IO
 failures. The inbox rejects a listed unreadable row instead of counting it as
 free space. Its per-group 16 MiB admission budget reserves acknowledgement space;
 overflow is explicit and callers must retry after repair. The optional consumed
-ID cache has 256 fixed slots. Collisions and failed cache IO fall back to normal
-cryptographic processing; only complete authenticated IDs can match.
+ID cache has 256 fixed slots and one-hour expiry, without extending expiry on
+replay. Collisions, expired slots and failed cache IO fall back to normal
+cryptographic processing; only complete authenticated IDs can match. The cache
+stores a local group-to-public-event association, but no keys or plaintext.
+It accelerates recent reconnect replay; it does not guarantee delivery.
+
+Expired slots are swept on first receive after reopening and at most hourly
+during receive activity. Physical deletion cannot run while the app is closed
+or storage is unavailable. `await manager.removeGroup(id)` (also exposed by
+`NdrRuntime`) confirms replay-slot erasure; failure rejects and is reported to
+`onError`, and removal can be retried even after the group was detached. Direct
+`Group` callers can `await group.clearReplayCache()`. `destroy()` preserves
+storage for restart. Account erasure remains the host's job: stop its writer,
+then erase its complete storage namespace, including these slots. This library
+does not erase message history, keys or account storage on group removal.
 
 ## Integration Modes
 

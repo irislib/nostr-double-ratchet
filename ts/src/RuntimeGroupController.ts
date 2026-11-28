@@ -257,13 +257,13 @@ export class SessionGroupRuntime {
       readinessChanged ||= before !== manager.privateDeliveryReadiness(group.id);
     }
     for (const groupId of manager.managedGroupIds()) {
-      if (!nextGroupIds.has(groupId)) manager.removeGroup(groupId);
+      if (!nextGroupIds.has(groupId)) await manager.removeGroup(groupId);
     }
     if (readinessChanged && this.groupManager === manager) this.sessionManager?.notifyDurableSessionEventReadiness();
   }
 
-  removeGroup(groupId: string): void {
-    this.groupManager?.removeGroup(groupId);
+  removeGroup(groupId: string): Promise<void> {
+    return this.groupManager?.removeGroup(groupId) ?? Promise.resolve();
   }
 
   async createGroup(

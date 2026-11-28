@@ -326,8 +326,8 @@ export abstract class NdrRuntimeRegistration extends NdrRuntimeMessaging {
     await this.groupController.syncGroups(groups, ownerPubkey);
   }
 
-  removeGroup(groupId: string): void {
-    this.groupController.removeGroup(groupId);
+  removeGroup(groupId: string): Promise<void> {
+    return this.groupController.removeGroup(groupId);
   }
 
   async createGroup(

@@ -22,6 +22,7 @@ import type {
   GroupManagerOptions,
 } from "../GroupManager.js";
 import type { PendingSessionEvent } from "./groupManagerInternals.js";
+import { ConsumedGroupEvents } from "../group/ConsumedGroupEvents.js";
 
 export abstract class GroupManagerState {
   protected readonly ourOwnerPubkey: string;
@@ -147,7 +148,7 @@ export abstract class GroupManagerState {
     });
   }
 
-  removeGroup(groupId: string): void {
+  removeGroup(groupId: string): Promise<void> {
     this.groups.delete(groupId);
     this.pendingSessionByGroup.delete(groupId);
 
@@ -164,6 +165,11 @@ export abstract class GroupManagerState {
     this.groupToSenderEvents.delete(groupId);
 
     void this.syncOuterSubscription();
+    const cleanup = this.enqueueOperation(() => new ConsumedGroupEvents(this.storage,
+      `v1/broadcast-channel/group/${groupId}/consumed-outer/`).clear());
+    // Existing fire-and-forget callers receive onError; awaiting confirms erase.
+    void cleanup.catch(error => this.reportError(error, { operation: "removeGroup", groupId }));
+    return cleanup;
   }
 
   destroy(): void {

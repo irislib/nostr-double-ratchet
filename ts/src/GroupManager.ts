@@ -14,6 +14,7 @@ import { GroupManagerBackfill } from "./group-manager/GroupManagerBackfill.js";
 export interface GroupManagerErrorContext {
   operation:
     | "upsertGroup"
+    | "removeGroup"
     | "sendEvent"
     | "sendMessage"
     | "rotateSenderKey"
